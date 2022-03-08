@@ -769,6 +769,7 @@ struct buf {
 			bool free;
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
+			struct endpoint *source_ep;
 
 			bool ether_valid;	/* Ethernet header valid */
 			bool ip_valid;		/* IP header valid */
@@ -793,7 +794,7 @@ struct buf {
 			struct bth bth;
 			struct deth deth;	/* BTH subheader */
 			struct pgm_header pgm;	/* RFC3208 header */
-			struct umad_packet umad;
+			struct umad_hdr umad;
 		};
 		uint8_t meta[META_SIZE];
 	};
@@ -927,13 +928,59 @@ static char *payload_dump(uint8_t *p)
 	return buf;
 }
 
+#if 0
+static char *w_str(struct ibv_wc *w)
+{
+	static char buf[200];
+
+	sprintf(buf, "WC(PKEY_INDEX=%d SLID=%d SL=%d DLID_PATH=%d SRC_QP=%d QP_NUM=%d)",
+			w->pkey_index, w->slid, w->sl, w->dlid_path_bits, w->src_qp, w->qp_num);
+	return buf;
+}
+
+static char *global_r_str(struct ibv_global_route *g)
+{
+	char xbuf[INET6_ADDRSTRLEN];
+	static char buf[200];
+
+	sprintf(buf, "GlobalRoute(flow=%u SGIDINDEX=%u hop_limit=%u TrClass=%x  DGID:%s)",
+			ntohl(g->flow_label), g->sgid_index, g->hop_limit, g->traffic_class,
+			inet_ntop(AF_INET6, &g->dgid, xbuf, INET6_ADDRSTRLEN));
+	return buf;
+}
+
+#endif
+static char *grh_str(struct ibv_grh *g)
+{
+        struct iphdr *i = (void *)g + 20;
+        char xbuf[INET6_ADDRSTRLEN];
+        char xbuf2[INET6_ADDRSTRLEN];
+        char hbuf1[30];
+        char hbuf2[30];
+        struct in_addr saddr, daddr;
+        static char buf[200];
+
+        saddr.s_addr = i->saddr;
+        daddr.s_addr = i->daddr;
+
+        strcpy(hbuf1, inet_ntoa(saddr));
+        strcpy(hbuf2, inet_ntoa(daddr));
+
+        sprintf(buf, "GRH(flow=%u Len=%u next_hdr=%u hop_limit=%u SGID=%s DGID:%s SourceIP=%s DestIP=%s)",
+                        ntohl(g->version_tclass_flow), ntohs(g->paylen), g->next_hdr, g->hop_limit,
+                        inet_ntop(AF_INET6, &g->sgid, xbuf2, INET6_ADDRSTRLEN),
+                        inet_ntop(AF_INET6, &g->dgid, xbuf, INET6_ADDRSTRLEN),
+                        hbuf1, hbuf2);
+	return buf;
+}
+
 /* Dump GRH and the beginning of the packet */
 static void dump_buf_grh(struct buf *buf)
 {
 	char xbuf[INET6_ADDRSTRLEN];
 	char xbuf2[INET6_ADDRSTRLEN];
 
-	logg(LOG_NOTICE, "Unicast GRH flow=%ux Len=%u next_hdr=%u hop_limit=%u SGID=%s DGID:%s Packet=%s\n",
+	logg(LOG_NOTICE, "Unicast GRH flow=%u Len=%u next_hdr=%u hop_limit=%u SGID=%s DGID:%s Packet=%s\n",
 			ntohl(buf->grh.version_tclass_flow), ntohs(buf->grh.paylen), buf->grh.next_hdr, buf->grh.hop_limit,
 			inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
 			inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN),
@@ -2455,75 +2502,6 @@ static void unicast_packet(struct rdma_channel *c, struct buf *buf, struct in_ad
 
 static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *sin);
 
-#ifdef LEARN
-/*
- * Populate address cache to avoid expensive lookups.
- *
- * This is also used on the senders to multicast groups because the recover channels
- * for multicast connections will connect later and then we already have the
- * addresses cached
- */
-static void learn_source_address(struct rdma_channel *c, struct buf *buf, struct ibv_wc *w)
-{
-	struct rdma_ah *ra;
-
-	if (c->i == i2r + INFINIBAND) {
-		/* Infiniband. Thus able to lean LID, GID and potentially IP */
-
-		ra = find_in_hash(hash_lid, &w->slid);
-		if (!ra) {
-			if (buf->grh_valid) {
-				/* Lookup entry through SGID */
-				ra = find_in_hash(hash_gid, &buf->grh.sgid);
-
-				if (ra)	/* LID must be invalid */
-					remove_from_hash(ra, hash_lid);
-			}
-		}
-
-		if (!ra) {
-			/* Ok new Infiniband endpoint */
-			ra = new_rdma_ah(c->i);
-		}
-
-		if (!ra->hash[hash_gid].member && buf->grh_valid)
-			add_to_hash(ra, hash_gid, &buf->grh.sgid);
-
-		if (!ra->hash[hash_lid].member)
-			add_to_hash(ra, hash_lid, &w->slid);
-
-
-	} else { /* ROCE so a MAC and IP address */
-
-		ra = find_in_hash(hash_mac, buf->e.ether_shost);
-
-		if (!ra) {
-			ra = find_in_hash(hash_ip, &buf->ip.saddr);
-
-			if (ra) /* MAC was invalid */
-				remove_from_hash(ra, hash_mac);
-		}
-
-		if  (!ra) {
-			/* New ROCE endpoint */
-			ra = new_rdma_ah(c->i);
-		}
-
-		if (!ra->hash[hash_mac].member)
-			add_to_hash(ra, hash_mac, &buf->e.ether_shost);
-
-		if (!ra->hash[hash_ip].member)
-			add_to_hash(ra, hash_ip, &buf->ip.saddr);
-
-	}
-
-	/* Construct handle that is used by the RDMA subsystem to send datagrams to the endpoint */
-	ra->ai.ah = ibv_create_ah_from_wc(c->pd, w, &buf->grh, c->i->port);
-	ra->ai.remote_qpn = w->src_qp;
-	ra->ai.remote_qkey = RDMA_UDP_QKEY;
-}
-#endif
-
 static void list_endpoints(struct i2r_interface *i)
 {
 	char buf[1000] = "";
@@ -2635,6 +2613,113 @@ static struct forward *update_forward(struct endpoint *source, unsigned old_sour
 		return NULL;
 
 	f->source_qp = new_source_qp;
+	return f;
+}
+
+static inline void map_ipv4_addr_to_ipv6(__be32 ipv4, struct in6_addr *ipv6)
+{
+	ipv6->s6_addr32[0] = 0;
+	ipv6->s6_addr32[1] = 0;
+	ipv6->s6_addr32[2] = htobe32(0x0000FFFF);
+	ipv6->s6_addr32[3] = ipv4;
+}
+
+/* Create new Endpoint from struct buf */
+static struct endpoint *new_source_address(struct buf *buf)
+{	
+	struct endpoint *ep;
+	struct rdma_channel *c = buf->c;
+	struct i2r_interface *i = c->i;
+	struct ibv_wc *w = buf->w;
+
+	struct ibv_ah_attr at = {
+		.dlid = w->slid,
+		.sl = w->sl,
+		.src_path_bits = w->dlid_path_bits,
+		.static_rate = 0,
+		.is_global = buf->ip_valid,
+		.port_num = i->port,
+		.grh = {
+			/* .dgid = , */
+			.flow_label = buf->grh_valid ? be32toh(buf->grh.version_tclass_flow) & 0xFFFF: 0,
+			.sgid_index = i->gid_index,
+			.hop_limit = buf->ip_valid ? buf->ip.ttl : 0,
+			.traffic_class = buf->ip_valid ? buf->ip.tos : 0
+		}
+	};
+
+	ep = new_endpoint(c);
+	if (buf->grh_valid) {
+		if (buf->ip_valid) { /* ROCE */
+
+	       		ep->addr.s_addr = buf->ip.saddr;
+
+			map_ipv4_addr_to_ipv6(buf->ip.saddr, (struct in6_addr *)&at.grh.dgid);
+
+		} else {	/* Infiniband */
+			void *position = buf->cur;
+
+			memcpy(&ep->gid, buf->grh.sgid.raw, sizeof(union ibv_gid));
+			memcpy(&at.grh.dgid, &ep->gid, sizeof(union ibv_gid));
+
+			PULL(buf, buf->pgm);
+
+			if (w->src_qp != 1) {
+				/* Direct PGM packet inspection without verification if this is really PGM */
+				memcpy(&ep->addr, buf->pgm.pgm_gsi, sizeof(struct in_addr));
+				logg(LOG_NOTICE, "Extracted IP address from PGM header: %s %s\n",
+						c->text, inet_ntoa(ep->addr));
+			} else
+				logg(LOG_ERR, "No IP address for QP1 packet on %s\n", c->text);
+
+			buf->cur = position;
+		}
+	}
+
+	ep->lid = w->slid;
+
+	/*
+	 * Cannot use ibv_create_ah_from_wc since it is unable to
+	 * handle traffic that arrived as multicast. The setup
+	 * roughly follows what ibv_create_ah_from_wc() does in
+	 * libibverbs/verbs.c
+	 */
+	ep->ah = ibv_create_ah(i->pd, &at);
+	if (!ep->ah) {
+		logg(LOG_ERR, "Failed to create Endpoint on %s: %s. IP=%s, SL=%d grh=%d\n",
+				c->text, errname(), inet_ntoa(ep->addr), w->sl, buf->grh_valid);
+		free(ep);
+		return NULL;
+	}
+	hash_add(i->ep, ep);
+
+	/* Infiniband needs lookups by IP and LID */
+	if (!buf->ip_valid && ep->addr.s_addr)
+		hash_add(i->ip_to_ep, ep);
+
+	return ep;
+}
+
+/*
+ * Populate address cache to avoid expensive lookups.
+ *
+ * This is also used on the senders to multicast groups because the recover channels
+ * for multicast connections will connect later and then we already have the
+ * addresses cached
+ */
+static void learn_source_address(struct buf *buf)
+{
+	struct rdma_channel *c = buf->c;
+	struct i2r_interface *i = c->i;
+	struct ibv_wc *w = buf->w;
+
+	if (!unicast)	/* If unicast is not enabled then dont bother to gather addresses */
+		return;
+
+	buf->source_ep = hash_find(i->ep, buf->ip_valid ?  (void *)&buf->ip.saddr : (void *)&w->slid);
+
+	if (!buf->source_ep)
+		buf->source_ep = new_source_address(buf);
 }
 
 /*
@@ -2652,14 +2737,16 @@ static void receive_multicast(struct buf *buf)
 	int ret;
 	struct pgm_header pgm;
 
+	learn_source_address(buf);
+
 	if (!buf->grh_valid) {
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",
 			c->text, payload_dump(buf->cur));
 		goto invalid_packet;
 	}
 
-	if ((buf->ip_valid && !IN_MULTICAST(buf->ip.daddr)) || buf->grh.dgid.raw[0] !=  0xff) {
-		logg(LOG_WARNING, "Unicast Packet on multicast channel %s:%s\n", c->text, payload_dump(buf->cur));
+	if ((buf->ip_valid && !IN_MULTICAST(ntohl(buf->ip.daddr))) || (!buf->ip_valid && buf->grh.dgid.raw[0] !=  0xff)) {
+		logg(LOG_WARNING, "Unicast Packet on multicast channel %s: GRH=%s %s\n", c->text, grh_str(&buf->grh), payload_dump(buf->cur));
 		goto invalid_packet;
 	}
 
@@ -2781,36 +2868,6 @@ static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
 	free_buffer(buf);
 }
 
-static void sidr_req(struct buf *buf, char *header)
-{
-	char *payload = alloca(1500);
-
-	buf->cur = buf->raw;
-	__hexbytes(payload, buf->cur, buf->end - buf->cur, ' ');
-
-	logg(LOG_NOTICE, "SIDR_REQ: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x %s\n",
-		header, buf->bth.apsn, umad_method_str(buf->umad.mad_hdr.mgmt_class, buf->umad.mad_hdr.method),
-	       	umad_common_mad_status_str(buf->umad.mad_hdr.status),
-	       	umad_attribute_str(buf->umad.mad_hdr.mgmt_class, buf->umad.mad_hdr.attr_id), ntohl(buf->umad.mad_hdr.attr_mod),
-		payload);
-
-}
-
-static void sidr_rep(struct buf *buf, struct endpoint *source)
-{
-	char *payload = alloca(1500);
-
-	buf->cur = buf->raw;
-	__hexbytes(payload, buf->cur, buf->end - buf->cur, ' ');
-
-	logg(LOG_NOTICE, "SIDR_REP: APSN=%x method=%s status=%s attr_id=%s attr_mod=%x %s\n",
-		buf->bth.apsn, umad_method_str(buf->umad.mad_hdr.mgmt_class, buf->umad.mad_hdr.method),
-	       	umad_common_mad_status_str(buf->umad.mad_hdr.status),
-	       	umad_attribute_str(buf->umad.mad_hdr.mgmt_class, buf->umad.mad_hdr.attr_id), ntohl(buf->umad.mad_hdr.attr_mod),
-		payload);
-
-}
-
 /* Figure out what to do with the packet we got */
 static void receive_main(struct buf *buf)
 {
@@ -2821,37 +2878,271 @@ static void receive_main(struct buf *buf)
 		return;
 	}
 
-	if (c->type == channel_rdmacm) {
-		/* No GRH but using RDMACM channel. This is not supported for now */
-		if (log_packets)
-			logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
-	}
+	if (log_packets)
+		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
+
 	st(c, packets_invalid);
 	free_buffer(buf);
 }
 
-	/* So the packet came in on a raw channel. We need to parse the headers */
+/* SIDR handshake with gateway involved. This is based on the assumption
+ * that we are dealing with rdmacm data streams where an
+ * rdma_listen/accept/rdma_disconnect and rdma_connect/rdma_disconnect
+ * handshake is occurring. That means a QP on one side will only send
+ * and receive to one QP on the other side via the connection that
+ * has been established. Therefore it is possible to determine the
+ * target QP# on one side for incoming datagrams by recognizing the
+ * QP # on the other side.
+ *
+ * The connection is established by a successel SIDR REQ/REP
+ * We insert our own QP# into this sequence.
+ *
+ * DREQs/DREP are not send by RDMA CM for ID channels and therefore
+ * also not handled by the logic here. If another request is
+ * made with overlapping ports then the old ones are simply erased.
+ *
+ * Lets say a SIDR REQ is used to establish a connection from
+ * Source IP(SIP)/SQP to the Destination IP(DIP)/DQP:
+ *
+ * SIDR REQ is send on the QP for MADs:
+ *
+ * SIDR REQ SIP(O-QP):DIP(1) -> GW -> SIDR REQ SIP(GW-QP1):DIP(1)
+ *
+ * The gateway here has used its own QP# to resend the request
+ * to the Gateway. The Destination does not see the MAD request
+ * arriving from QP1.
+ *
+ * The gateway will remove existing translations if O-QP is in use
+ * The forward for O-QP will be established so that the gatway
+ * can recognize the SIDR-RESP
+ *
+ * Now the Response from the destination will be
+ *
+ * SIDR RESP DIP(1):SIP(GW-QP1) -> GW- > SIDR RESP DIP(GW-QP2):SIP(O-QP)
+ *
+ * Gatway will establish forwards for both QP# removing prior existing ones
+ * and also the provisional O-QP entry.
+ *
+ * Data may now be flowing in both directions using
+ *
+ * DATA SIP(SQP) -> DIP(GW-QP1) -> GW -> DATA SIP(GW_QP2) -> DIP(DQP)
+ *
+ * State needed by GW
+ *
+ * 1. Resolution from IP -> ibv_ah and GID->LID to ibv_ah
+ *
+ * 2. Map from IP/QPN ib <-> IP/QPN roce
+ *
+ * SIP:DIP SQP:DQP SQP:DQP
+ *
+ * On the IB side we need to ID the sender by LID also but generally prefer GIDs
+ *
+ * Need the SM to do routing paths and GID->LID etc conversions. 
+ */
+
+
+/* Could not find a struct anywhere so this may do the trick */
+struct sidr_req {
+	uint32_t	request_id;
+	uint16_t	pkey;
+	uint16_t	reserved;
+	uint64_t	service_id;
+	char private[100];
+} __packed;
+
+#if 0
+static void print_sidr(void)
+{
+	char *payload = alloca(1500);
+	struct sidr_req sr;
+
+	PULL(buf, sr);
+
+	buf->cur = buf->raw;
+	__hexbytes(payload, buf->cur, buf->end - buf->cur, ' ');
+
+	logg(LOG_NOTICE, "SIDR_REQ: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x SID=%lx RID=%x pkey=%x %s\n",
+		header, buf->bth.apsn, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
+	       	umad_common_mad_status_str(buf->umad.status),
+	       	umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
+		be64toh(sr.service_id), ntohl(sr.request_id), ntohs(sr.pkey),
+		payload);
+}
+
+#endif
+
+static bool scan_private(char *s, struct in_addr *from, struct in_addr *to)
+{
+	struct {
+		struct in_addr x;
+		char ip[4];
+	} addr;
+	unsigned short port;
+	int r;
+	char *p = s;
+	char type[2];
+	
+	while (*p) {
+		/* Find the beginning of the rmmXXX */
+		while (*p != 'r')
+			p++;
+
+		if (!*p)
+			return false;
+
+		r = sscanf(p, "rmm%cx at %hhu.%hhu.%hhu.%hhu|%hu", type, addr.ip, addr.ip + 1, addr.ip + 2, addr.ip + 3, &port);
+
+		logg(LOG_NOTICE, "Scan result = %d Type=%s IP=%s port=%d offset=%ld\n", r, type, inet_ntoa(addr.x), port, p - s);
+
+		if (r != 6)
+			return false;
+
+		if (*type == 'R')
+			*to = addr.x;
+		else if (*type == 'T')
+			*from = addr.x;
+		else
+			return false;
+
+		p += 10;
+	}
+	return true;
+}
+
+
+static struct endpoint *get_ep(struct buf *buf, struct in_addr addr, unsigned short lid)
+{
+	struct i2r_interface *i = buf->c->i;
+	struct endpoint *ep = NULL;
+
+	if (!buf->ip_valid) {
+		/* Infiniband. Attempt to find by LID */
+		ep = hash_find(i->ep, &lid);
+		if (ep) {
+
+			if (ep->addr.s_addr == 0 && addr.s_addr) {
+				/* Ok we can add the IP address that was unknown earlier */
+				ep->addr = addr;
+				hash_add(i->ip_to_ep, &ep);
+			}
+			return ep;
+		}
+	}
+
+	if (addr.s_addr) {
+		ep = hash_find(i->ip_to_ep, &addr.s_addr);
+		if (ep) {
+			if (lid && ep->lid == 0) {
+				/* Add earlier unknown LID */
+				ep->lid = lid;
+				hash_add(i->ep, &ep);
+			}
+			return ep;
+		}
+	}
+
+ 	return new_source_address(buf);
+}
+ 
+static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
+{
+	struct i2r_interface *source_i = buf->c->i;
+	
+	enum interfaces in = source_i - i2r;
+	struct i2r_interface *dest_i = i2r + (in ^ 1);
+	struct endpoint *source_ep = buf->source_ep;
+	struct endpoint *dest_ep = NULL;
+	struct ibv_wc *w = buf->w;
+
+	buf->c = dest_i->ud;
+
+	/* Establish Destination */
+	if (buf->ip_valid) {
+		struct in_addr dest;
+
+		dest.s_addr = buf->ip.daddr;
+		dest_ep = get_ep(buf, dest, 0);
+	
+	} else {
+		struct in_addr source;
+		struct in_addr dest;
+
+		if (dlid) {
+			dest.s_addr = 0;
+			dest_ep = get_ep(buf, dest, dlid);
+		}
+
+		if (!dest_ep) {
+			struct sidr_req sr;
+
+			PULL(buf, sr);
+
+			if (!scan_private(sr.private + 36, &source, &dest))
+				return "Dest and Source IP not determined\n";
+
+			if (source_ep->addr.s_addr == 0) {
+				source_ep->addr = source;
+				hash_add(source_i->ip_to_ep, source_ep);
+				logg(LOG_NOTICE, "Private data Supplied IP address %s to Endpoint at LID %d\n",
+					inet_ntoa(source), w->slid);
+			}
+
+			dest_ep = get_ep(buf, dest, dlid);
+		}
+	}
+ 
+	if (!dest_ep)
+	       	return "Cannot forward MAD packet. AH is not known";
+
+	logg(LOG_NOTICE, "SIDR REQ: Dest %s QP=%d\n", inet_ntoa(dest_ep->addr), buf->w->src_qp);
+
+	if (bridging) {
+
+		buf->cur = mad_pos;
+		send_ud(buf->c, buf, dest_ep->ah, 1);
+
+		if (remove_forward(dest_ep, 1))
+			logg(LOG_WARNING, "Concurrent SIDR REQs\n");
+
+		/* Is the source qp in wc really valid for raw sockets ? */
+		add_forward(dest_ep, 1, source_ep, buf->w->src_qp);
+
+	} else
+		free_buffer(buf);
+
+	return NULL;
+}
 
 static void receive_raw(struct buf *buf)
 {
 	struct rdma_channel *c = buf->c;
+	struct i2r_interface *i = c->i;
+	struct ibv_wc *w = buf->w;
+	struct endpoint *ep;
+	unsigned short dlid = 0;
+	void *mad_pos;
 	const char *reason;
 	int len = 0;
 	char header[100];
 
-	if (c->i == i2r + INFINIBAND) {
-		unsigned short dlid;
+	if (i == i2r + INFINIBAND) {
 		__be16 lrh[4];
 		struct ib_header *ih = (void *)&lrh;
+		struct in_addr addr;
 
 		PULL(buf, lrh);
 
 		len = ntohs(lrh[2]) *4;
 
 		dlid = ib_get_dlid(ih);
+		w->slid = ib_get_slid(ih);
+		w->sl = ib_get_sl(ih);
+
+		addr.s_addr = 0;
+		ep = get_ep(buf, addr, w->slid);
 
 		snprintf(header, sizeof(header), "SLID=%x DLID=%x SL=%d LVer=%d",
-			ib_get_slid(ih), ib_get_dlid(ih), ib_get_sl(ih), ib_get_lver(ih));
+			w->slid, dlid, w->sl, ib_get_lver(ih));
 	
 		if (ib_get_lnh(ih) < 2) {
 			reason = "IP v4/v6 packet";
@@ -2868,6 +3159,9 @@ static void receive_raw(struct buf *buf)
 			snprintf(header + strlen(header), 100-strlen(header), " SGID=%s DGID=%s", 
 				inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
 				inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN));
+
+			if (ep->gid.global.interface_id == 0) /* No GID yet ? */
+				memcpy(&ep->gid, &buf->grh.sgid, sizeof(union ibv_gid));
 
 		}
 
@@ -2893,11 +3187,6 @@ static void receive_raw(struct buf *buf)
 			goto discard;
 		}
 
-		if (buf->e.ether_dhost[0] & 0x1) {
-			reason = "Multicast on RAW channel";
-			goto discard;
-		}
-
 		buf->end -= 4;		/* Remove Ethernet FCS */
 
 		/* buf->cur .. buf->end is the ethernet payload */
@@ -2912,7 +3201,7 @@ static void receive_raw(struct buf *buf)
 			char dest_str[30];
 			struct in_addr source, dest;
 
-			pull(buf, &buf->ip, sizeof(struct iphdr));
+			PULL(buf, buf->ip);
 			buf->ip_valid = true;
 			len = ntohs(buf->ip.tot_len);
 
@@ -2922,6 +3211,7 @@ static void receive_raw(struct buf *buf)
 			strcpy(dest_str, inet_ntoa(dest));
 			snprintf(header, sizeof(header), "%s -> %s", source_str, dest_str);
 
+
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
 				reason = "Only UDP packets";
@@ -2929,27 +3219,37 @@ static void receive_raw(struct buf *buf)
 
 			}
 
+			ep = get_ep(buf, source, 0);
+
+			if (buf->e.ether_dhost[0] & 0x1) {
+				reason = "Multicast on RAW channel";
+				goto discard;
+			}
+
 			if (!buf->ip_csum_ok)
 				logg(LOG_NOTICE, "TCP/UDP CSUM not valid on raw RDMA channel %s\n", c->text);
 
-			pull(buf, &buf->udp, sizeof(struct udphdr));
+			PULL(buf, buf->udp);
 			buf->udp_valid = true;
 
 			if (ntohs(buf->udp.dest) != ROCE_PORT) {
 
 				reason = "Not the ROCE UDP port";
 				goto discard2;
-
 			}
+		} else {
+			reason = "Not IP traffic";
+			goto discard;
 		}
 	}
 
 	PULL(buf, buf->bth);
 	buf->bth_valid = true;
+	buf->end -= ICRC_SIZE;
 	
 	if (ntohl(buf->bth.qpn) != 1) {
-		reason = "Packet forwarding for QPN != 1 not implemented yet";
-		goto discard2;
+		reason = "Raw channels only handle QP1 traffic";
+		goto discard;
 	}
 
 	if (buf->bth.opcode != IB_OPCODE_UD_SEND_ONLY &&
@@ -2959,6 +3259,7 @@ static void receive_raw(struct buf *buf)
         }
 
 	PULL(buf, buf->deth);
+	w->src_qp = buf->deth.sqp;
 
 	if (buf->bth.opcode == IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
 		PULL(buf, buf->immdt);
@@ -2968,16 +3269,20 @@ static void receive_raw(struct buf *buf)
 
 	buf->cur += __bth_pad(&buf->bth);
 
+	mad_pos = buf->cur;
+
 	/* Start MAD payload */
 	PULL(buf, buf->umad);
 
-	if (buf->umad.mad_hdr.mgmt_class != UMAD_CLASS_CM) {
+	if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
 		reason = "Only CM Class MADs are supported";
 		goto discard2;
 	}
 
-	if (buf->umad.mad_hdr.attr_id == UMAD_CM_ATTR_SIDR_REQ) {
-		sidr_req(buf, header);
+	if (buf->umad.attr_id == UMAD_CM_ATTR_SIDR_REQ) {
+		reason = sidr_req(buf, mad_pos, dlid);
+		if (reason)
+			goto discard2;
 		return;
 	}
 	
@@ -2998,23 +3303,83 @@ silent_discard:
 	free_buffer(buf);
 }
 
+
+struct sidr_rep {
+	uint32_t request_id;
+	uint8_t	status;
+	uint8_t ail;
+	uint16_t vendorid1;
+	uint32_t qpn;
+	uint64_t service_id;
+	uint32_t q_key;
+	char add_info[72];
+	char private[100];
+} __packed;
+
+/*
+ * The SIDR REP does only packet inspection since the packed briding
+ * happens in receive_ud
+ */
+static void sidr_rep(struct buf *buf, struct endpoint *source, struct endpoint *dest)
+{
+	struct sidr_rep sr;
+	unsigned short dest_qp;
+	struct forward *f;
+
+	PULL(buf, sr);
+
+	if (sr.status)
+		return;
+
+	dest_qp = sr.qpn;
+
+	/*
+	 * We should have the parameters now to establish the corect forwarding between the
+	 * QPs on the two hosts
+	 */
+
+	/* Traffic will originate on the indicated QP from the Destination (that is the sender of the SIDR_REP) */
+	f = update_forward(source, 1, dest_qp);
+	if (!f) {
+		logg(LOG_ERR, "Received SIDR_REP without a SIDR_REQ\n");
+		return;
+	}
+
+	if (remove_forward(dest, f->source_qp))
+		syslog(LOG_WARNING, "Removing prior existing connection\n");
+
+	/* Traffic from the originator needs to be forwarded to the QP of the sender */
+	add_forward(dest, f->source_qp, source, dest_qp);
+	return;
+
+#if 0
+	char *payload = alloca(1500);
+	buf->cur = buf->raw;
+	__hexbytes(payload, buf->cur, buf->end - buf->cur, ' ');
+
+	logg(LOG_NOTICE, "SIDR_REP: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x SID=%x RID=%x Q_KEY=%x QPN=%x Status=%x %s\n",
+		buf->c->text, buf->bth.apsn, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
+	       	umad_common_mad_status_str(buf->umad.status),
+	       	umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
+		ntohl(sr.service_id), ntohl(sr.request_id), ntohs(sr.q_key), ntohl(sr.qpn), sr.status,
+		payload);
+
+	free_buffer(buf);
+#endif
+}
+
 /* Unicast packet reception */
 static void receive_ud(struct buf *buf)
 {
 	struct rdma_channel *c = buf->c;
-	struct i2r_interface *i = c->i;
 	const char *reason;
 	struct endpoint *e;
 	struct forward *f;
 	struct ibv_wc *w = buf->w;
 
-	/* Find source endpoint */
-	e = hash_find(i->ep,
-			i == i2r + INFINIBAND ?
-			       (void *)&w->slid :
-			       (void *)&buf->grh.sgid.raw + 12
-		);
+	learn_source_address(buf);
 
+	e = buf->source_ep;
 	if (!e) {
 		reason = "Cannot find endpoint";
 		goto discard;
@@ -3043,7 +3408,7 @@ static void receive_ud(struct buf *buf)
 			goto bridge;
 		}
 
-		sidr_rep(buf, e);
+		sidr_rep(buf, buf->source_ep, e);
 		return;
 	}
 
