@@ -307,7 +307,7 @@ static inline void st(struct rdma_channel *c, enum stats s)
 static void add_event(unsigned long time_in_ms, void (*callback));
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 
-static receive_callback receive_main, receive_multicast;
+static receive_callback receive_main, receive_multicast, receive_raw;
 
 static inline struct rdma_cm_id *id(enum interfaces i)
 {
@@ -1121,7 +1121,7 @@ static void start_channel(struct rdma_channel *c)
 		/* kick off if necessary */
 	} else {
 		int ret;
-		bool send = c->i == i2r + ROCE;
+		bool send = c->type == channel_ud;
 
 		c->attr.qp_state = IBV_QPS_RTR;
 		/* Only Ethernet can send on a raw socket */
@@ -1131,9 +1131,12 @@ static void start_channel(struct rdma_channel *c)
 
 		if (send) {
 			c->attr.qp_state = IBV_QPS_RTS;
-			ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE);
+			ret = ibv_modify_qp(c->qp, &c->attr,
+				       c->type == channel_ud ? (IBV_QP_STATE | IBV_QP_SQ_PSN) : IBV_QP_STATE);
+
 			if (ret)
 				logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTS state. %s\n", c->text, errname());
+
 		}
 		logg(LOG_NOTICE, "QP %s moved to state %s\n", c->text,  send ? "RTS/RTR" : "RTR" );
 	}
@@ -1309,7 +1312,7 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 //	c->attr.qkey = 0x12345;		/* Default QKEY from ibdump source code */
 
 	ret = ibv_modify_qp(c->qp, &c->attr,
-		       (i == i2r + ROCE) ?
+		       (i == i2r + ROCE && type == channel_raw) ?
 				(IBV_QP_STATE | IBV_QP_PORT) :
 				( IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)
 	);
@@ -1329,7 +1332,7 @@ static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port,
 
 static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port, unsigned nr_cq)
 {
-	return create_channel(i, receive_main, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
+	return create_channel(i, receive_raw, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
 }
 
 
@@ -2632,9 +2635,6 @@ static void sidr_rep(struct buf *buf, char *header)
 static void receive_main(struct buf *buf)
 {
 	struct rdma_channel *c = buf->c;
-	const char *reason;
-	int len = 0;
-	char header[100];
 
 	if (buf->grh_valid) {
 		recv_buf_grh(c, buf);
@@ -2645,13 +2645,19 @@ static void receive_main(struct buf *buf)
 		/* No GRH but using RDMACM channel. This is not supported for now */
 		if (log_packets)
 			logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
-
-		st(c, packets_invalid);
-		free_buffer(buf);
-		return;
 	}
+	st(c, packets_invalid);
+	free_buffer(buf);
+}
 
 	/* So the packet came in on a raw channel. We need to parse the headers */
+
+static void receive_raw(struct buf *buf)
+{
+	struct rdma_channel *c = buf->c;
+	const char *reason;
+	int len = 0;
+	char header[100];
 
 	if (c->i == i2r + INFINIBAND) {
 		unsigned short dlid;
@@ -2701,7 +2707,7 @@ static void receive_main(struct buf *buf)
 		buf->ethertype = ntohs(buf->e.ether_type);
 		buf->ether_valid = true;
 
-		if (memcmp(c->i->if_mac, buf->e.ether_shost, ETH_ALEN) == 0) {
+		if (memcmp(i->if_mac, buf->e.ether_shost, ETH_ALEN) == 0) {
 
 			reason = "Loopback";
 			goto discard;
