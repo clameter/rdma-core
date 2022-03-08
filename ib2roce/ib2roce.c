@@ -92,7 +92,8 @@
 
 /* Globals */
 
-static unsigned default_port = 0;	/* Port to use to bind to devices and for MC groups that do not have a port (if a port is required) */
+static unsigned default_port = 0;	/* Port to use to bind to devices  */
+static unsigned default_mc_port = 4711;	/* Port for MC groups that do not have a port (if a port is required) */
 static bool debug = false;		/* Stay in foreground, print more details */
 static bool background = false;		/* Are we actually running in the background ? */
 static bool terminated = false;		/* Daemon received a signal to terminate */
@@ -614,8 +615,8 @@ static void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 		*mgid_signature = htons(mg->signature);
 
 		if (mg->pkey)
-			/* WTF? */
-			*mgid_pkey = id(INFINIBAND)->route.addr.addr.ibaddr.pkey;
+			/* WTF? Where do we get the pkey from ? */
+			*mgid_pkey = 0xFFFF;
 
 		if (mg->port)
 			*mgid_port = si->sin_port;
@@ -648,7 +649,7 @@ static int new_mc_addr(char *arg,
 	m->sendonly[ROCE] = sendonly_roce;
 	m->text = strdup(arg);
 
-	si = parse_addr(arg, default_port, &m->mgid_mode, true);
+	si = parse_addr(arg, default_mc_port, &m->mgid_mode, true);
 	if (!si)
 		return 1;
 
@@ -3127,7 +3128,7 @@ static void beacon_setup(const char *opt_arg)
 		opt_arg = "239.1.2.3";
 
 	beacon_mc = NULL;
-	beacon_sin = parse_addr(opt_arg, default_port, &mgid, false);
+	beacon_sin = parse_addr(opt_arg, default_mc_port, &mgid, false);
 	addr = beacon_sin->sin_addr;
 	if (IN_MULTICAST(ntohl(addr.s_addr))) {
 		struct mc *m = mcs + nr_mc++;
