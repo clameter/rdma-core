@@ -203,20 +203,33 @@ struct rdma_channel {
 	struct ibv_qp_attr attr;	/* Only !rdmacm */
 };
 
-/* 
- * Structure for looking up endpoint information.
- * This allows IP addresses to be translated into GIDs and LIDs
+/*
+ * The forwarding struct describes the forwarding for datagrams
+ * coming from a source QP to another QP at an endpoint.
+ * This is singly linked list attache to the endpoints
  */
-struct endpoint_info {
+struct forward {
+	struct endpoint *dest;
+	struct forward *next;
+	unsigned short source_qp, dest_qp;
+};
+
+/* 
+ * Address information for an endpoint.
+ * ah points to the address stucture needed to send data to
+ * this endpoint. The rest are basically keys to lookup
+ * the ah.
+ *
+ * Each endpoint has a list of connections. Packets
+ * coming in from the host
+ */
+struct endpoint {
+	struct rdma_channel *c;
 	struct in_addr addr;
 	union ibv_gid gid;
 	unsigned short lid;
-};
-
-/* Object to describe a connection between two hosts */
-struct connection {
-	struct endpoint_info *e[2];
-	unsigned long qp[2];			/* QP Numbers on thoses endpoints */
+	struct ibv_ah *ah;
+	struct forward *forwards;
 };
 
 static struct i2r_interface {
@@ -245,7 +258,8 @@ static struct i2r_interface {
 	int iges;
 	struct ibv_gid_entry ige[MAX_GID];
 	struct fifo resolve_queue;		/* List of send buffers with unresolved addresses */
-	struct hash *ep;			/* Hash of all endpoints */
+	struct hash *ep;			/* Hash of all endpoints reachable here */
+	struct hash *ip_to_ep;			/* Hash based on IP address */
 } i2r[NR_INTERFACES];
 
 enum hashes { hash_ip, hash_mac, hash_gid, hash_lid, nr_hashes };
@@ -307,7 +321,7 @@ static inline void st(struct rdma_channel *c, enum stats s)
 static void add_event(unsigned long time_in_ms, void (*callback));
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 
-static receive_callback receive_main, receive_multicast, receive_raw;
+static receive_callback receive_main, receive_multicast, receive_raw, receive_ud;
 
 static inline struct rdma_cm_id *id(enum interfaces i)
 {
@@ -1327,7 +1341,7 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 
 static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port, unsigned nr_cq)
 {
-	return create_channel(i, receive_main, port, nr_cq, "-ud", IBV_QPT_UD, channel_ud);
+	return create_channel(i, receive_ud, port, nr_cq, "-ud", IBV_QPT_UD, channel_ud);
 }
 
 static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port, unsigned nr_cq)
@@ -1433,6 +1447,11 @@ static void setup_interface(enum interfaces in)
 	if (unicast) {
 		i->ud = create_ud_channel(i, i->port, 100);
 		i->raw = create_raw_channel(i, i->port, 100);
+		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
+		if (i == i2r + INFINIBAND)
+			i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(unsigned short));
+		else
+			i->ep = i->ip_to_ep;;
 	}
 
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u.\n",
@@ -1854,6 +1873,54 @@ static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct 
 	} else
 		if (log_packets > 1)
 			logg(LOG_NOTICE, "Inline Send to QPN=%x QKEY=%x %d bytes\n",
+				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
+
+	return ret;
+}
+
+/*
+ * Send data to target using native RDMA structs. This one does not support RDMACM since
+ * it uses the shared i->mr and not the c->mr required by rdma cm..
+ */
+static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, unsigned remote_qpn)
+{
+	struct ibv_send_wr wr, *bad_send_wr;
+	struct ibv_sge sge;
+	int ret;
+	unsigned len = buf->end - buf->cur;
+
+	buf->c = c;	/* Change ownership to sending channel */
+	buf->w = NULL;
+
+	memset(&wr, 0, sizeof(wr));
+	wr.sg_list = &sge;
+	wr.num_sge = 1;
+	wr.opcode = IBV_WR_SEND;
+	wr.send_flags = IBV_SEND_SIGNALED;
+	wr.wr_id = (uint64_t)buf;
+
+	/* Get addr info  */
+	wr.wr.ud.ah = ah;
+	wr.wr.ud.remote_qpn = remote_qpn;
+	wr.wr.ud.remote_qkey = RDMA_UDP_QKEY;
+
+	sge.length = buf->end - buf->cur;
+	sge.lkey = c->i->mr->lkey;
+	sge.addr = (uint64_t)buf->cur;
+
+	if (len <= MAX_INLINE_DATA) {
+		wr.send_flags = IBV_SEND_INLINE;
+		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
+		free_buffer(buf);
+	} else
+		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
+
+	if (ret) {
+		errno = - ret;
+		logg(LOG_WARNING, "Failed to post send: %s on %s\n", errname(), c->text);
+	} else
+		if (log_packets > 1)
+			logg(LOG_NOTICE, "RDMA Send to QPN=%x QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
 
 	return ret;
@@ -2457,6 +2524,119 @@ static void learn_source_address(struct rdma_channel *c, struct buf *buf, struct
 }
 #endif
 
+static void list_endpoints(struct i2r_interface *i)
+{
+	char buf[1000] = "";
+	int n = 0;
+	struct endpoint *e[10];
+	unsigned offset = 0;
+	unsigned nr;
+
+	if (!i->context || !i->ep)
+		return;
+
+	while ((nr = hash_get_objects(i->ep, offset, 10, (void **)e))) {
+		int j;
+
+		for (j = 0; j < nr; j++) {
+			n += snprintf(buf + n, sizeof(buf) - n, "%s(%d) ", inet_ntoa(e[j]->addr), e[j]->lid);
+		}
+
+		offset += 10;
+	}
+	if (n)
+		logg(LOG_NOTICE, "Known Endpoints on %s: %s\n", i->text, buf);	
+}
+
+/*
+ * Managing Endpoints and forwarding of packets
+ */
+static struct endpoint *new_endpoint(struct rdma_channel *c)
+{
+	struct endpoint *ep;
+
+	ep = calloc(1, sizeof(struct endpoint));
+	if (!ep)
+		abort();
+
+	ep->c = c;
+	return ep;
+}
+
+/*
+ * Establish a forwarding for UD unicast packets. Used on UD packet
+ * reception to find the destination.
+ *
+ * This function only adds the forward. Check if there is an existing
+ * forward before calling this function.
+ */
+static void add_forward(struct endpoint *source, unsigned source_qp, struct endpoint *dest, unsigned dest_qp)
+{
+	struct forward *f = calloc(1, sizeof(struct forward));
+
+	f->dest = dest;
+	f->dest_qp = dest_qp;
+	f->source_qp = source_qp;
+	f->next = source->forwards;
+	source->forwards = f;
+}
+
+/*
+ * Find the forwarding entry for traffic coming in from a source QP on one side
+ */
+static struct forward *find_forward(struct endpoint *source, unsigned source_qp)
+{
+	struct forward *f = source->forwards;
+
+	while (f && f->source_qp != source_qp)
+		f = f->next;
+
+	return f;
+}
+
+/*
+ * Remove a forward and indicate if something was there before.
+ *
+ * This can be used to remove an entry before calling
+ * add_forward.
+ */
+static bool remove_forward(struct endpoint *source, unsigned source_qp)
+{
+	struct forward *f = source->forwards;
+	struct forward *prior = NULL;
+
+	while (f && f->source_qp != source_qp) {
+		prior = f;
+		f = f->next;
+	}
+
+	if (f) {
+		if (prior) {
+			prior->next = f->next;
+		} else {
+			source->forwards = f->next;
+		}
+		return true;
+	} else
+		return false;
+}
+
+/*
+ * Update the forwarder if the source point changes
+ */
+static struct forward *update_forward(struct endpoint *source, unsigned old_source_qp, unsigned new_source_qp)
+{
+	struct forward *f = source->forwards;
+
+	while (f && f->source_qp != old_source_qp)
+		f = f->next;
+
+	if (!f)
+		return NULL;
+
+	f->source_qp = new_source_qp;
+}
+
 /*
  * We have an GRH header so the packet has been processed by the RDMA
  * Subsystem and we can take care of it using the RDMA calls
@@ -2616,15 +2796,15 @@ static void sidr_req(struct buf *buf, char *header)
 
 }
 
-static void sidr_rep(struct buf *buf, char *header)
+static void sidr_rep(struct buf *buf, struct endpoint *source)
 {
 	char *payload = alloca(1500);
 
 	buf->cur = buf->raw;
 	__hexbytes(payload, buf->cur, buf->end - buf->cur, ' ');
 
-	logg(LOG_NOTICE, "SIDR_REP: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x %s\n",
-		header, buf->bth.apsn, umad_method_str(buf->umad.mad_hdr.mgmt_class, buf->umad.mad_hdr.method),
+	logg(LOG_NOTICE, "SIDR_REP: APSN=%x method=%s status=%s attr_id=%s attr_mod=%x %s\n",
+		buf->bth.apsn, umad_method_str(buf->umad.mad_hdr.mgmt_class, buf->umad.mad_hdr.method),
 	       	umad_common_mad_status_str(buf->umad.mad_hdr.status),
 	       	umad_attribute_str(buf->umad.mad_hdr.mgmt_class, buf->umad.mad_hdr.attr_id), ntohl(buf->umad.mad_hdr.attr_mod),
 		payload);
@@ -2799,12 +2979,9 @@ static void receive_raw(struct buf *buf)
 	if (buf->umad.mad_hdr.attr_id == UMAD_CM_ATTR_SIDR_REQ) {
 		sidr_req(buf, header);
 		return;
-	} else if (buf->umad.mad_hdr.attr_id == UMAD_CM_ATTR_SIDR_REP) {
-		sidr_rep(buf, header);
-		return;
 	}
 	
-	reason = "Only SIDR_REQ and SIDR_REP supported\n";
+	reason = "Only SIDR_REQ\n";
 	goto discard2;
 
 discard:
@@ -2816,6 +2993,72 @@ discard2:
 		ntohl(buf->bth.qpn), buf->bth.apsn, len);
 
 silent_discard:
+	st(c, packets_invalid);
+
+	free_buffer(buf);
+}
+
+/* Unicast packet reception */
+static void receive_ud(struct buf *buf)
+{
+	struct rdma_channel *c = buf->c;
+	struct i2r_interface *i = c->i;
+	const char *reason;
+	struct endpoint *e;
+	struct forward *f;
+	struct ibv_wc *w = buf->w;
+
+	/* Find source endpoint */
+	e = hash_find(i->ep,
+			i == i2r + INFINIBAND ?
+			       (void *)&w->slid :
+			       (void *)&buf->grh.sgid.raw + 12
+		);
+
+	if (!e) {
+		reason = "Cannot find endpoint";
+		goto discard;
+	}
+
+	f = find_forward(e, w->src_qp);
+
+	if (!f) {
+		reason = "No QPN is connected";
+		goto discard;
+	}
+
+	if (w->src_qp == 1) {
+		/* QP1 traffic SIDR REP as a response to SIDR REQ */
+		void *mad_pos = buf->cur;
+
+		PULL(buf, buf->umad);
+
+		buf->cur = mad_pos;
+
+		if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
+			goto bridge;
+		}
+
+		if (ntohs(buf->umad.attr_id) != UMAD_CM_ATTR_SIDR_REP) {
+			goto bridge;
+		}
+
+		sidr_rep(buf, e);
+		return;
+	}
+
+	/* Now we have the destination endpoint */
+	e = f->dest;
+
+bridge:
+	send_ud(e->c, buf, e->ah, f->dest_qp);
+
+	return;
+
+discard:
+	logg(LOG_NOTICE, "Discard %s %s QPN=%x APSN=%x LEN=%ld\n", c->text, reason,
+		ntohl(buf->bth.qpn), buf->bth.apsn, buf->end - buf->cur);
+
 	st(c, packets_invalid);
 
 	free_buffer(buf);
@@ -3290,6 +3533,10 @@ static void logging(void)
 
 	logg(LOG_NOTICE, "%d/%d MC Active. %s.\n", active_mc, nr_mc, events);
 	add_event(timestamp() + interval, logging);
+
+	list_endpoints(i2r + INFINIBAND);
+	list_endpoints(i2r + ROCE);
+
 }
 
 /*
