@@ -176,6 +176,8 @@ static const char *stats_text[nr_stats] = {
 
 static int cq_high = 0;	/* Largest batch of CQs encountered */
 
+enum channel_type { channel_rdmacm, channel_ud, channel_raw, nr_channel_types };
+
 struct rdma_channel {
 	struct i2r_interface *i;	/* The network interface of this channel */
 	struct ibv_qp *qp;		/* Points to QP regardless of method used */
@@ -183,12 +185,12 @@ struct rdma_channel {
 	unsigned int active_receive_buffers;
 	unsigned int nr_cq;
 	unsigned long stats[nr_stats];
-	bool rdmacm;		/* Channel uses RDMACM calls */
+	enum channel_type type;	/* Channel uses RDMACM calls */
 	bool listening;		/* Channel is listening for connections */
 	const char *text;
 	struct rdma_unicast *ru;
 	union {
-		struct { /* RDMACM status */
+		struct { /* type == rdmacm */
 			struct ibv_comp_channel *comp_events;
 			struct ibv_pd *pd;
 			struct rdma_cm_id *id;
@@ -995,7 +997,7 @@ static void channel_destroy(struct rdma_channel *c)
 	if (!c)
 		return;
 
-	if (c->rdmacm) {
+	if (c->type == channel_rdmacm) {
 
 		if (c->qp)
 			rdma_destroy_qp(c->id);
@@ -1104,7 +1106,7 @@ out:
 
 static void start_channel(struct rdma_channel *c)
 {
-	if (c->rdmacm) {
+	if (c->type == channel_rdmacm) {
 		/* kick off if necessary */
 	} else {
 		int ret;
@@ -1126,12 +1128,12 @@ static void start_channel(struct rdma_channel *c)
 	}
 }
 
-static struct rdma_channel *new_rdma_channel(struct i2r_interface *i)
+static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type)
 {
 	struct rdma_channel *c = calloc(1, sizeof(struct rdma_channel));
 
 	c->i = i;
-	c->rdmacm = true;
+	c->type = type;
 
 	return c;
 }
@@ -1149,7 +1151,7 @@ static const char *make_ifname(struct i2r_interface *i, const char *x)
 
 static struct rdma_channel *create_rdma_id(struct i2r_interface *i, struct sockaddr *sa)
 {
-	struct rdma_channel *c = new_rdma_channel(i);
+	struct rdma_channel *c = new_rdma_channel(i, channel_rdmacm);
 	int ret;
 
 
@@ -1244,15 +1246,14 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multi
 }
 
 /* Not using rdmacm so this is easier on the callbacks */
-static struct rdma_channel *create_channel(struct i2r_interface *i, int port, unsigned nr_cq, const char *text, int qp_type)
+static struct rdma_channel *create_channel(struct i2r_interface *i,
+		int port, unsigned nr_cq, const char *text, int qp_type, enum channel_type type)
 {
-	struct rdma_channel *c = new_rdma_channel(i);
+	struct rdma_channel *c = new_rdma_channel(i, type);
 	int ret;
 	struct ibv_qp_init_attr_ex init_qp_attr_ex;
 
 	c->i = i;
-	c->rdmacm = false;
-
 	c->text = make_ifname(i, text);
 
 	c->nr_cq = nr_cq;
@@ -1309,12 +1310,12 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, int port, un
 
 static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port, unsigned nr_cq)
 {
-	return create_channel(i, port, nr_cq, "-ud", IBV_QPT_UD);
+	return create_channel(i, port, nr_cq, "-ud", IBV_QPT_UD, channel_ud);
 }
 
 static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port, unsigned nr_cq)
 {
-	return create_channel(i, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD);
+	return create_channel(i, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
 }
 
 
@@ -1708,7 +1709,7 @@ static void handle_rdma_event(void *private)
 		case RDMA_CM_EVENT_CONNECT_REQUEST:
 			{
 				struct rdma_conn_param rcp = { };
-				struct rdma_channel *c = new_rdma_channel(i);
+				struct rdma_channel *c = new_rdma_channel(i, channel_rdmacm);
 
 				logg(LOG_NOTICE, "RDMA_CM_CONNECT_REQUEST id=%p listen_id=%p\n",
 					event->id, event->listen_id);
@@ -2605,7 +2606,7 @@ static void recv_buf(struct rdma_channel *c, struct buf *buf)
 		return;
 	}
 
-	if (c->rdmacm) {
+	if (c->type == channel_rdmacm) {
 		/* No GRH but using RDMACM channel. This is not supported for now */
 		if (log_packets)
 			logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
