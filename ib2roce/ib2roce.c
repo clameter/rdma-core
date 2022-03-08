@@ -312,7 +312,7 @@ static inline void st(struct rdma_channel *c, enum stats s)
 static void add_event(unsigned long time_in_ms, void (*callback));
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 
-static receive_callback receive_main;
+static receive_callback receive_main, receive_multicast;
 
 static inline struct rdma_cm_id *id(enum interfaces i)
 {
@@ -1159,7 +1159,7 @@ static const char *make_ifname(struct i2r_interface *i, const char *x)
 
 static struct rdma_channel *create_rdma_id(struct i2r_interface *i, struct sockaddr *sa)
 {
-	struct rdma_channel *c = new_rdma_channel(i, receive_main, channel_rdmacm);
+	struct rdma_channel *c = new_rdma_channel(i, receive_multicast, channel_rdmacm);
 	int ret;
 
 
@@ -2452,23 +2452,26 @@ static void learn_source_address(struct rdma_channel *c, struct buf *buf, struct
  * We have an GRH header so the packet has been processed by the RDMA
  * Subsystem and we can take care of it using the RDMA calls
  */
-static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
+static void receive_multicast(struct buf *buf)
 {
 	struct mc *m;
+	struct rdma_channel *c = buf->c;
 	enum interfaces in = c->i - i2r;
-	struct ib_addr *sgid = (struct ib_addr *)&buf->grh.sgid.raw;
-	struct ib_addr *dgid = (struct ib_addr *)&buf->grh.dgid.raw;
 	char xbuf[INET6_ADDRSTRLEN];
+	struct ib_addr *dgid = (struct ib_addr *)&buf->grh.dgid.raw;
 	struct in_addr dest_addr;
 	int ret;
 	struct pgm_header pgm;
 
-	if (unicast &&
-		((in == INFINIBAND && buf->grh.dgid.raw[0] != 0xff) ||
-		((in == ROCE && (buf->grh.dgid.raw[13] & 0x1))))) {
+	if (!buf->grh_valid) {
+		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",
+			c->text, payload_dump(buf->cur));
+		goto invalid_packet;
+	}
 
-		unicast_packet(c, buf, dest_addr);
-		return;
+	if ((buf->ip_valid && !IN_MULTICAST(buf->ip.daddr)) || buf->grh.dgid.raw[0] !=  0xff) {
+		logg(LOG_WARNING, "Unicast Packet on multicast channel %s:%s\n", c->text, payload_dump(buf->cur));
+		goto invalid_packet;
 	}
 
 	dest_addr.s_addr = dgid->sib_addr32[3];
@@ -2498,7 +2501,7 @@ static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
 		goto invalid_packet;
 	}
 
-	if (in == INFINIBAND) {
+	if (!buf->ip_valid) {
 		unsigned char *mgid = buf->grh.dgid.raw;
 		unsigned short signature = ntohs(*(unsigned short*)(mgid + 2));
 
@@ -2513,7 +2516,7 @@ static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
 
 		if (memcmp(&buf->grh.sgid, &c->i->gid, sizeof(union ibv_gid)) == 0) {
 
-			if (log_packets)
+			if (log_packets > 2)
 				logg(LOG_WARNING, "Discard Packet: Loopback from this host. MGID=%s/%s\n",
 					inet_ntop(AF_INET6, mgid, xbuf, INET6_ADDRSTRLEN), c->text);
 
@@ -2536,17 +2539,10 @@ static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
 		}
 
 	} else { /* ROCE */
-		struct in_addr source_addr;
-		struct in_addr local_addr;
-
-		local_addr = c->i->if_addr.sin_addr;
-
-		source_addr.s_addr = sgid->sib_addr32[3];
-
-		if (source_addr.s_addr == local_addr.s_addr) {
+		if (buf->ip.saddr == c->i->if_addr.sin_addr.s_addr) {
 			if (log_packets)
 				logg(LOG_WARNING, "Discard Packet: Loopback from this host. %s/%s\n",
-					inet_ntoa(source_addr), c->text);
+					inet_ntoa(c->i->if_addr.sin_addr), c->text);
 			goto invalid_packet;
 		}
 	}
@@ -2570,6 +2566,29 @@ static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
 invalid_packet:
 	st(c, packets_invalid);
 free_out:
+	free_buffer(buf);
+}
+
+/*
+ * We have an GRH header so the packet has been processed by the RDMA
+ * Subsystem and we can take care of it using the RDMA calls
+ */
+static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
+{
+	enum interfaces in = c->i - i2r;
+	struct in_addr dest_addr;
+
+	if (unicast &&
+		((in == INFINIBAND && buf->grh.dgid.raw[0] != 0xff) ||
+		((in == ROCE && (buf->grh.dgid.raw[13] & 0x1))))) {
+
+		unicast_packet(c, buf, dest_addr);
+		return;
+	}
+
+	logg(LOG_WARNING, "Multicast packet on Unicast QP %s:%s\n", c->text, payload_dump(buf->cur));
+
+	st(c, packets_invalid);
 	free_buffer(buf);
 }
 
@@ -2602,6 +2621,7 @@ static void sidr_rep(struct buf *buf, char *header)
 		payload);
 
 }
+
 /* Figure out what to do with the packet we got */
 static void receive_main(struct buf *buf)
 {
