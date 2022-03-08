@@ -752,6 +752,7 @@ struct buf {
 			struct buf *next;	/* Next free buffer */
 			bool free;
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
+			struct ibv_wc *w;	/* Work Completion struct */
 
 			bool ether_valid;	/* Ethernet header valid */
 			bool ip_valid;		/* IP header valid */
@@ -2595,8 +2596,9 @@ static void sidr_rep(struct buf *buf, char *header)
 
 }
 /* Figure out what to do with the packet we got */
-static void recv_buf(struct rdma_channel *c, struct buf *buf)
+static void recv_buf(struct buf *buf)
 {
+	struct rdma_channel *c = buf->c;
 	const char *reason;
 	int len = 0;
 	char header[100];
@@ -2831,8 +2833,14 @@ static void handle_comp_event(void *private)
 			c->active_receive_buffers--;
 			st(c, packets_received);
 
+			if (c != buf->c) {
+				logg(LOG_CRIT, "RDMA Channel mismatch CQ channel/buffer.\n");
+				abort();
+			}
+
 			buf->cur = buf->raw;
 			buf->end = buf->raw + w->byte_len;
+			buf->w = w;
 			reset_flags(buf);
 			if (w->wc_flags & IBV_WC_WITH_IMM) {
 
@@ -2861,7 +2869,7 @@ static void handle_comp_event(void *private)
 
 			buf->ip_csum_ok = (w->wc_flags & IBV_WC_IP_CSUM_OK) != 0;
 
-			recv_buf(c, buf);
+			recv_buf(buf);
 
 		} else {
 			if (w->status == IBV_WC_SUCCESS && w->opcode == IBV_WC_SEND) {
