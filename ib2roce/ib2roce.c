@@ -1350,10 +1350,11 @@ static void setup_interface(enum interfaces in)
 		if (e->port_num != i->port)
 			continue;
 
-		if (e->gid_type == IBV_GID_TYPE_IB && in == INFINIBAND)
+		if (in == INFINIBAND && e->gid_type == IBV_GID_TYPE_IB)
 			break;
 
-		if (e->gid_type == IBV_GID_TYPE_ROCE_V2 && in == ROCE)
+		if (in == ROCE && e->gid_type == IBV_GID_TYPE_ROCE_V2 &&
+				e->gid.global.subnet_prefix == 0)
 			break;
 	}
 
