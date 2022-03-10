@@ -185,7 +185,11 @@ typedef void receive_callback(struct buf *);
 struct rdma_channel {
 	struct i2r_interface *i;	/* The network interface of this channel */
 	receive_callback *receive;
-	struct ibv_qp *qp;		/* Points to QP regardless of method used */
+	struct ibv_cq *cq;		/* Every channel has a distinct CQ */
+	struct ibv_qp *qp;		/* All of the ibv_xxes are pointing to the interfac versions if this is not a rdmacm channel */
+	struct ibv_mr *mr;
+	struct ibv_comp_channel *comp_events;
+	struct ibv_pd *pd;
 	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
 	unsigned int nr_cq;
@@ -194,18 +198,9 @@ struct rdma_channel {
 	bool listening;		/* Channel is listening for connections */
 	const char *text;
 	struct rdma_unicast *ru;
-	union {
-		struct { /* type == rdmacm */
-			struct ibv_comp_channel *comp_events;
-			struct ibv_pd *pd;
-			struct rdma_cm_id *id;
-			struct sockaddr *bindaddr;
-			struct ibv_cq *cq;
-			struct ibv_mr *mr;
-		};
-		/* Basic RDMA channel without RDMACM */
-		struct ibv_qp_attr attr;
-	};
+	struct rdma_cm_id *id;		/* Only rdmacm */
+	struct sockaddr *bindaddr;	/* Only rdmacm */
+	struct ibv_qp_attr attr;	/* Only !rdmacm */
 };
 
 /* 
@@ -993,9 +988,19 @@ static int post_receive_buffers(struct i2r_interface *i)
 		return -EAGAIN;
 
 	ret = post_receive(i->multicast, i->multicast->nr_cq / 2);
-	if (i->raw && !ret)
+	if (ret)
+		goto out;
+
+	if (i->raw)
 		ret = post_receive(i->raw, 100);
 
+	if (ret)
+		goto out;
+
+	if (i->ud)
+		ret = post_receive(i->ud, 100);
+
+out:
 	return ret;
 }
 
@@ -1024,10 +1029,6 @@ static void channel_destroy(struct rdma_channel *c)
 		if (c->cq)
 			ibv_destroy_cq(c->cq);
 
-		ibv_dereg_mr(c->mr);
-		if (c->pd)
-			ibv_dealloc_pd(c->pd);
-
 	}
 	clear_channel_bufs(c);
 	free(c);
@@ -1035,9 +1036,6 @@ static void channel_destroy(struct rdma_channel *c)
 
 static void qp_destroy(struct i2r_interface *i)
 {
-	channel_destroy(i->multicast);
-	i->multicast = NULL;
-
 #ifdef HAVE_MSTFLINT
 	if (i == i2r + INFINIBAND) {
 		if (clear_ib_sniffer(i->port, i->raw->qp))
@@ -1045,9 +1043,14 @@ static void qp_destroy(struct i2r_interface *i)
 	}
 #endif
 
+	channel_destroy(i->multicast);
+	i->multicast = NULL;
+
 	channel_destroy(i->raw);
 	i->raw = NULL;
 
+	channel_destroy(i->ud);
+	i->ud = NULL;
 }
 
 /* Retrieve Kernel Stack info about the interface */
@@ -1263,6 +1266,9 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 
 	c->i = i;
 	c->text = make_ifname(i, text);
+	c->mr = i->mr;
+	c->comp_events = i->comp_events;
+	c->pd = i->pd;
 
 	c->nr_cq = nr_cq;
 	c->cq = ibv_create_cq(i->context, nr_cq, c, i->comp_events, 0);
@@ -1285,7 +1291,7 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 	init_qp_attr_ex.recv_cq = c->cq;
 
 	init_qp_attr_ex.comp_mask = IBV_QP_INIT_ATTR_CREATE_FLAGS|IBV_QP_INIT_ATTR_PD;
-	init_qp_attr_ex.pd = c->pd;
+	init_qp_attr_ex.pd = i->pd;
 	init_qp_attr_ex.create_flags = 0;
 
 	c->qp = ibv_create_qp_ex(i->context, &init_qp_attr_ex);
@@ -1309,7 +1315,7 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 	);
 
 	if (ret) {
-		logg(LOG_CRIT, "ibv_modify_qp: Error when moving to Init state. %s", errname());
+		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to Init state. %s\n", c->text, errname());
 		return NULL;
 	}
 
@@ -2816,20 +2822,16 @@ static void reset_flags(struct buf *buf)
 
 static void handle_comp_event(void *private)
 {
-	struct rdma_channel *c = private;
-	struct i2r_interface *i = c->i;
+	struct ibv_comp_channel *events = private;
+	struct rdma_channel *c;
+	struct i2r_interface *i;
 	struct ibv_cq *cq;
 	int cqs;
 	struct ibv_wc wc[100];
 	int j;
-	struct rdma_channel *c2;
 
-	ibv_get_cq_event(c->comp_events, &cq, (void **)&c2);
-	if (cq != c->cq || c2 != c) {
-		logg(LOG_CRIT, "ibv_get_cq_event on %s: CQ mismatch C=%px CQ=%px\n",
-				c->text, cq, c);
-		abort();
-	}
+	ibv_get_cq_event(events, &cq, (void **)&c);
+	i = c->i;
 
 	ibv_ack_cq_events(cq, 1);
 	if (ibv_req_notify_cq(cq, 0)) {
@@ -3000,6 +3002,8 @@ static void status_write(void)
 
 		if (i->multicast)
 			n += channel_stats(b + n, i->multicast, i->text, "Multicast");
+		if (i->ud)
+			n += channel_stats(b + n, i->ud, i->text, "UD");
 		if (i->raw)
 			n += channel_stats(b + n, i->raw, i->text, "Raw");
 
@@ -3314,11 +3318,11 @@ static void register_poll_events(void)
 	   if (i->context) {
 
 		register_callback(handle_rdma_event, i->rdma_events->fd, i);
-		register_callback(handle_comp_event, i->multicast->comp_events->fd, i->multicast);
+		register_callback(handle_comp_event, i->multicast->comp_events->fd, i->multicast->comp_events);
 		register_callback(handle_async_event, i->context->async_fd, i);
 
-		if (i->raw)
-			register_callback(handle_comp_event, i->raw->comp_events->fd, i->raw);
+		if (i->raw || i->ud)	/* They share the interface comp_events notifier */
+			register_callback(handle_comp_event, i->comp_events->fd, i->comp_events);
 
 	}
 
@@ -3355,11 +3359,17 @@ static void arm_channels(void)
 		if (i->multicast) {
 			ibv_req_notify_cq(i->multicast->cq, 0);
 		}
+
 		if (i->raw) {
 			start_channel(i->raw);
 			ibv_req_notify_cq(i->raw->cq, 0);
 
 			setup_flow(i->raw);
+		}
+	
+		if (i->ud) {
+			start_channel(i->ud);
+			ibv_req_notify_cq(i->ud->cq, 0);
 		}
 	}
 
