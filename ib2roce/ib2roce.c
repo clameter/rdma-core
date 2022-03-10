@@ -1858,6 +1858,7 @@ static int send_to(struct rdma_channel *c,
 		abort();	/* Send without a route */
 
 	buf->c = c;	/* Change ownership to sending channel */
+	buf->w = NULL;
 
 	memset(&wr, 0, sizeof(wr));
 	wr.sg_list = &sge;
@@ -2845,6 +2846,15 @@ static void handle_comp_event(void *private)
 			if (w->wc_flags & IBV_WC_GRH) {
 				PULL(buf, buf->grh);
 				buf->grh_valid = true;
+				if (i == i2r + ROCE) {
+					/*
+					 * In the ROCE ipv4 case the IP header is
+					 * at the end of the GRH instead of a 
+					 * SGID and DGID
+					 */
+					memcpy(&buf->ip, (void *)buf->cur - 20, 20);
+					buf->ip_valid = true;
+				}
 			} else
 				buf->grh_valid = false;
 
