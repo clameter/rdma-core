@@ -757,7 +757,6 @@ struct buf {
 			bool ether_valid;	/* Ethernet header valid */
 			bool ip_valid;		/* IP header valid */
 			bool udp_valid;		/* Valid UDP header */
-			bool bth_valid;		/* Valid BTH header */
 			bool grh_valid;		/* Valid GRH header */
 			bool imm_valid;		/* unsigned imm is valid */
 			bool ip_csum_ok;	/* Hardware check if IP CSUM was ok */
@@ -766,16 +765,12 @@ struct buf {
 			uint8_t *end;		/* Pointer to the last byte in the packet + 1 */
 			unsigned imm;		/* Immediate data from the WC */
 
-			unsigned ethertype;	/* Frame type */
-
 			/* Structs pulled out of the frame */
 			struct immdt immdt;	/* BTH subheader */
 			struct ibv_grh grh;
 			struct ether_header e;
 			struct iphdr ip;
 			struct udphdr udp;
-			struct bth bth;
-			struct deth deth;	/* BTH subheader */
 			struct pgm_header pgm;	/* RFC3208 header */
 			struct umad_hdr umad;
 		};
@@ -1361,6 +1356,7 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 	if (!c->qp) {
 		logg(LOG_CRIT, "ibv_create_qp_ex failed for %s. Error %s. Port=%d #CQ=%d\n",
 				c->text, errname(), port, nr_cq);
+		free(c);
 		return NULL;
 	}
 
@@ -1379,6 +1375,7 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 
 	if (ret) {
 		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to Init state. %s\n", c->text, errname());
+		free(c);
 		return NULL;
 	}
 
@@ -2901,6 +2898,8 @@ static void receive_raw(struct buf *buf)
 	void *mad_pos;
 	const char *reason;
 	int len = w->byte_len;
+	struct bth bth = { };
+	struct deth deth;	/* BTH subheader */
 	char header[200];
 
 	if (i == i2r + INFINIBAND) {
@@ -2959,9 +2958,10 @@ static void receive_raw(struct buf *buf)
 		}
 
 	} else { /* Ethernet. We expect a ROCE packet */
+		unsigned ethertype;
 
 		pull(buf, &buf->e, sizeof(struct ether_header));
-		buf->ethertype = ntohs(buf->e.ether_type);
+		ethertype = ntohs(buf->e.ether_type);
 		buf->ether_valid = true;
 
 		if (memcmp(i->if_mac, buf->e.ether_shost, ETH_ALEN) == 0) {
@@ -2973,7 +2973,7 @@ static void receive_raw(struct buf *buf)
 		buf->end -= 4;		/* Remove Ethernet FCS */
 
 		/* buf->cur .. buf->end is the ethernet payload */
-		switch (buf->ethertype) {
+		switch (ethertype) {
 
 		case ETHERTYPE_ROCE:
 
@@ -3040,31 +3040,30 @@ static void receive_raw(struct buf *buf)
 
 	buf->source_ep = ep;
 
-	PULL(buf, buf->bth);
-	buf->bth_valid = true;
+	PULL(buf, bth);
 	buf->end -= ICRC_SIZE;
 
-	if (ntohl(buf->bth.qpn) == 0) {
+	if (ntohl(bth.qpn) == 0) {
 		reason = "Raw channels do not handle QP0 traffic";
 		goto discard;
 	}
 
-	if (buf->bth.opcode != IB_OPCODE_UD_SEND_ONLY &&
-		buf->bth.opcode !=  IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
+	if (bth.opcode != IB_OPCODE_UD_SEND_ONLY &&
+		bth.opcode !=  IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
 			reason = "Only UD Sends are supported";
                         goto discard2;
         }
 
-	PULL(buf, buf->deth);
-	w->src_qp = buf->deth.sqp;
+	PULL(buf, deth);
+	w->src_qp = deth.sqp;
 
-	if (buf->bth.opcode == IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
+	if (bth.opcode == IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
 		PULL(buf, buf->immdt);
 		buf->imm_valid = true;
 		buf->imm = buf->immdt.imm;
 	}
 
-	buf->cur += __bth_pad(&buf->bth);
+	buf->cur += __bth_pad(&bth);
 
 	mad_pos = buf->cur;
 
@@ -3092,7 +3091,7 @@ discard:
 
 discard2:
 	logg(LOG_NOTICE, "Discard %s %s: %s QPN=%x APSN=%x LEN=%d\n", c->text, reason, header,
-		ntohl(buf->bth.qpn), buf->bth.apsn, len);
+		ntohl(bth.qpn), bth.apsn, len);
 
 silent_discard:
 	st(c, packets_invalid);
@@ -3219,8 +3218,7 @@ bridge:
 	return;
 
 discard:
-	logg(LOG_NOTICE, "Discard %s %s QPN=%x APSN=%x LEN=%ld\n", c->text, reason,
-		ntohl(buf->bth.qpn), buf->bth.apsn, buf->end - buf->cur);
+	logg(LOG_NOTICE, "Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
 
 	st(c, packets_invalid);
 
