@@ -162,14 +162,14 @@ enum interfaces { INFINIBAND, ROCE, NR_INTERFACES };
 
 static const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 
-enum stats { packets_received, packets_sent, packets_bridged_mc, packets_bridged_uc, packets_invalid,
+enum stats { packets_received, packets_sent, packets_bridged, packets_invalid,
 		join_requests, join_failure, join_success,
 		leave_requests,
 		nr_stats
 };
 
 static const char *stats_text[nr_stats] = {
-	"PacketsReceived", "PacketsSent", "PacketsBridgedMC", "PacketsBridgedUC", "PacketsInvalid",
+	"PacketsReceived", "PacketsSent", "PacketsBridged", "PacketsInvalid",
 	"JoinRequests", "JoinFailures", "JoinSuccess",
 	"LeaveRequests"
 };
@@ -193,7 +193,7 @@ struct rdma_channel {
 	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
 	unsigned int nr_cq;
-	unsigned long stats[nr_stats];
+	unsigned stats[nr_stats];
 	enum channel_type type;	/* Channel uses RDMACM calls */
 	bool listening;		/* Channel is listening for connections */
 	const char *text;
@@ -2519,13 +2519,19 @@ static void list_endpoints(struct i2r_interface *i)
 		int j;
 
 		for (j = 0; j < nr; j++) {
-			n += snprintf(buf + n, sizeof(buf) - n, "%s(%d) ", inet_ntoa(e[j]->addr), e[j]->lid);
+			if (e[j]->lid) {
+				if (e[j]->addr.s_addr)
+					n += snprintf(buf + n, sizeof(buf) - n, " %s/lid=%d", inet_ntoa(e[j]->addr), e[j]->lid);
+				else
+					n += snprintf(buf + n, sizeof(buf) - n, " lid=%d", e[j]->lid);
+			} else
+				n += snprintf(buf + n, sizeof(buf) - n, " %s", inet_ntoa(e[j]->addr));
 		}
 
 		offset += 10;
 	}
 	if (n)
-		logg(LOG_NOTICE, "Known Endpoints on %s: %s\n", i->text, buf);	
+		logg(LOG_NOTICE, "Known Endpoints on %s:%s\n", i->text, buf);
 }
 
 /*
@@ -2941,7 +2947,7 @@ static void receive_multicast(struct buf *buf)
 	if (ret)
 		goto free_out;
 
-	st(c, packets_bridged_mc);
+	st(c, packets_bridged);
 	return;
 
 invalid_packet:
@@ -3678,7 +3684,7 @@ static int channel_stats(char *b, struct rdma_channel *c, const char *interface,
 
 	for(j =0; j < nr_stats; j++)
 		if (c->stats[j]) {
-			n += sprintf(b + n, "%s=%lu\n", stats_text[j], c->stats[j]);
+			n += sprintf(b + n, "%s=%u\n", stats_text[j], c->stats[j]);
 	}
 	return n;
 }
@@ -3737,6 +3743,40 @@ static void status_write(void)
 			n += channel_stats(b + n, i->raw, i->text, "Raw");
 
 	}
+
+	for(i = i2r; i < i2r + NR_INTERFACES; i++)
+		if (i->context && i->ep) {
+		struct endpoint *e[20];
+		char xbuf[30];
+		unsigned nr;
+		unsigned offset = 0;
+
+		printf("\nEndpoints on %s", i->text);
+		while ((nr = hash_get_objects(i->ep, offset, 20, (void **)e))) {
+			int j;
+
+			for (j = 0; j < nr; j++) {
+				struct endpoint *ep = e[j];
+				struct forward *f;
+
+				n += snprintf(b + n, sizeof(buf) - n, "\n%3d. %s", offset + j + 1, inet_ntoa(e[j]->addr));
+
+				if (ep->lid)
+					n += snprintf(b + n, sizeof(buf) - n, " LID=%d", ep->lid);
+
+				if (ep->gid.global.interface_id)
+					n += snprintf(b + n, sizeof(buf) - n, " GID=%s",
+						inet_ntop(AF_INET6, &ep->gid, xbuf, INET6_ADDRSTRLEN));
+
+				for (f = ep->forwards; f; f = f->next) {
+					n += snprintf(b + n, sizeof(buf) - n, " Q%d->%sQ%d",
+					      f->source_qp, inet_ntoa(f->dest->addr), f->dest_qp);
+				}
+			}
+			offset += 20;
+		}
+	}
+
 	n += sprintf(n + b, "\n\n\n\n\n\n\n\n");
 	write(fd, b, n);
 
@@ -3991,6 +4031,8 @@ static void logging(void)
 {
 	char buf[100];
 	char buf2[150];
+	char counts[200];
+
 	unsigned n = 0;
 	unsigned interval = 5000;
 	const char *events;
@@ -4011,7 +4053,18 @@ static void logging(void)
 		events = buf2;
 	}
 
-	logg(LOG_NOTICE, "%d/%d MC Active. %s.\n", active_mc, nr_mc, events);
+	n = 0;
+	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES;i++) {
+		n+= sprintf(counts + n, "%s(MC %d/%d, UD %d/%d, RAW %d)",
+			i->text,
+			i->multicast->stats[packets_received],
+			i->multicast->stats[packets_sent],
+			i->ud ? i->ud->stats[packets_received] : 0,
+			i->ud ?	i->ud->stats[packets_sent] : 0,
+			i->raw ? i->raw->stats[packets_received]: 0);
+	}
+
+	logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
 	add_event(timestamp() + interval, logging);
 
 	list_endpoints(i2r + INFINIBAND);
