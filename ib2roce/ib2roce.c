@@ -2187,21 +2187,6 @@ static void list_endpoints(struct i2r_interface *i)
 }
 
 /*
- * Managing Endpoints and forwarding of packets
- */
-static struct endpoint *new_endpoint(struct rdma_channel *c)
-{
-	struct endpoint *ep;
-
-	ep = calloc(1, sizeof(struct endpoint));
-	if (!ep)
-		abort();
-
-	ep->c = c;
-	return ep;
-}
-
-/*
  * Establish a forwarding for UD unicast packets. Used on UD packet
  * reception to find the destination.
  *
@@ -2291,34 +2276,43 @@ static bool valid_addr(struct i2r_interface *i, struct in_addr addr) {
 	return ((addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask));
 }
 
-/* Create Endpoint just from the IP address */
-static struct endpoint *create_ep(struct i2r_interface *i, struct in_addr addr)
+/* Create endpoint from the ah_attr values */
+static struct endpoint *ah_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at)
 {
 	struct endpoint *ep;
+	struct in_addr addr;
+	struct ibv_ah *ah;
 
-	struct ibv_ah_attr at = {
-		.dlid = 0,
-		.sl = 0,
-		.src_path_bits = 0,
-		.static_rate = 0,
-		.is_global = 0,
-		.port_num = i->port,
-		.grh = {
-			/* .dgid = , */
-			.flow_label = 0,
-			.sgid_index = i->gid_index,
-			.hop_limit = 20,
-			.traffic_class = 0
+	if (at->dlid) {
+		ep = hash_find(i->ep, &at->dlid);
+		if (ep) {
+			if (ep->addr.s_addr == 0 && addr.s_addr) {
+				/* Ok we can add the IP address that was unknown earlier */
+				ep->addr = addr;
+				hash_add(i->ip_to_ep, &ep);
+			}
+			return ep;
 		}
-	};
+	}
 
-	ep = new_endpoint(i->ud);
-	ep->addr = addr;
+	memcpy(&addr, (void *)&at->grh.dgid + 12, sizeof(struct in_addr));
+
+	if (addr.s_addr) {
+		ep = hash_find(i->ip_to_ep, &addr.s_addr);
+		if (ep) {
+			if (at->dlid && ep->lid == 0 && at->dlid != 0xffff) {
+				/* Add earlier unknown LID */
+				ep->lid = at->dlid;
+				hash_add(i->ep, &ep);
+			}
+			return ep;
+		}
+	}
 
 	if (i == i2r + ROCE) {
 
-		at.is_global = 1;
-		map_ipv4_addr_to_ipv6(addr.s_addr, (struct in6_addr *)&at.grh.dgid);
+		at->is_global = 1;
+		map_ipv4_addr_to_ipv6(addr.s_addr, (struct in6_addr *)&at->grh.dgid);
 
 	} else {	/* INFINIBAND is a bit more involved and some calls here may take a long time*/
 
@@ -2336,36 +2330,48 @@ static struct endpoint *create_ep(struct i2r_interface *i, struct in_addr addr)
 
 
 		if (rdma_resolve_addr(id, i->multicast->bindaddr, (struct sockaddr *)&sin, 2000)) {
+
 			logg(LOG_ERR, "Failed to resolve address %s:%d:%s\n", inet_ntoa(sin.sin_addr), sin.sin_port, errname());
 			rdma_destroy_id(id);
 			return NULL;
-		} else
-		if (rdma_resolve_route(id, 2000)) {
+
+		} else if (rdma_resolve_route(id, 2000)) {
+
 			logg(LOG_ERR, "Failed to resolve route:%s\n", errname());
 			rdma_destroy_id(id);
 			return NULL;
+
 		}
 
-		at.dlid = be16toh(id->route.path_rec->dlid);
-		at.sl = id->route.path_rec->sl;
-		at.src_path_bits = be16toh(id->route.path_rec->slid) & ((1 << i->port_attr.lmc) - 1);
-		at.static_rate = id->route.path_rec->rate;
-		if (at.port_num != id->port_num)
+		at->is_global = 0;
+		at->dlid = be16toh(id->route.path_rec->dlid);
+		at->sl = id->route.path_rec->sl;
+		at->src_path_bits = be16toh(id->route.path_rec->slid) & ((1 << i->port_attr.lmc) - 1);
+		at->static_rate = id->route.path_rec->rate;
+		if (at->port_num != id->port_num)
 			abort();
 
-		logg(LOG_NOTICE, "IB Resolved IP address %s DLID=%d sl=%d\n", inet_ntoa(addr), at.dlid, at.sl);
+		logg(LOG_NOTICE, "IB Resolved IP address %s DLID=%d sl=%d\n", inet_ntoa(addr), at->dlid, at->sl);
 		rdma_destroy_id(id);
 
-		ep->lid = at.dlid;
 	}
 
-	ep->ah = ibv_create_ah(i->pd, &at);
-	if (!ep->ah) {
+	ah = ibv_create_ah(i->pd, at);
+	if (!ah) {
 		logg(LOG_ERR, "create_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
 				i->text, errname(), inet_ntoa(ep->addr));
-		free(ep);
 		return NULL;
 	}
+
+	ep = calloc(1, sizeof(struct endpoint));
+	if (!ep)
+		abort();
+
+	ep->c = i->ud;
+	ep->addr = addr;
+	ep->lid = at->dlid;
+	ep->ah = ah;
+
 	hash_add(i->ip_to_ep, ep);
 
 	/* Infiniband needs lookups by IP and LID */
@@ -2375,24 +2381,41 @@ static struct endpoint *create_ep(struct i2r_interface *i, struct in_addr addr)
 	return ep;
 }
 
-static struct endpoint *find_or_create_ep(struct i2r_interface *i, struct in_addr addr)
+
+
+/* Create Endpoint just from the IP address */
+static struct endpoint *ip_to_ep(struct i2r_interface *i, struct in_addr addr)
 {
-	struct endpoint *ep = hash_find(i->ip_to_ep, (void *)&addr);
+	struct ibv_ah_attr at = {
+		.dlid = 0,
+		.sl = 0,
+		.src_path_bits = 0,
+		.static_rate = 0,
+		.is_global = 0,
+		.port_num = i->port,
+		.grh = {
+			/* .dgid = , */
+			.flow_label = 0,
+			.sgid_index = i->gid_index,
+			.hop_limit = 20,
+			.traffic_class = 0
+		}
+	};
 
-	if (ep)
-		return ep;
-
-	return create_ep(i, addr);
+	memcpy((void *)&at.grh.dgid + 12, &addr, sizeof(struct in_addr));
+	return ah_to_ep(i, &at);
 }
 
-
-/* Create new Endpoint from struct buf */
-static struct endpoint *new_source_address(struct buf *buf)
+/*
+ * Get information from an endpoint or create one with the info available
+ */
+static struct endpoint *buf_to_ep(struct buf *buf)
 {
-	struct endpoint *ep;
+	struct i2r_interface *i = buf->c->i;
+	struct endpoint *ep = NULL;
 	struct rdma_channel *c = buf->c;
-	struct i2r_interface *i = c->i;
 	struct ibv_wc *w = buf->w;
+	struct in_addr addr = buf->addr;
 
 	struct ibv_ah_attr at = {
 		.dlid = w->slid,
@@ -2410,32 +2433,24 @@ static struct endpoint *new_source_address(struct buf *buf)
 		}
 	};
 
-	ep = new_endpoint(c);
 	if (buf->ip_valid) { /* ROCE. This may be called without buf->grh_valid from the raw path */
 
-		if (buf->addr.s_addr)
-			ep->addr = buf->addr;
-		else 
-			ep->addr.s_addr = buf->ip.saddr;
-
-		map_ipv4_addr_to_ipv6(ep->addr.s_addr, (struct in6_addr *)&at.grh.dgid);
+		if (!addr.s_addr)
+			addr.s_addr = buf->ip.saddr;
 
 	} else {	/* Infiniband */
 		if (buf->grh_valid) {
 			void *position = buf->cur;
 
-			memcpy(&ep->gid, buf->grh.sgid.raw, sizeof(union ibv_gid));
-			memcpy(&at.grh.dgid, &ep->gid, sizeof(union ibv_gid));
+			memcpy(&at.grh.dgid, buf->grh.sgid.raw, sizeof(union ibv_gid));
 
-			if (buf->addr.s_addr)
-				ep->addr = buf->addr;
-			else {
+			if (!addr.s_addr && !hash_find(i->ep, &at.dlid)) {
 
 				PULL(buf, buf->pgm);
 
 				if (w->src_qp != 1) {
 					/* Direct PGM packet inspection without verification if this is really PGM */
-					memcpy(&ep->addr, buf->pgm.pgm_gsi, sizeof(struct in_addr));
+					memcpy(&addr, buf->pgm.pgm_gsi, sizeof(struct in_addr));
 					logg(LOG_NOTICE, "Extracted IP address from PGM header: %s %s\n",
 						c->text, inet_ntoa(ep->addr));
 				} else
@@ -2443,39 +2458,21 @@ static struct endpoint *new_source_address(struct buf *buf)
 			}
 			buf->cur = position;
 		}
-		if (w->slid & 0xf000) {
+		if ((w->slid & 0xc000)) {
 
 			/* No source LID */
 			logg(LOG_ERR, "Invalid Source LID %x\n", w->slid);
 			free(ep);
 
 			return NULL;
-		} else
-			ep->lid = w->slid;
-			
+		}
 	}
 
 	buf->addr.s_addr = 0;
-	/*
-	 * Cannot use ibv_create_ah_from_wc since it is unable to
-	 * handle traffic that arrived as multicast. The setup
-	 * roughly follows what ibv_create_ah_from_wc() does in
-	 * libibverbs/verbs.c
-	 */
-	ep->ah = ibv_create_ah(i->pd, &at);
-	if (!ep->ah) {
-		logg(LOG_ERR, "Failed to create Endpoint on %s: %s. IP=%s, SL=%d grh=%d\n",
-				c->text, errname(), inet_ntoa(ep->addr), w->sl, buf->grh_valid);
-		free(ep);
-		return NULL;
-	}
-	hash_add(i->ep, ep);
 
-	/* Infiniband needs lookups by IP and LID */
-	if (!buf->ip_valid && ep->addr.s_addr)
-		hash_add(i->ip_to_ep, ep);
+	memcpy((void *)&at.grh.dgid + 12, &addr, sizeof(struct in_addr));
 
-	return ep;
+	return ah_to_ep(i, &at);
 }
 
 /*
@@ -2487,17 +2484,10 @@ static struct endpoint *new_source_address(struct buf *buf)
  */
 static void learn_source_address(struct buf *buf)
 {
-	struct rdma_channel *c = buf->c;
-	struct i2r_interface *i = c->i;
-	struct ibv_wc *w = buf->w;
-
 	if (!unicast)	/* If unicast is not enabled then dont bother to gather addresses */
 		return;
 
-	buf->source_ep = hash_find(i->ep, buf->ip_valid ?  (void *)&buf->ip.saddr : (void *)&w->slid);
-
-	if (!buf->source_ep)
-		buf->source_ep = new_source_address(buf);
+	buf_to_ep(buf);
 }
 
 /*
@@ -2790,43 +2780,6 @@ exit:
 	return tx->s_addr || rx->s_addr;
 }
 
-/*
- * Get information from an endpoint or create one with the info available
- */
-static struct endpoint *get_ep(struct buf *buf, struct in_addr addr, unsigned short lid)
-{
-	struct i2r_interface *i = buf->c->i;
-	struct endpoint *ep = NULL;
-
-	if (!buf->ip_valid) {
-		/* Infiniband. Attempt to find by LID */
-		ep = hash_find(i->ep, &lid);
-		if (ep) {
-
-			if (ep->addr.s_addr == 0 && addr.s_addr) {
-				/* Ok we can add the IP address that was unknown earlier */
-				ep->addr = addr;
-				hash_add(i->ip_to_ep, &ep);
-			}
-			return ep;
-		}
-	}
-
-	if (addr.s_addr) {
-		ep = hash_find(i->ip_to_ep, &addr.s_addr);
-		if (ep) {
-			if (lid && ep->lid == 0 && lid != 0xffff) {
-				/* Add earlier unknown LID */
-				ep->lid = lid;
-				hash_add(i->ep, &ep);
-			}
-			return ep;
-		}
-	}
-
-	return new_source_address(buf);
-}
-
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 {
 	struct i2r_interface *source_i = buf->c->i;
@@ -2866,7 +2819,7 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 			return "SIDR REQ: Destination not determined";
 	}
 
-	dest_ep = find_or_create_ep(dest_i, dest);
+	dest_ep = ip_to_ep(dest_i, dest);
 	if (!dest_ep)
 		return "Cannot forward MAD packet. AH is not known";
 
@@ -2905,7 +2858,6 @@ static void receive_raw(struct buf *buf)
 	if (i == i2r + INFINIBAND) {
 		__be16 lrh[4];
 		struct ib_header *ih = (void *)&lrh;
-		struct in_addr addr;
 
 		PULL(buf, lrh);
 
@@ -2920,8 +2872,8 @@ static void receive_raw(struct buf *buf)
 			goto discard;
 		}
 
-		addr.s_addr = 0;
-		ep = get_ep(buf, addr, w->slid);
+		buf->addr.s_addr = 0;
+		ep = buf_to_ep(buf);
 
 		snprintf(header, sizeof(header), "SLID=%x/%s DLID=%x SL=%d LVer=%d",
 			w->slid, inet_ntoa(ep->addr), dlid, w->sl, ib_get_lver(ih));
@@ -2947,13 +2899,8 @@ static void receive_raw(struct buf *buf)
 
 		}
 
-		if ((dlid & 0xf000) == 0xc000) {
+		if ((dlid & 0xc000) == 0xc000) {
 			reason = "Multicast";
-			goto discard;
-		}
-
-		if (dlid == 0xffff) {
-			reason = "Permissive Broadcast";
 			goto discard;
 		}
 
@@ -3005,14 +2952,14 @@ static void receive_raw(struct buf *buf)
 				goto discard;
 			}
 
+			ep = buf_to_ep(buf);
+
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
 				reason = "Only UDP packets";
 				goto discard;
 
 			}
-
-			ep = get_ep(buf, source, 0);
 
 			if (buf->e.ether_dhost[0] & 0x1) {
 				reason = "Multicast on RAW channel";
