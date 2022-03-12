@@ -2557,6 +2557,7 @@ static void add_forward(struct endpoint *source, unsigned source_qp, struct endp
 	f->dest = dest;
 	f->dest_qp = dest_qp;
 	f->source_qp = source_qp;
+
 	f->next = source->forwards;
 	source->forwards = f;
 }
@@ -2626,9 +2627,104 @@ static inline void map_ipv4_addr_to_ipv6(__be32 ipv4, struct in6_addr *ipv6)
 	ipv6->s6_addr32[3] = ipv4;
 }
 
+/* Create Endpoint just from the IP address */
+static struct endpoint *create_ep(struct i2r_interface *i, struct in_addr addr)
+{
+	struct endpoint *ep;
+
+	struct ibv_ah_attr at = {
+		.dlid = 0,
+		.sl = 0,
+		.src_path_bits = 0,
+		.static_rate = 0,
+		.is_global = 0,
+		.port_num = i->port,
+		.grh = {
+			/* .dgid = , */
+			.flow_label = 0,
+			.sgid_index = i->gid_index,
+			.hop_limit = 20,
+			.traffic_class = 0
+		}
+	};
+
+	ep = new_endpoint(i->ud);
+	ep->addr = addr;
+
+	if (i == i2r + ROCE) {
+
+		at.is_global = 1;
+		map_ipv4_addr_to_ipv6(addr.s_addr, (struct in6_addr *)&at.grh.dgid);
+
+	} else {	/* INFINIBAND is a bit more involved and some calls here may take a long time*/
+
+		struct rdma_cm_id *id;
+		struct sockaddr_in sin = {
+			.sin_family = AF_INET,
+			.sin_addr = ep->addr,
+			.sin_port = 0,
+		};
+
+		if (rdma_create_id(NULL, &id, NULL, RDMA_PS_UDP)) {
+			logg(LOG_ERR, "Failed to create rdma_cm_id:%s\n", errname());
+			return NULL;
+		}
+
+
+		if (rdma_resolve_addr(id, i->multicast->bindaddr, (struct sockaddr *)&sin, 2000)) {
+			logg(LOG_ERR, "Failed to resolve address %s:%d:%s\n", inet_ntoa(sin.sin_addr), sin.sin_port, errname());
+			rdma_destroy_id(id);
+			return NULL;
+		} else
+		if (rdma_resolve_route(id, 2000)) {
+			logg(LOG_ERR, "Failed to resolve route:%s\n", errname());
+			rdma_destroy_id(id);
+			return NULL;
+		}
+
+		at.dlid = be16toh(id->route.path_rec->dlid);
+		at.sl = id->route.path_rec->sl;
+		at.src_path_bits = be16toh(id->route.path_rec->slid) & ((1 << i->port_attr.lmc) - 1);
+		at.static_rate = id->route.path_rec->rate;
+		if (at.port_num != id->port_num)
+			abort();
+
+		logg(LOG_NOTICE, "IB Resolved IP address %s DLID=%d sl=%d\n", inet_ntoa(addr), at.dlid, at.sl);
+		rdma_destroy_id(id);
+
+		ep->lid = at.dlid;
+	}
+
+	ep->ah = ibv_create_ah(i->pd, &at);
+	if (!ep->ah) {
+		logg(LOG_ERR, "create_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
+				i->text, errname(), inet_ntoa(ep->addr));
+		free(ep);
+		return NULL;
+	}
+	hash_add(i->ip_to_ep, ep);
+
+	/* Infiniband needs lookups by IP and LID */
+	if (i2r + INFINIBAND == i)
+		hash_add(i->ep, ep);
+
+	return ep;
+}
+
+static struct endpoint *find_or_create_ep(struct i2r_interface *i, struct in_addr addr)
+{
+	struct endpoint *ep = hash_find(i->ip_to_ep, (void *)&addr);
+
+	if (ep)
+		return ep;
+
+	return create_ep(i, addr);
+}
+
+
 /* Create new Endpoint from struct buf */
 static struct endpoint *new_source_address(struct buf *buf)
-{	
+{
 	struct endpoint *ep;
 	struct rdma_channel *c = buf->c;
 	struct i2r_interface *i = c->i;
@@ -2972,15 +3068,15 @@ static void print_sidr(void)
 
 	logg(LOG_NOTICE, "SIDR_REQ: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x SID=%lx RID=%x pkey=%x %s\n",
 		header, buf->bth.apsn, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-	       	umad_common_mad_status_str(buf->umad.status),
-	       	umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
+		umad_common_mad_status_str(buf->umad.status),
+		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
 		be64toh(sr.service_id), ntohl(sr.request_id), ntohs(sr.pkey),
 		payload);
 }
 
 #endif
 
-static bool scan_private(char *s, struct in_addr *from, struct in_addr *to)
+static bool scan_private(char *s, struct in_addr *tx, struct in_addr *rx)
 {
 	struct {
 		struct in_addr x;
@@ -2990,14 +3086,16 @@ static bool scan_private(char *s, struct in_addr *from, struct in_addr *to)
 	int r;
 	char *p = s;
 	char type[2];
-	
+
+	tx->s_addr = 0;
+	rx->s_addr = 0;
 	while (*p) {
 		/* Find the beginning of the rmmXXX */
 		while (*p != 'r')
 			p++;
 
 		if (!*p)
-			return false;
+			goto exit;
 
 		r = sscanf(p, "rmm%cx at %hhu.%hhu.%hhu.%hhu|%hu", type, addr.ip, addr.ip + 1, addr.ip + 2, addr.ip + 3, &port);
 
@@ -3007,18 +3105,21 @@ static bool scan_private(char *s, struct in_addr *from, struct in_addr *to)
 			return false;
 
 		if (*type == 'R')
-			*to = addr.x;
+			*rx = addr.x;
 		else if (*type == 'T')
-			*from = addr.x;
+			*tx = addr.x;
 		else
-			return false;
+			goto exit;
 
 		p += 10;
 	}
-	return true;
+exit:
+	return tx->s_addr || rx->s_addr;
 }
 
-
+/*
+ * Get information from an endpoint or create one with the info available
+ */
 static struct endpoint *get_ep(struct buf *buf, struct in_addr addr, unsigned short lid)
 {
 	struct i2r_interface *i = buf->c->i;
@@ -3050,72 +3151,64 @@ static struct endpoint *get_ep(struct buf *buf, struct in_addr addr, unsigned sh
 		}
 	}
 
- 	return new_source_address(buf);
+	return new_source_address(buf);
 }
- 
+
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 {
 	struct i2r_interface *source_i = buf->c->i;
-	
+
 	enum interfaces in = source_i - i2r;
 	struct i2r_interface *dest_i = i2r + (in ^ 1);
 	struct endpoint *source_ep = buf->source_ep;
+	struct in_addr dest;
 	struct endpoint *dest_ep = NULL;
 	struct ibv_wc *w = buf->w;
 
 	buf->c = dest_i->ud;
 
 	/* Establish Destination */
-	if (buf->ip_valid) {
-		struct in_addr dest;
+	if (buf->ip_valid) {	/* ROCE */
 
 		dest.s_addr = buf->ip.daddr;
-		dest_ep = get_ep(buf, dest, 0);
-	
-	} else {
+
+	} else { /* Infiniband */
 		struct in_addr source;
-		struct in_addr dest;
+		struct sidr_req sr;
 
-		if (dlid) {
-			dest.s_addr = 0;
-			dest_ep = get_ep(buf, dest, dlid);
+		PULL(buf, sr);
+
+		dest.s_addr = 0;
+		if (!scan_private(sr.private + 36, &source, &dest))
+			return "SIDR REQ: Dest and Source IP not determined";
+
+		if (source_ep->addr.s_addr == 0 && source.s_addr) {
+			source_ep->addr = source;
+			hash_add(source_i->ip_to_ep, source_ep);
+			logg(LOG_NOTICE, "SIDR REQ: Private data supplied IP address %s to Endpoint at LID %d\n",
+				inet_ntoa(source), w->slid);
 		}
 
-		if (!dest_ep) {
-			struct sidr_req sr;
-
-			PULL(buf, sr);
-
-			if (!scan_private(sr.private + 36, &source, &dest))
-				return "Dest and Source IP not determined\n";
-
-			if (source_ep->addr.s_addr == 0) {
-				source_ep->addr = source;
-				hash_add(source_i->ip_to_ep, source_ep);
-				logg(LOG_NOTICE, "Private data Supplied IP address %s to Endpoint at LID %d\n",
-					inet_ntoa(source), w->slid);
-			}
-
-			dest_ep = get_ep(buf, dest, dlid);
-		}
+		if (!dest.s_addr)
+			return "SIDR REQ: Destination not determined";
 	}
- 
-	if (!dest_ep)
-	       	return "Cannot forward MAD packet. AH is not known";
 
-	logg(LOG_NOTICE, "SIDR REQ: Dest %s QP=%d\n", inet_ntoa(dest_ep->addr), buf->w->src_qp);
+	dest_ep = find_or_create_ep(dest_i, dest);
+	if (!dest_ep)
+		return "Cannot forward MAD packet. AH is not known";
+
+	logg(LOG_NOTICE, "SIDR REQ: Dest %s on %s QP=%d\n", inet_ntoa(dest_ep->addr), dest_i->text, w->src_qp);
 
 	if (bridging) {
 
-		buf->cur = mad_pos;
-		send_ud(buf->c, buf, dest_ep->ah, 1);
-
-		if (remove_forward(dest_ep, 1))
-			logg(LOG_WARNING, "Concurrent SIDR REQs\n");
+		remove_forward(dest_ep, 1);
 
 		/* Is the source qp in wc really valid for raw sockets ? */
-		add_forward(dest_ep, 1, source_ep, buf->w->src_qp);
+		add_forward(dest_ep, 1, source_ep, w->src_qp);
 
+		buf->cur = mad_pos;
+		send_ud(dest_i->ud, buf, dest_ep->ah, 1);
+		logg(LOG_NOTICE, "SIDR REQ forwarded to %s:1. Reply redirection 1->%d\n", inet_ntoa(dest_ep->addr), w->src_qp);
 	} else
 		free_buffer(buf);
 
@@ -3260,6 +3353,8 @@ static void receive_raw(struct buf *buf)
 			goto discard;
 		}
 	}
+
+	buf->source_ep = ep;
 
 	PULL(buf, buf->bth);
 	buf->bth_valid = true;
