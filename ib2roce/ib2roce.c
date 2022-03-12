@@ -2780,6 +2780,72 @@ exit:
 	return tx->s_addr || rx->s_addr;
 }
 
+/*
+ * Simple listener to quickly gather IP/ GID information off the wire
+ */
+static const char *process_arp(struct i2r_interface *i, struct buf *buf, unsigned short lids[2])
+{
+	uint8_t mac[20];
+	unsigned j;
+	struct arphdr arp;
+
+	PULL(buf, arp);
+	
+	if (ntohs(arp.ar_op) != ARPOP_REPLY)
+       		return "-Only ARP replies supported";
+
+	if (arp.ar_pln != sizeof(struct in_addr))
+		return "ARP protocol length != 4";
+
+	if (ntohs(arp.ar_hrd) != ARPHRD_ETHER &&
+	    ntohs(arp.ar_hrd) != ARPHRD_INFINIBAND)
+		return "ARP implementation supports only Ethernet and Infiniband";
+
+	for (j = 0; j < 2; j++, buf->cur += arp.ar_hln + sizeof(struct in_addr)) {
+		struct endpoint *ep;
+
+		memcpy(mac, buf->cur, arp.ar_hln);
+		memcpy(&buf->addr, buf->cur + arp.ar_hln, sizeof(struct in_addr));
+
+		if (!valid_addr(i, buf->addr)) {
+			logg(LOG_NOTICE, "ARP REPLY: Invalid %sIP=%s MAC=%s\n",
+				j ? "Dest" : " Source",
+			       inet_ntoa(buf->addr),
+				hexbytes(mac, arp.ar_hln,':'));
+			continue;
+		}
+
+		ep = hash_find(i->ep, i2r + ROCE == i ? (void *)&buf->addr : (void *)(lids + j));
+		if (ep) {
+			if (!ep->addr.s_addr) {
+
+				ep->addr = buf->addr;
+				hash_add(i->ip_to_ep, ep);
+
+			} else if(ep->addr.s_addr != buf->addr.s_addr)
+
+				return "IP address for MAC changed!";
+
+			continue;
+		}
+
+		buf->w->slid = lids[j];
+		ep = buf_to_ep(buf);
+		if (!ep)
+			return "Cannot create Endpoint";
+
+		memcpy(&ep->gid, mac, arp.ar_hln);
+		if (lids[j]) {
+			if (ep->lid) {
+				hash_del(i->ep, ep);
+				ep->lid = lids[j];
+				hash_add(i->ep, ep);
+			}
+		}
+	}
+	return NULL;
+}
+
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 {
 	struct i2r_interface *source_i = buf->c->i;
@@ -2847,6 +2913,7 @@ static void receive_raw(struct buf *buf)
 	struct i2r_interface *i = c->i;
 	struct ibv_wc *w = buf->w;
 	struct endpoint *ep;
+	unsigned short lids[2] = { 0, 0 };
 	unsigned short dlid = 0;
 	void *mad_pos;
 	const char *reason;
@@ -2863,8 +2930,8 @@ static void receive_raw(struct buf *buf)
 
 		len = ntohs(lrh[2]) *4;
 
-		dlid = ib_get_dlid(ih);
-		w->slid = ib_get_slid(ih);
+		lids[0] = ib_get_dlid(ih);
+		lids[1] = w->slid = ib_get_slid(ih);
 		w->sl = ib_get_sl(ih);
 
 		if ((w->slid & 0xc000)) {
@@ -2925,6 +2992,14 @@ static void receive_raw(struct buf *buf)
 		case ETHERTYPE_ROCE:
 
 			reason = "Roce V1 not supported";
+			goto discard;
+
+		case ETHERTYPE_ARP:
+
+			reason = process_arp(i, buf, lids);
+
+			if (!reason)
+				goto packet_done;
 			goto discard;
 
 		case ETHERTYPE_IP:
@@ -3012,6 +3087,25 @@ static void receive_raw(struct buf *buf)
 
 	buf->cur += __bth_pad(&bth);
 
+	if (bth.qpn > 2) {
+		struct {
+			unsigned short type;
+			unsigned short reserved;
+		} ec_header;
+
+		PULL(buf, ec_header);
+
+		if (ec_header.type == ETHERTYPE_ARP)
+			process_arp(i, buf, lids);
+		else
+			reason = "Only ARPs when QP > 1";
+
+		if (reason)
+			goto discard;
+
+		goto packet_done;
+	}
+
 	mad_pos = buf->cur;
 
 	/* Start MAD payload */
@@ -3023,7 +3117,7 @@ static void receive_raw(struct buf *buf)
 	}
 
 	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
-		reason = sidr_req(buf, mad_pos, dlid);
+		reason = sidr_req(buf, mad_pos, lids[1]);
 		if (reason)
 			goto discard;
 		return;
@@ -3039,6 +3133,7 @@ discard:
 			_hexbytes(buf->raw, buf->w->byte_len));
 
 	st(c, packets_invalid);
+packet_done:
 	free_buffer(buf);
 }
 
@@ -3165,7 +3260,6 @@ discard:
 	logg(LOG_NOTICE, "Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
 
 	st(c, packets_invalid);
-
 	free_buffer(buf);
 }
 
