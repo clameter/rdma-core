@@ -214,7 +214,7 @@ struct forward {
 	unsigned short source_qp, dest_qp;
 };
 
-/* 
+/*
  * Address information for an endpoint.
  * ah points to the address stucture needed to send data to
  * this endpoint. The rest are basically keys to lookup
@@ -1006,8 +1006,11 @@ static int post_receive(struct rdma_channel *c, int limit)
 	struct ibv_sge sge;
 	int ret = 0;
 
-	if (!nextbuffer || c->active_receive_buffers >= limit)
-		return -EAGAIN;
+	if (!nextbuffer)
+		return -ENOMEM;
+
+	if (c->active_receive_buffers >= limit)
+		return 0;
 
 	recv_wr.next = NULL;
 	recv_wr.sg_list = &sge;
@@ -1019,7 +1022,6 @@ static int post_receive(struct rdma_channel *c, int limit)
 	while (c->active_receive_buffers < limit) {
 
 		struct buf *buf = alloc_buffer(c);
-
 
 		if (!buf) {
 			logg(LOG_NOTICE, "No free buffers left\n");
@@ -1033,7 +1035,7 @@ static int post_receive(struct rdma_channel *c, int limit)
 		ret = ibv_post_recv(c->qp, &recv_wr, &recv_failure);
 		if (ret) {
 			free_buffer(buf);
-			logg(LOG_WARNING, "ibv_post_recv failed: %d\n", ret);
+			logg(LOG_WARNING, "ibv_post_recv failed: %s\n", errname());
 			break;
                 }
 		c->active_receive_buffers++;
@@ -2304,7 +2306,7 @@ err:
 	if (log_packets > 1)
 		logg(LOG_NOTICE, "Neigh Event interface=%s type %u Len=%u NL flags=%x ND flags=%x state=%x IP=%s MAC=%s ifindex=%d\n",
 				i ? i->if_name: "N/A",
-			       	n->nlh.nlmsg_type,  n->nlh.nlmsg_len, n->nlh.nlmsg_flags,
+				n->nlh.nlmsg_type,  n->nlh.nlmsg_len, n->nlh.nlmsg_flags,
 				n->nd.ndm_flags, n->nd.ndm_state,
 				inet_ntoa(addr), hexbytes(mac, maclen),
 				n->nd.ndm_ifindex);
@@ -2649,14 +2651,13 @@ static struct endpoint *new_source_address(struct buf *buf)
 	};
 
 	ep = new_endpoint(c);
-	if (buf->grh_valid) {
-		if (buf->ip_valid) { /* ROCE */
+	if (buf->ip_valid) { /* ROCE. This may be called without buf->grh_valid from the raw path */
 
-	       		ep->addr.s_addr = buf->ip.saddr;
+		ep->addr.s_addr = buf->ip.saddr;
+		map_ipv4_addr_to_ipv6(buf->ip.saddr, (struct in6_addr *)&at.grh.dgid);
 
-			map_ipv4_addr_to_ipv6(buf->ip.saddr, (struct in6_addr *)&at.grh.dgid);
-
-		} else {	/* Infiniband */
+	} else {	/* Infiniband */
+		if (buf->grh_valid) {
 			void *position = buf->cur;
 
 			memcpy(&ep->gid, buf->grh.sgid.raw, sizeof(union ibv_gid));
@@ -2674,9 +2675,17 @@ static struct endpoint *new_source_address(struct buf *buf)
 
 			buf->cur = position;
 		}
-	}
+		if (w->slid & 0xf000) {
 
-	ep->lid = w->slid;
+			/* No source LID */
+			logg(LOG_ERR, "Invalid Source LID %x\n", w->slid);
+			free(ep);
+
+			return NULL;
+		} else
+			ep->lid = w->slid;
+			
+	}
 
 	/*
 	 * Cannot use ibv_create_ah_from_wc since it is unable to
@@ -2937,7 +2946,7 @@ static void receive_main(struct buf *buf)
  *
  * On the IB side we need to ID the sender by LID also but generally prefer GIDs
  *
- * Need the SM to do routing paths and GID->LID etc conversions. 
+ * Need the SM to do routing paths and GID->LID etc conversions.
  */
 
 
@@ -3032,7 +3041,7 @@ static struct endpoint *get_ep(struct buf *buf, struct in_addr addr, unsigned sh
 	if (addr.s_addr) {
 		ep = hash_find(i->ip_to_ep, &addr.s_addr);
 		if (ep) {
-			if (lid && ep->lid == 0) {
+			if (lid && ep->lid == 0 && lid != 0xffff) {
 				/* Add earlier unknown LID */
 				ep->lid = lid;
 				hash_add(i->ep, &ep);
@@ -3138,12 +3147,17 @@ static void receive_raw(struct buf *buf)
 		w->slid = ib_get_slid(ih);
 		w->sl = ib_get_sl(ih);
 
+		if ((w->slid & 0xc000)) {
+			reason = "Source LID is Multicast/Broadcast";
+			goto discard;
+		}
+
 		addr.s_addr = 0;
 		ep = get_ep(buf, addr, w->slid);
 
-		snprintf(header, sizeof(header), "SLID=%x DLID=%x SL=%d LVer=%d",
-			w->slid, dlid, w->sl, ib_get_lver(ih));
-	
+		snprintf(header, sizeof(header), "SLID=%x/%s DLID=%x SL=%d LVer=%d",
+			w->slid, inet_ntoa(ep->addr), dlid, w->sl, ib_get_lver(ih));
+
 		if (ib_get_lnh(ih) < 2) {
 			reason = "IP v4/v6 packet";
 			goto discard;
@@ -3156,7 +3170,7 @@ static void receive_raw(struct buf *buf)
 			PULL(buf, buf->grh);
 			buf->grh_valid = true;
 
-			snprintf(header + strlen(header), 100-strlen(header), " SGID=%s DGID=%s", 
+			snprintf(header + strlen(header), 100-strlen(header), " SGID=%s DGID=%s",
 				inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
 				inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN));
 
@@ -3211,6 +3225,10 @@ static void receive_raw(struct buf *buf)
 			strcpy(dest_str, inet_ntoa(dest));
 			snprintf(header, sizeof(header), "%s -> %s", source_str, dest_str);
 
+			if (buf->ip.saddr == 0) {
+				reason = "IP packet from 0.0.0.0";
+				goto discard;
+			}
 
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
@@ -3246,15 +3264,15 @@ static void receive_raw(struct buf *buf)
 	PULL(buf, buf->bth);
 	buf->bth_valid = true;
 	buf->end -= ICRC_SIZE;
-	
+
 	if (ntohl(buf->bth.qpn) != 1) {
 		reason = "Raw channels only handle QP1 traffic";
 		goto discard;
 	}
 
 	if (buf->bth.opcode != IB_OPCODE_UD_SEND_ONLY &&
- 		buf->bth.opcode !=  IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
- 			reason = "Only UD Sends are supported";
+		buf->bth.opcode !=  IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
+			reason = "Only UD Sends are supported";
                         goto discard2;
         }
 
@@ -3263,9 +3281,9 @@ static void receive_raw(struct buf *buf)
 
 	if (buf->bth.opcode == IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
 		PULL(buf, buf->immdt);
- 		buf->imm_valid = true;
+		buf->imm_valid = true;
 		buf->imm = buf->immdt.imm;
- 	}
+	}
 
 	buf->cur += __bth_pad(&buf->bth);
 
@@ -3276,17 +3294,17 @@ static void receive_raw(struct buf *buf)
 
 	if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
 		reason = "Only CM Class MADs are supported";
-		goto discard2;
+		goto discard;
 	}
 
-	if (buf->umad.attr_id == UMAD_CM_ATTR_SIDR_REQ) {
+	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
 		reason = sidr_req(buf, mad_pos, dlid);
 		if (reason)
 			goto discard2;
 		return;
 	}
-	
-	reason = "Only SIDR_REQ\n";
+
+	reason = "Only SIDR_REQ";
 	goto discard2;
 
 discard:
@@ -3359,8 +3377,8 @@ static void sidr_rep(struct buf *buf, struct endpoint *source, struct endpoint *
 
 	logg(LOG_NOTICE, "SIDR_REP: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x SID=%x RID=%x Q_KEY=%x QPN=%x Status=%x %s\n",
 		buf->c->text, buf->bth.apsn, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-	       	umad_common_mad_status_str(buf->umad.status),
-	       	umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
+		umad_common_mad_status_str(buf->umad.status),
+		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
 		ntohl(sr.service_id), ntohl(sr.request_id), ntohs(sr.q_key), ntohl(sr.qpn), sr.status,
 		payload);
 
@@ -3395,6 +3413,8 @@ static void receive_ud(struct buf *buf)
 	if (w->src_qp == 1) {
 		/* QP1 traffic SIDR REP as a response to SIDR REQ */
 		void *mad_pos = buf->cur;
+
+		syslog(LOG_NOTICE, "Traffic on QP1 from %s\n", inet_ntoa(e->addr));
 
 		PULL(buf, buf->umad);
 
@@ -3501,7 +3521,7 @@ static void handle_comp_event(void *private)
 				if (i == i2r + ROCE) {
 					/*
 					 * In the ROCE ipv4 case the IP header is
-					 * at the end of the GRH instead of a 
+					 * at the end of the GRH instead of a
 					 * SGID and DGID
 					 */
 					memcpy(&buf->ip, (void *)buf->cur - 20, 20);
@@ -3861,7 +3881,7 @@ static void check_joins(void)
 		 * are able to subscribe to Multicast groups
 		 */
 		for(i = i2r; i < i2r + NR_INTERFACES; i++)
-	       	   if (i->context)	{
+		   if (i->context)	{
 			struct rdma_channel *c = i->multicast;
 
 			if (rdma_listen(c->id, 50))
@@ -3970,7 +3990,7 @@ static void arm_channels(void)
 	struct i2r_interface *i;
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-       	   if (i->context) {
+	   if (i->context) {
 		/* Receive Buffers */
 		post_receive_buffers(i);
 		/* And request notifications if something happens */
@@ -3984,7 +4004,7 @@ static void arm_channels(void)
 
 			setup_flow(i->raw);
 		}
-	
+
 		if (i->ud) {
 			start_channel(i->ud);
 			ibv_req_notify_cq(i->ud->cq, 0);
@@ -4048,7 +4068,7 @@ loop:
 	}
 
 	if (events == 0)
-       		goto loop;
+		goto loop;
 
 	for(t = 0; t < poll_items; t++)
 		if (pfd[t].revents & POLLIN)
@@ -4187,7 +4207,7 @@ struct option opts[] = {
 	{ "config", required_argument, NULL, 'c' },
 	{ NULL, 0, NULL, 0 }
 };
-	
+
 char *beacon_arg = NULL;
 
 static void exec_opt(int op, char *optarg);
@@ -4329,7 +4349,7 @@ static void exec_opt(int op, char *optarg)
 		case 't':
 			fifo_test();
 			hash_test();
-			testing = true;	
+			testing = true;
 			break;
 
 		default:
@@ -4363,7 +4383,7 @@ int main(int argc, char **argv)
 
 	while ((op = getopt_long(argc, argv, "vtfunb::xl::i:r:m:o:d:p:c:",
 					opts, NULL)) != -1)
-       		exec_opt(op, optarg);
+		exec_opt(op, optarg);
 
 	init_buf();
 
