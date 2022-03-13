@@ -913,19 +913,25 @@ static char *__hexbytes(char *b, uint8_t *q, unsigned len, char separator)
 	return b;
 }
 
-static char *_hexbytes(uint8_t *q, unsigned len)
+static char *hexbytes(uint8_t *q, unsigned len, char separator)
 {
 	static char b[150];
 
-	return __hexbytes(b, q, len, ' ');
+	if (3* len >= sizeof(b)) {
+		logg(LOG_NOTICE, "hexbytes: string length constrained\n");
+		len = sizeof(b) / 3;
+	}
+	return __hexbytes(b, q, len, separator);
+}
+
+static char *_hexbytes(uint8_t *q, unsigned len)
+{
+	return hexbytes(q, len, ' ');
 }
 
 static char *payload_dump(uint8_t *p)
 {
-	static char buf[150];
-
-	__hexbytes(buf, p, 48, ' ');
-	return buf;
+	return _hexbytes(p, 48);
 }
 
 #if 0
@@ -3056,7 +3062,7 @@ static void receive_raw(struct buf *buf)
 	void *mad_pos;
 	const char *reason;
 	int len = 0;
-	char header[100];
+	char header[200];
 
 	if (i == i2r + INFINIBAND) {
 		__be16 lrh[4];
