@@ -354,6 +354,8 @@ success:
 		i2r[i].mtu = 4096;
 	else if (a->active_mtu == IBV_MTU_2048)
 		i2r[i].mtu = 2048;
+	else if (a->active_mtu == IBV_MTU_1024) 	/* Needed for rxe support */
+		i2r[i].mtu = 1024;
 	else
 		/* Other MTUs are not supported */
 		return 0;
@@ -1300,6 +1302,12 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multi
 		init_qp_attr_ex.create_flags = IBV_QP_CREATE_BLOCK_SELF_MCAST_LB;
 
 	ret = rdma_create_qp_ex(c->id, &init_qp_attr_ex);
+	if (ret && errno == ENOTSUP) {
+		logg(LOG_WARNING, "QP create: MC loopback blocking failed. Retrying without\n");
+		init_qp_attr_ex.create_flags = 0;
+		ret = rdma_create_qp_ex(c->id, &init_qp_attr_ex);
+	}
+
 	if (ret) {
 		logg(LOG_CRIT, "rdma_create_qp_ex failed for %s. Error %s. #CQ=%d\n",
 				c->text, errname(), nr_cq);
