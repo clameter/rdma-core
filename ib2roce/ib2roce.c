@@ -85,8 +85,6 @@
 
 #define BEACON_SIGNATURE 0xD3ADB33F
 
-// #define NETLINK_SUPPORT
-// #define LEARN
 // #define HAVE_MSTFLINT
 // #define DEBUG
 
@@ -306,10 +304,6 @@ struct rdma_unicast {
 	struct fifo pending;		/* Buffers waiting on resolution to complete */
 	struct ah_info ai;		/* If ai.ah != NULL then the address info is valid */
 	struct hash_item hash[nr_hashes];
-#ifdef NETLINK_SUPPORT
-	short state;		/* Last netlink state */
-	short flags;		/* Last netlink flags */
-#endif
 };
 
 static inline void st(struct rdma_channel *c, enum stats s)
@@ -2175,234 +2169,6 @@ static long lookup_ip_from_gid(struct rdma_channel *c, union ibv_gid *v)
 	return 0;
 }
 
-#ifdef NETLINK_SUPPORT
-/*
- * Netlink interface
- */
-
-enum netlink_channel { nl_monitor, nl_command, nr_netlink_channels };
-
-static struct sockaddr_nl nladdr[nr_netlink_channels];
-static int sock_nl[nr_netlink_channels];
-
-struct neigh {
-	struct nlmsghdr nlh;
-	struct ndmsg nd;
-	char	attrbuf[512];
-};
-
-static void handle_neigh_event(struct neigh *n)
-{
-	struct i2r_interface *i;
-	int len = n->nlh.nlmsg_len - NLMSG_LENGTH(sizeof(struct ndmsg));
-	unsigned maclen = 0;
-	char mac[20];
-	struct in_addr addr;
-	struct rtattr *rta;
-	bool have_dst = false;
-	bool have_lladdr = false;
-	struct rdma_ah *ra;
-	const char *action;
-	enum hashes mac_hash;
-	unsigned offset;
-
-
-	for(i = i2r;  i < i2r + NR_INTERFACES; i++)
-		if (i->ifindex == n->nd.ndm_ifindex)
-			break;
-
-	if (i == i2r + INFINIBAND) {
-		mac_hash = hash_gid;
-		offset = 6;
-	} else {
-		mac_hash = hash_mac;
-		offset = 0;
-	}
-
-	for(rta = (struct rtattr *)n->attrbuf; RTA_OK(rta, len); rta = RTA_NEXT(rta, len)) {
-		switch (rta->rta_type) {
-
-			case NDA_DST:
-				memcpy(&addr, RTA_DATA(rta), RTA_PAYLOAD(rta));
-				have_dst = true;
-				break;
-
-			case NDA_LLADDR:
-				have_lladdr = true;
-				maclen = RTA_PAYLOAD(rta);
-				memcpy(mac, RTA_DATA(rta), maclen);
-				break;
-
-			case NDA_CACHEINFO:
-			case NDA_PROBES:
-				break;
-
-			default:
-				logg(LOG_NOTICE, "Netlink; unrecognized RTA type=%d\n", rta->rta_type);
-				break;
-
-		}
-	};
-
-	if (i >= i2r + NR_INTERFACES) {
-		i = NULL;
-		goto err;
-	}
-
-	if (!have_dst) {
-		logg(LOG_ERR, "netlink message without DST\n");
-		goto err;
-	}
-
-	if (!have_lladdr) {
-		logg(LOG_ERR, "netlink message without LLADDR\n");
-		goto err;
-	}
-
-	if (i->maclen != maclen) {
-		logg(LOG_ERR, "netlink message mac length does not match. Expected %d got %d\n",
-				i->maclen, maclen);
-		goto err;
-	}
-
-	ra = find_in_hash(hash_ip, &addr);
-	if (ra) {
-		/* Already existing entry retrieved by IP address  */
-		action = "Update";
-
-	} else {
-		ra = find_in_hash(mac_hash, mac + offset);
-		if (ra) {
-			/* Update existing entry retrieved by MAC address */
-			action = "Update";
-
-		} else {
-			/* We truly have a new entry */
-			ra = new_rdma_ah(i);
-
-			action = "New";
-		}
-	}
-
-	ra->flags = n->nd.ndm_flags;
-	ra->state = n->nd.ndm_state;
-
-	if (!ra->hash[mac_hash].member)
-		add_to_hash(ra, mac_hash, mac + offset);
-
-	if (!ra->hash[hash_ip].member)
-		add_to_hash(ra, hash_ip, &addr);
-
-	logg(LOG_NOTICE, "%s ARP entry via netlink for %s: IP=%s MAC=%s Flags=%x State=%x\n",
-		action,
-		i->if_name,
-		inet_ntoa(addr),
-		hexbytes(mac, maclen),
-		ra->flags, ra->state);
-
-	return;
-
-err:
-	if (log_packets > 1)
-		logg(LOG_NOTICE, "Neigh Event interface=%s type %u Len=%u NL flags=%x ND flags=%x state=%x IP=%s MAC=%s ifindex=%d\n",
-				i ? i->if_name: "N/A",
-				n->nlh.nlmsg_type,  n->nlh.nlmsg_len, n->nlh.nlmsg_flags,
-				n->nd.ndm_flags, n->nd.ndm_state,
-				inet_ntoa(addr), hexbytes(mac, maclen),
-				n->nd.ndm_ifindex);
-
-}
-
-static void handle_netlink_event(enum netlink_channel c)
-{
-	char buf[8192];
-	struct nlmsghdr *h = (void *)buf;
-	struct sockaddr_nl addr;
-	struct iovec iov = { buf, sizeof(buf) };
-	struct msghdr msg = { (void *)&addr, sizeof(struct sockaddr_nl), &iov, 1 };
-	int len;
-
-	len = recvmsg(sock_nl[c], &msg, 0);
-	if (len < 0) {
-		logg(LOG_CRIT, "Netlink recvmsg error. Errno %s\n", errname());
-		return;
-	}
-
-	for( ; NLMSG_OK(h, len); h = NLMSG_NEXT(h, len)) {
-		switch(h->nlmsg_type) {
-			case RTM_NEWNEIGH:
-			case RTM_GETNEIGH:
-			case RTM_DELNEIGH:
-				if (!(h->nlmsg_flags & NLM_F_REQUEST)) {
-					handle_neigh_event((struct neigh *)h);
-				}
-				break;
-				/* Fall through */
-
-			default:
-				if (log_packets > 1)
-					logg(LOG_NOTICE, "Unhandled Netlink Message type %u Len=%u flag=%x seq=%x PID=%d\n",
-						h->nlmsg_type,  h->nlmsg_len, h->nlmsg_flags, h->nlmsg_seq, h->nlmsg_pid);
-			    break;
-		}
-	}
-
-}
-
-static void send_netlink_message(enum netlink_channel c, struct nlmsghdr *nlh)
-{
-	struct iovec iov = { (void *)nlh, nlh->nlmsg_len};
-	struct msghdr msg = { (void *)&nladdr, sizeof(struct sockaddr_nl), &iov, 1 };
-	int ret;
-
-	ret = sendmsg(sock_nl[c], &msg, 0);
-	if (ret < 0)
-		logg(LOG_ERR, "Netlink Send error %s\n", errname());
-}
-
-static void setup_netlink(enum netlink_channel c)
-{
-	static struct sockaddr_nl sal = {
-		.nl_family = AF_NETLINK,
-		.nl_groups = RTMGRP_NEIGH | RTMGRP_NOTIFY	/* Subscribe to changes to the ARP cache */
-	};
-	struct {
-		struct nlmsghdr nlh;
-		struct ndmsg nd;
-	} nlr = { {
-			.nlmsg_type = RTM_GETNEIGH,
-			.nlmsg_flags = NLM_F_REQUEST | NLM_F_DUMP,
-			.nlmsg_len = sizeof(nlr),
-			.nlmsg_seq = time(NULL)
-		}, {
-			.ndm_family = AF_INET,
-			.ndm_state = NUD_REACHABLE
-		} };
-
-	sock_nl[c] = socket(AF_NETLINK, SOCK_DGRAM, NETLINK_ROUTE);
-	if (sock_nl[c] < 0) {
-		logg(LOG_CRIT, "Failed to open netlink socket %s.\n", errname());
-		abort();
-	}
-
-	sal.nl_pid = getpid() + c;
-	if (c != nl_monitor)
-		sal.nl_groups = 0;
-
-	if (bind(sock_nl[c], (struct sockaddr *)&sal, sizeof(sal)) < 0) {
-		logg(LOG_CRIT, "Failed to bind to netlink socket %s\n", errname());
-		abort();
-	};
-
-	memcpy(&nladdr[c], &sal, sizeof(struct sockaddr_nl));
-
-	if (c != nl_monitor)
-		send_netlink_message(c, &nlr.nlh);
-}
-#else
-#endif
-
-
 static void setup_flow(struct rdma_channel *c)
 {
 	if (!c)
@@ -4111,13 +3877,6 @@ static void register_poll_events(void)
 			register_callback(handle_comp_event, i->comp_events->fd, i->comp_events);
 
 	}
-
-#ifdef NETLINK_SUPPORT
-	if (unicast) {
-		register_callback(handle_netlink_event, sock_nl[nl_monitor], nl_monitor);
-		register_callback(handle_netlink_event, sock_nl[nl_command], nl_command);
-	}
-#endif
 }
 
 static void setup_timed_events(void)
@@ -4566,13 +4325,6 @@ int main(int argc, char **argv)
 
 	if (beacon)
 		beacon_setup(beacon_arg);
-
-#ifdef NETLINK_SUPPORT
-	if (unicast) {
-		setup_netlink(nl_monitor);
-		setup_netlink(nl_command);
-	}
-#endif
 
 	register_poll_events();
 
