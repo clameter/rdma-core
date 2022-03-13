@@ -185,7 +185,7 @@ struct rdma_channel {
 	struct i2r_interface *i;	/* The network interface of this channel */
 	receive_callback *receive;
 	struct ibv_cq *cq;		/* Every channel has a distinct CQ */
-	struct ibv_qp *qp;		/* All of the ibv_xxes are pointing to the interfac versions if this is not a rdmacm channel */
+	struct ibv_qp *qp;		/* All of the ibv_xxes are pointing to the interface versions if this is not a rdmacm channel */
 	struct ibv_mr *mr;
 	struct ibv_comp_channel *comp_events;
 	struct ibv_pd *pd;
@@ -193,10 +193,10 @@ struct rdma_channel {
 	unsigned int active_receive_buffers;
 	unsigned int nr_cq;
 	unsigned stats[nr_stats];
-	enum channel_type type;	/* Channel uses RDMACM calls */
-	bool listening;		/* Channel is listening for connections */
+	enum channel_type type;
+	bool listening;		/* rdmacm Channel is listening for connections */
 	const char *text;
-	struct rdma_unicast *ru;
+	struct rdma_unicast *ru;	/* Onlu rdmacm */
 	struct rdma_cm_id *id;		/* Only rdmacm */
 	struct sockaddr *bindaddr;	/* Only rdmacm */
 	struct ibv_qp_attr attr;	/* Only !rdmacm */
@@ -257,28 +257,11 @@ static struct i2r_interface {
 	struct ibv_port_attr port_attr;
 	int iges;
 	struct ibv_gid_entry ige[MAX_GID];
+	struct hash *ru_hash;
 	struct fifo resolve_queue;		/* List of send buffers with unresolved addresses */
 	struct hash *ep;			/* Hash of all endpoints reachable here */
 	struct hash *ip_to_ep;			/* Hash based on IP address */
 } i2r[NR_INTERFACES];
-
-enum hashes { hash_ip, hash_mac, hash_gid, hash_lid, nr_hashes };
-
-static unsigned keylength[nr_hashes] = { 4, 6, 16, 2 };
-
-struct rdma_unicast *hash_table[nr_hashes][0x100];
-
-static int nr_rdma_unicast = 0;
-
-/* Enough to fit a GID */
-#define hash_max_keylen 16
-
-struct hash_item {
-	struct rdma_unicast *next;	/* Linked list to avoid collisions */
-	unsigned hash;
-	bool member;
-	uint8_t key[hash_max_keylen];
-};
 
 /*
  * Information provided by RDMA subsystem for how
@@ -301,11 +284,10 @@ enum uc_state { UC_NONE, UC_ADDR_REQ, UC_ROUTE_REQ, UC_CONN_REQ, UC_CONNECTED, U
 struct rdma_unicast {
 	struct i2r_interface *i;
 	enum uc_state state;
-	struct sockaddr_in *sin;	/* Target address */
+	struct sockaddr_in sin;		/* Target address */
 	struct rdma_channel *c;		/* Channel for resolution and I/O */
 	struct fifo pending;		/* Buffers waiting on resolution to complete */
 	struct ah_info ai;		/* If ai.ah != NULL then the address info is valid */
-	struct hash_item hash[nr_hashes];
 };
 
 static inline void st(struct rdma_channel *c, enum stats s)
@@ -1526,6 +1508,7 @@ static void setup_interface(enum interfaces in)
 	sin->sin_port = htons(default_port);
 
 	i->multicast = create_rdma_id(i, (struct sockaddr *)sin);
+	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
 
 	if (!i->multicast)
 		abort();
@@ -1660,14 +1643,12 @@ static void zap_channel(struct rdma_unicast *ru)
 		free_buffer(buf);
 
 	channel_destroy(ru->c);
-	if (ru->sin) {
+	if (ru->sin.sin_addr.s_addr) {
 		ru->c = NULL;
 		ru->state = UC_NONE;
-	} else {
+	} else
 		/* Temporary struct that can go away now */
 		free(ru);
-		nr_rdma_unicast--;
-	}
 }
 
 /* Drop the first entry from the list of items to resolve */
@@ -1707,13 +1688,13 @@ static void resolve_start(struct rdma_unicast *ru)
 		ru->c->ru = ru;
 	}
 
-	if (rdma_resolve_addr(ru->c->id, NULL, (struct sockaddr *)ru->sin, 2000) == 0) {
+	if (rdma_resolve_addr(ru->c->id, NULL, (struct sockaddr *)&ru->sin, 2000) == 0) {
 		ru->state = UC_ADDR_REQ;
 		return;
 	}
 
 	logg(LOG_ERR, "rdma_resolve_addr error %s on %s for %s:%d\n",
-		errname(), ru->c->text, inet_ntoa(ru->sin->sin_addr), ntohs(ru->sin->sin_port));
+		errname(), ru->c->text, inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
 
 	resolve_end(ru);
 }
@@ -1795,14 +1776,14 @@ static void handle_rdma_event(void *private)
 
 		case RDMA_CM_EVENT_ADDR_RESOLVED:
 			logg(LOG_NOTICE, "RDMA_CM_EVENT_ADDR_RESOLVED for %s:%d\n",
-				inet_ntoa(ru->sin->sin_addr), ntohs(ru->sin->sin_port));
+				inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
 
 			if (rdma_resolve_route(ru->c->id, 2000) < 0) {
 
 				logg(LOG_ERR, "rdma_resolve_route error %s on %s  %s:%d. Packet dropped.\n",
 					errname(), ru->c->text,
-					inet_ntoa(ru->sin->sin_addr),
-					ntohs(ru->sin->sin_port));
+					inet_ntoa(ru->sin.sin_addr),
+					ntohs(ru->sin.sin_port));
 					goto err;
 			}
 			ru->state = UC_ROUTE_REQ;
@@ -1811,8 +1792,8 @@ static void handle_rdma_event(void *private)
 		case RDMA_CM_EVENT_ADDR_ERROR:
 			logg(LOG_ERR, "Address resolution error %d on %s  %s:%d. Packet dropped.\n",
 				event->status, ru->c->text,
-				inet_ntoa(ru->sin->sin_addr),
-				ntohs(ru->sin->sin_port));
+				inet_ntoa(ru->sin.sin_addr),
+				ntohs(ru->sin.sin_port));
 
 			goto err;
 			break;
@@ -1822,7 +1803,7 @@ static void handle_rdma_event(void *private)
 				struct rdma_conn_param rcp = { };
 
 				logg(LOG_NOTICE, "RDMA_CM_EVENT_ROUTE_RESOLVED for %s:%d\n",
-					inet_ntoa(ru->sin->sin_addr), ntohs(ru->sin->sin_port));
+					inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
 
 				allocate_rdmacm_qp(ru->c, 100, false);
 
@@ -1832,8 +1813,8 @@ static void handle_rdma_event(void *private)
 				if (rdma_connect(ru->c->id, &rcp) < 0) {
 					logg(LOG_ERR, "rdma_connecte error %s on %s  %s:%d. Packet dropped.\n",
 						errname(), ru->c->text,
-						inet_ntoa(ru->sin->sin_addr),
-						ntohs(ru->sin->sin_port));
+						inet_ntoa(ru->sin.sin_addr),
+						ntohs(ru->sin.sin_port));
 
 					goto err;
 				}
@@ -1844,8 +1825,8 @@ static void handle_rdma_event(void *private)
 		case RDMA_CM_EVENT_ROUTE_ERROR:
 			logg(LOG_ERR, "Route resolution error %d on %s  %s:%d. Packet dropped.\n",
 				event->status, ru->c->text,
-				inet_ntoa(ru->sin->sin_addr),
-				ntohs(ru->sin->sin_port));
+				inet_ntoa(ru->sin.sin_addr),
+				ntohs(ru->sin.sin_port));
 
 			goto err;
 			break;
@@ -1901,7 +1882,7 @@ static void handle_rdma_event(void *private)
 				struct ah_info *ai = &ru->ai;
 
 				logg(LOG_NOTICE, "RDMA_CM_EVENT_ESTABLISHED for %s:%d\n",
-					inet_ntoa(ru->sin->sin_addr), ntohs(ru->sin->sin_port));
+					inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
 
 				ai->ah = ibv_create_ah(ru->c->pd, &event->param.ud.ah_attr);
 				ai->remote_qpn = event->param.ud.qp_num;
@@ -1917,8 +1898,8 @@ static void handle_rdma_event(void *private)
 		case RDMA_CM_EVENT_UNREACHABLE:
 			logg(LOG_ERR, "Unreachable Port error %d on %s  %s:%d. Packet dropped.\n",
 				event->status, ru->c->text,
-				inet_ntoa(ru->sin->sin_addr),
-				ntohs(ru->sin->sin_port));
+				inet_ntoa(ru->sin.sin_addr),
+				ntohs(ru->sin.sin_port));
 
 			goto err;
 			break;
@@ -2098,140 +2079,14 @@ static int send_buf(struct buf *buf, struct rdma_unicast *ra)
 	return ret;
 }
 
-#if 0
-static int sysfs_read_int(const char *s)
-{
-	int fh = open(s, O_RDONLY);
-	static char b[10];
-	if (fh < 2)
-		return -1;
-
-	if (read(fh, b, 10) < 1) {
-		close(fh);
-		return -1;
-	}
-
-	close(fh);
-
-	return atoi(b);
-}
-#endif
-
-static unsigned generate_hash_key(enum hashes type, uint8_t *key, void *p)
-{
-	int i;
-	unsigned sum = 0;
-
-	memcpy(key, p, keylength[type]);
-
-	for (i = 0; i < keylength[type]; i++)
-		sum += key[i];
-
-	return sum & 0xff;
-}
-
-static struct rdma_unicast *find_key_in_chain(enum hashes type,
-	struct rdma_unicast *next, uint8_t *key)
-{
-	for ( ; next != NULL; next = next->hash[type].next)
-		if (memcmp(key, next->hash[type].key, keylength[type]) == 0)
-			break;
-
-	return next;
-}
-
-static void add_to_hash(struct rdma_unicast *ra, enum hashes type, void *p)
-{
-	struct hash_item *h = &ra->hash[type];
-
-	if (h->member)
-		abort();	/* Already a member of the hash */
-
-	h->hash = generate_hash_key(type, h->key, p);
-
-	/* Duplicate key ? */
-	if (find_key_in_chain(type, hash_table[type][h->hash], h->key))
-		abort();
-
-	h->next = hash_table[type][h->hash];
-	hash_table[type][h->hash] = ra;
-
-	h->member = true;
-}
-
-#if 0
-static void remove_from_hash(struct rdma_unicast *ra, enum hashes type)
-{
-	struct hash_item *h = &ra->hash[type];
-	unsigned hash = h->hash;
-	struct rdma_unicast *next = hash_table[type][hash];
-	struct rdma_unicast *prior = NULL;
-
-	for( ; next; next = next->hash[hash].next) {
-
-		if (next == ra)
-			break;
-
-		prior = next;
-
-	}
-
-	if (!next)
-		abort();	/* Not a in the chain */
-
-	if (!prior) {
-		/* This is the only item in the chain */
-		hash_table[type][hash] = NULL;
-		return;
-	}
-
-	prior->hash[type].next = h->next;
-	h->member = false;
-}
-#endif
-
-static struct rdma_unicast *find_in_hash(enum hashes type, void *p)
-{
-	uint8_t key[hash_max_keylen];
-	unsigned hash;
-
-	hash = generate_hash_key(type, key, p);
-
-	return find_key_in_chain(type, hash_table[type][hash], key);
-}
-
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin)
 {
 	struct rdma_unicast *ra = calloc(1, sizeof(struct rdma_unicast));
 
-	nr_rdma_unicast++;
 	ra->i = i;
-	ra->sin = sin;
+	memcpy(&ra->sin, sin, sizeof(struct sockaddr_in));
 	fifo_init(&ra->pending);
 	return ra;
-}
-
-static long lookup_ip_from_gid(struct rdma_channel *c, union ibv_gid *v)
-{
-	struct rdma_unicast *ra;
-	char buf[100];
-
-	ra = find_in_hash(hash_gid, v);
-
-	if (ra && ra->hash[hash_ip].member) {
-		struct in_addr *in = (struct in_addr *)ra->hash[hash_ip].key;
-
-		return ntohl(in->s_addr);
-	}
-
-	/*
-	 * Could do ARP for GID -> IP resolution but the GID
-	 * should be already be in the ARP cache
-	 */
-	logg(LOG_ERR, "Could not find AH for %s on %s\n",
-		inet_ntop(AF_INET6, v->raw, buf, INET6_ADDRSTRLEN), c->text);
-
-	return 0;
 }
 
 static void setup_flow(struct rdma_channel *c)
@@ -2290,10 +2145,6 @@ static void setup_flow(struct rdma_channel *c)
 
 static void unicast_packet(struct rdma_channel *c, struct buf *buf, struct in_addr dest_addr)
 {
-	char xbuf[INET6_ADDRSTRLEN];
-	char xbuf2[INET6_ADDRSTRLEN];
-	enum interfaces in = c->i - i2r;
-	unsigned port = 0; /* How do I get that??? Is it needed? */
 	unsigned long l;
 
 	memcpy(&l, buf->cur, sizeof(long));
@@ -2302,34 +2153,6 @@ static void unicast_packet(struct rdma_channel *c, struct buf *buf, struct in_ad
 		return;
 	}
 
-	if (in == ROCE) {
-
-		unsigned int iaddr = ntohl(i2r[INFINIBAND].if_addr.sin_addr.s_addr);
-		unsigned int netmask = ntohl(i2r[INFINIBAND].if_netmask.sin_addr.s_addr);
-		unsigned int daddr = ntohl(dest_addr.s_addr);
-
-		if ((daddr & netmask) == (iaddr & netmask)) {
-			/* Unicast ROCE packet destined for Infiniband */
-			logg(LOG_NOTICE, "Packet destination Infiniband from %s to %s port %d\n",
-				inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
-				inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN),
-				port);
-		}
-
-	} else {
-
-		unsigned int iaddr = ntohl(i2r[ROCE].if_addr.sin_addr.s_addr);
-		unsigned int netmask = ntohl(i2r[ROCE].if_netmask.sin_addr.s_addr);
-		unsigned int daddr = ntohl(lookup_ip_from_gid(c, &buf->grh.dgid));
-
-		if ((daddr & netmask) == (iaddr & netmask)) {
-			/* Unicast Infiniband packet destined for ROCE */
-			logg(LOG_NOTICE, "Packet destination Roce from %s to %s port %d\n",
-				inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
-				inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN),
-				port);
-		}
-	}
 	dump_buf_grh(buf);
 }
 
@@ -3163,9 +2986,7 @@ static void receive_raw(struct buf *buf)
 				       hexbytes(buf->e.ether_shost, ETH_ALEN, '-'),
 			       	       dest_str);
 
-			buf->addr = source;
-
-			if (!valid_addr(i, buf->addr)) {
+			if (!valid_addr(i, source)) {
 				reason = "-Invalid source IP";
 				goto discard;
 			}
@@ -3743,10 +3564,10 @@ static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockadd
 	int ret;
 
 	/* Find address */
-	ra = find_in_hash(hash_ip, &sin->sin_addr);
+	ra = hash_find(i->ru_hash,  sin);
 	if (!ra) {
 		ra = new_rdma_unicast(i, sin);
-		add_to_hash(ra, hash_ip, &sin->sin_addr);
+		hash_add(i->ru_hash, ra);
 	}
 
 	switch (ra->state) {
@@ -3994,6 +3815,7 @@ static void register_poll_events(void)
 			register_callback(handle_comp_event, i->comp_events->fd, i->comp_events);
 
 	}
+
 }
 
 static void setup_timed_events(void)
