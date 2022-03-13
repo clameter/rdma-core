@@ -65,7 +65,7 @@
 #include <linux/ip.h>
 #include <linux/udp.h>
 #include <linux/if_arp.h>
-
+#include <linux/if_packet.h>
 #include <infiniband/umad_cm.h>
 #include <infiniband/umad_str.h>
 #include "packet.h"
@@ -174,7 +174,7 @@ static const char *stats_text[nr_stats] = {
 
 static int cq_high = 0;	/* Largest batch of CQs encountered */
 
-enum channel_type { channel_rdmacm, channel_ud, channel_raw, nr_channel_types };
+enum channel_type { channel_rdmacm, channel_ud, channel_raw, channel_packet, nr_channel_types };
 
 struct buf;
 
@@ -199,6 +199,7 @@ struct rdma_channel {
 	struct rdma_cm_id *id;		/* Only rdmacm */
 	struct sockaddr *bindaddr;	/* Only rdmacm */
 	struct ibv_qp_attr attr;	/* Only !rdmacm */
+	int fh;				/* Only channel_packet */
 };
 
 /*
@@ -314,6 +315,8 @@ static inline void st(struct rdma_channel *c, enum stats s)
 /* Forwards */
 static void add_event(unsigned long time_in_ms, void (*callback));
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
+static void register_callback(void (*callback)(void *), int fd, void *private);
+static void handle_receive_packet(void *private);
 
 static receive_callback receive_main, receive_multicast, receive_raw, receive_ud;
 
@@ -1050,7 +1053,7 @@ static int post_receive_buffers(struct i2r_interface *i)
 	if (ret)
 		goto out;
 
-	if (i->raw)
+	if (i->raw && i->raw->type == channel_raw)
 		ret = post_receive(i->raw, 100);
 
 	if (ret)
@@ -1082,7 +1085,8 @@ static void channel_destroy(struct rdma_channel *c)
 			ibv_dealloc_pd(c->pd);
 
 		rdma_destroy_id(c->id);
-	} else {
+	} else
+	if (c->type != channel_packet)	{
 		ibv_destroy_qp(c->qp);
 
 		if (c->cq)
@@ -1096,7 +1100,7 @@ static void channel_destroy(struct rdma_channel *c)
 static void qp_destroy(struct i2r_interface *i)
 {
 #ifdef HAVE_MSTFLINT
-	if (i == i2r + INFINIBAND) {
+	if (i == i2r + INFINIBAND && i->raw && i->raw->type == channel_raw) {
 		if (clear_ib_sniffer(i->port, i->raw->qp))
 			logg(LOG_ERR, "Failed to switch off sniffer mode on %s\n", i->raw->text);
 	}
@@ -1395,11 +1399,53 @@ static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port,
 	return create_channel(i, receive_ud, port, nr_cq, "-ud", IBV_QPT_UD, channel_ud);
 }
 
-static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port, unsigned nr_cq)
+static struct rdma_channel *create_packet_socket(struct i2r_interface *i, int port)
 {
-	return create_channel(i, receive_raw, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
+	struct rdma_channel *c;
+	int fh;
+	struct sockaddr_ll ll  = {
+		.sll_family = AF_PACKET,
+		.sll_protocol = htons(ETH_P_ALL),
+		.sll_ifindex = port,
+		.sll_hatype = ARPHRD_ETHER,
+		.sll_pkttype = PACKET_BROADCAST | PACKET_HOST | PACKET_OTHERHOST,
+		.sll_halen = sizeof(struct in_addr),
+	};
+
+	fh = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+
+	if (fh < 0) {
+		logg(LOG_ERR, "Raw Socker creation failed for %s:%s\n", i->text, errname());
+		return NULL;
+	}
+
+	if (bind(fh, (struct sockaddr *)&ll, sizeof(struct sockaddr_ll))) {
+		logg(LOG_ERR, "Cannot bind raw socket for %s:%s\n", i->text, errname());
+		return NULL;
+	}
+
+	c = new_rdma_channel(i, receive_raw, channel_packet);
+	c->i = i;
+	c->text = make_ifname(i, "-packet");
+	c->type = channel_packet;
+	c->fh = fh;
+	register_callback(handle_receive_packet, fh, c);
+	return c;
 }
 
+static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port, unsigned nr_cq)
+{
+	struct rdma_channel *c = NULL;
+
+	c = create_channel(i, receive_raw, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
+
+	if (!c)	 {/* Fallback to a Packet socket */
+			logg(LOG_WARNING, "Falling back to raw socket on %s to monitor traffic\n", i->text);
+		c = create_packet_socket(i, i->ifindex);
+	}
+
+	return c;
+}
 
 static void setup_interface(enum interfaces in)
 {
@@ -3426,6 +3472,46 @@ exit:
 	post_receive_buffers(i);
 }
 
+/* Special handling using raw socket */
+static void handle_receive_packet(void *private)
+{
+	struct rdma_channel *c = private;
+	struct ibv_wc w = {};
+	unsigned ethertype;
+	ssize_t len;
+	struct buf *buf = alloc_buffer(c);
+
+	len = recv(c->fh, &buf->raw, DATA_SIZE, 0);
+
+	if (len < 0) {
+		logg(LOG_ERR, "recv error on %s:%s\n", c->text, errname());
+		return;
+	}
+		
+	st(c, packets_received);
+
+	w.byte_len = len;
+	buf->cur = buf->raw;
+	buf->end = buf->raw + w.byte_len;
+	buf->w = &w;
+	reset_flags(buf);
+	PULL(buf, buf->e);
+	ethertype = ntohs(buf->e.ether_type);
+
+	if (ethertype == ETHERTYPE_IP) {
+		PULL(buf, buf->ip);
+		buf->ip_valid = true;
+
+		memcpy((void *)&buf->grh + 20, &buf->ip, 20);
+		buf->grh_valid = true;
+	}
+	buf->ip_csum_ok = true;
+	/* Reset scan to the beginning of the raw packet */
+	buf->cur = buf->raw;
+	c->receive(buf);
+}
+
+
 static void handle_async_event(void *private)
 {
 	struct i2r_interface *i = private;
@@ -3915,7 +4001,7 @@ static void arm_channels(void)
 			ibv_req_notify_cq(i->multicast->cq, 0);
 		}
 
-		if (i->raw) {
+		if (i->raw && i->raw->type == channel_raw) {
 			start_channel(i->raw);
 			ibv_req_notify_cq(i->raw->cq, 0);
 
