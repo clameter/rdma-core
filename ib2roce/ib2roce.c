@@ -3820,13 +3820,15 @@ static void logging(void)
 	}
 
 	n = 0;
-	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES;i++) {
-		n+= sprintf(counts + n, "%s(MC %d/%d, UD %d/%d, RAW %d)",
+	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES;i++)
+      	   if (i->context)	{
+		n+= sprintf(counts + n, "%s(MC %d/%d, UD %d/%d, %s %d)",
 			i->text,
 			i->multicast->stats[packets_received],
 			i->multicast->stats[packets_sent],
 			i->ud ? i->ud->stats[packets_received] : 0,
 			i->ud ?	i->ud->stats[packets_sent] : 0,
+			i->raw ? (i->raw->type == channel_raw ? "RAW" : "PACKET") : "-",
 			i->raw ? i->raw->stats[packets_received]: 0);
 	}
 
