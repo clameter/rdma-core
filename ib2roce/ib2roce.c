@@ -2560,7 +2560,7 @@ static void receive_multicast(struct buf *buf)
 
 		if (memcmp(&buf->grh.sgid, &c->i->gid, sizeof(union ibv_gid)) == 0) {
 
-			if (log_packets > 2)
+			if (log_packets > 3)
 				logg(LOG_WARNING, "Discard Packet: Loopback from this host. MGID=%s/%s\n",
 					inet_ntop(AF_INET6, mgid, xbuf, INET6_ADDRSTRLEN), c->text);
 
@@ -2584,7 +2584,7 @@ static void receive_multicast(struct buf *buf)
 
 	} else { /* ROCE */
 		if (buf->ip.saddr == c->i->if_addr.sin_addr.s_addr) {
-			if (log_packets)
+			if (log_packets > 3)
 				logg(LOG_WARNING, "Discard Packet: Loopback from this host. %s/%s\n",
 					inet_ntoa(c->i->if_addr.sin_addr), c->text);
 			goto invalid_packet;
@@ -2900,7 +2900,7 @@ static void receive_raw(struct buf *buf)
 		}
 
 		if ((dlid & 0xc000) == 0xc000) {
-			reason = "Multicast";
+			reason = "-Multicast";
 			goto discard;
 		}
 
@@ -2913,7 +2913,7 @@ static void receive_raw(struct buf *buf)
 
 		if (memcmp(i->if_mac, buf->e.ether_shost, ETH_ALEN) == 0) {
 
-			reason = "Loopback";
+			reason = "-Loopback";
 			goto discard;
 		}
 
@@ -2925,7 +2925,7 @@ static void receive_raw(struct buf *buf)
 		case ETHERTYPE_ROCE:
 
 			reason = "Roce V1 not supported";
-			goto discard2;
+			goto discard;
 
 		case ETHERTYPE_IP:
 
@@ -2956,13 +2956,13 @@ static void receive_raw(struct buf *buf)
 
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
-				reason = "Only UDP packets";
+				reason = "-Only UDP packets";
 				goto discard;
 
 			}
 
 			if (buf->e.ether_dhost[0] & 0x1) {
-				reason = "Multicast on RAW channel";
+				reason = "-Multicast on RAW channel";
 				goto discard;
 			}
 
@@ -2974,12 +2974,12 @@ static void receive_raw(struct buf *buf)
 
 			if (ntohs(buf->udp.dest) != ROCE_PORT) {
 
-				reason = "Not the ROCE UDP port";
-				goto discard2;
+				reason = "-Not the ROCE UDP port";
+				goto discard;
 			}
 			break;
 		default:
-			reason = "Not IP traffic";
+			reason = "-Not IP traffic";
 			/* Fall through */
 		}
 		goto discard;
@@ -2998,7 +2998,7 @@ static void receive_raw(struct buf *buf)
 	if (bth.opcode != IB_OPCODE_UD_SEND_ONLY &&
 		bth.opcode !=  IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
 			reason = "Only UD Sends are supported";
-                        goto discard2;
+                        goto discard;
         }
 
 	PULL(buf, deth);
@@ -3025,22 +3025,19 @@ static void receive_raw(struct buf *buf)
 	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
 		reason = sidr_req(buf, mad_pos, dlid);
 		if (reason)
-			goto discard2;
+			goto discard;
 		return;
 	}
 
 	reason = "Only SIDR_REQ";
-	goto discard2;
 
 discard:
-	if (log_packets < 2)
-		goto silent_discard;
+	if (reason[0] != '-' || log_packets > 1) 
+		logg(LOG_NOTICE, "Discard %s %s: %s Length=%u/prot=%u/pos=%lu Packet=%s\n",
+			c->text, reason, header,
+			len, buf->w->byte_len, buf->cur - buf->raw,
+			_hexbytes(buf->raw, buf->w->byte_len));
 
-discard2:
-	logg(LOG_NOTICE, "Discard %s %s: %s QPN=%x APSN=%x LEN=%d\n", c->text, reason, header,
-		ntohl(bth.qpn), bth.apsn, len);
-
-silent_discard:
 	st(c, packets_invalid);
 	free_buffer(buf);
 }
