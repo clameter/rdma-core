@@ -44,9 +44,8 @@
 #include <util/udma_barrier.h>
 #include <util/util.h>
 #include "mlx5-abi.h"
-#include <ccan/bitmap.h>
+#include <util/bitmap.h>
 #include <ccan/list.h>
-#include "bitmap.h"
 #include <ccan/minmax.h>
 #include "mlx5dv.h"
 
@@ -289,7 +288,7 @@ struct mlx5_hca_cap_2_caps {
 };
 
 struct reserved_qpn_blk {
-	bitmap *bmp;
+	unsigned long *bmp;
 	uint32_t first_qpn;
 	struct list_node entry;
 	unsigned int next_avail_slot;
@@ -419,19 +418,11 @@ struct mlx5_context {
 	pthread_mutex_t			crypto_login_mutex;
 };
 
-struct mlx5_bitmap {
-	uint32_t		last;
-	uint32_t		top;
-	uint32_t		max;
-	uint32_t		avail;
-	uint32_t		mask;
-	unsigned long	       *table;
-};
-
 struct mlx5_hugetlb_mem {
 	int			shmid;
 	void		       *shmaddr;
-	struct mlx5_bitmap	bitmap;
+	unsigned long		*bitmap;
+	unsigned long		bmp_size;
 	struct list_node	entry;
 };
 
@@ -920,6 +911,19 @@ struct mlx5dv_sched_node {
 struct mlx5dv_sched_leaf {
 	struct mlx5dv_sched_node *parent;
 	struct mlx5dv_devx_obj *obj;
+};
+
+struct mlx5_devx_msi_vector {
+	struct mlx5dv_devx_msi_vector dv_msi;
+	struct ibv_context *ibctx;
+};
+
+struct mlx5_devx_eq {
+	struct mlx5dv_devx_eq dv_eq;
+	struct ibv_context *ibctx;
+	uint64_t iova;
+	size_t size;
+	int eqn;
 };
 
 struct ibv_flow *
@@ -1570,6 +1574,12 @@ struct mlx5_dv_context_ops {
 	int (*query_port)(struct ibv_context *context, uint32_t port_num,
 			  struct mlx5dv_port *info, size_t info_len);
 	int (*map_ah_to_qp)(struct ibv_ah *ah, uint32_t qp_num);
+	struct mlx5dv_devx_msi_vector *(*devx_alloc_msi_vector)(struct ibv_context *ibctx);
+	int (*devx_free_msi_vector)(struct mlx5dv_devx_msi_vector *msi);
+	struct mlx5dv_devx_eq *(*devx_create_eq)(struct ibv_context *ibctx,
+						 const void *in, size_t inlen,
+						 void *out, size_t outlen);
+	int (*devx_destroy_eq)(struct mlx5dv_devx_eq *eq);
 };
 
 struct mlx5_dv_context_ops *mlx5_get_dv_ops(struct ibv_context *context);
