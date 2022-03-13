@@ -752,6 +752,7 @@ struct buf {
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
 			struct endpoint *source_ep;
+			struct in_addr addr;
 
 			bool ether_valid;	/* Ethernet header valid */
 			bool ip_valid;		/* IP header valid */
@@ -2415,8 +2416,12 @@ static struct endpoint *new_source_address(struct buf *buf)
 	ep = new_endpoint(c);
 	if (buf->ip_valid) { /* ROCE. This may be called without buf->grh_valid from the raw path */
 
-		ep->addr.s_addr = buf->ip.saddr;
-		map_ipv4_addr_to_ipv6(buf->ip.saddr, (struct in6_addr *)&at.grh.dgid);
+		if (buf->addr.s_addr)
+			ep->addr = buf->addr;
+		else 
+			ep->addr.s_addr = buf->ip.saddr;
+
+		map_ipv4_addr_to_ipv6(ep->addr.s_addr, (struct in6_addr *)&at.grh.dgid);
 
 	} else {	/* Infiniband */
 		if (buf->grh_valid) {
@@ -2425,16 +2430,20 @@ static struct endpoint *new_source_address(struct buf *buf)
 			memcpy(&ep->gid, buf->grh.sgid.raw, sizeof(union ibv_gid));
 			memcpy(&at.grh.dgid, &ep->gid, sizeof(union ibv_gid));
 
-			PULL(buf, buf->pgm);
+			if (buf->addr.s_addr)
+				ep->addr = buf->addr;
+			else {
 
-			if (w->src_qp != 1) {
-				/* Direct PGM packet inspection without verification if this is really PGM */
-				memcpy(&ep->addr, buf->pgm.pgm_gsi, sizeof(struct in_addr));
-				logg(LOG_NOTICE, "Extracted IP address from PGM header: %s %s\n",
+				PULL(buf, buf->pgm);
+
+				if (w->src_qp != 1) {
+					/* Direct PGM packet inspection without verification if this is really PGM */
+					memcpy(&ep->addr, buf->pgm.pgm_gsi, sizeof(struct in_addr));
+					logg(LOG_NOTICE, "Extracted IP address from PGM header: %s %s\n",
 						c->text, inet_ntoa(ep->addr));
-			} else
-				logg(LOG_ERR, "No IP address for QP1 packet on %s\n", c->text);
-
+				} else
+					logg(LOG_ERR, "No IP address for QP1 packet on %s\n", c->text);
+			}
 			buf->cur = position;
 		}
 		if (w->slid & 0xf000) {
@@ -2449,6 +2458,7 @@ static struct endpoint *new_source_address(struct buf *buf)
 			
 	}
 
+	buf->addr.s_addr = 0;
 	/*
 	 * Cannot use ibv_create_ah_from_wc since it is unable to
 	 * handle traffic that arrived as multicast. The setup
@@ -2963,12 +2973,14 @@ static void receive_raw(struct buf *buf)
 		buf->end -= 4;		/* Remove Ethernet FCS */
 
 		/* buf->cur .. buf->end is the ethernet payload */
-		if (buf->ethertype == ETHERTYPE_ROCE) {
+		switch (buf->ethertype) {
+
+		case ETHERTYPE_ROCE:
 
 			reason = "Roce V1 not supported";
 			goto discard2;
 
-		} else if (buf->ethertype == ETHERTYPE_IP) {
+		case ETHERTYPE_IP:
 
 			char source_str[30];
 			char dest_str[30];
@@ -2986,7 +2998,9 @@ static void receive_raw(struct buf *buf)
 				       hexbytes(buf->e.ether_shost, ETH_ALEN, '-'),
 			       	       dest_str);
 
-			if (!valid_addr(i, source)) {
+			buf->addr = source;
+
+			if (!valid_addr(i, buf->addr)) {
 				reason = "-Invalid source IP";
 				goto discard;
 			}
@@ -3016,10 +3030,12 @@ static void receive_raw(struct buf *buf)
 				reason = "Not the ROCE UDP port";
 				goto discard2;
 			}
-		} else {
+			break;
+		default:
 			reason = "Not IP traffic";
-			goto discard;
+			/* Fall through */
 		}
+		goto discard;
 	}
 
 	buf->source_ep = ep;
@@ -3028,8 +3044,8 @@ static void receive_raw(struct buf *buf)
 	buf->bth_valid = true;
 	buf->end -= ICRC_SIZE;
 
-	if (ntohl(buf->bth.qpn) != 1) {
-		reason = "Raw channels only handle QP1 traffic";
+	if (ntohl(buf->bth.qpn) == 0) {
+		reason = "Raw channels do not handle QP0 traffic";
 		goto discard;
 	}
 
@@ -3080,7 +3096,6 @@ discard2:
 
 silent_discard:
 	st(c, packets_invalid);
-
 	free_buffer(buf);
 }
 
