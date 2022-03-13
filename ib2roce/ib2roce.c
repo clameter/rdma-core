@@ -3067,7 +3067,7 @@ static void receive_raw(struct buf *buf)
 	unsigned short dlid = 0;
 	void *mad_pos;
 	const char *reason;
-	int len = 0;
+	int len = w->byte_len;
 	char header[200];
 
 	if (i == i2r + INFINIBAND) {
