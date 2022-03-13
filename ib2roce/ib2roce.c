@@ -2464,6 +2464,12 @@ static inline void map_ipv4_addr_to_ipv6(__be32 ipv4, struct in6_addr *ipv6)
 	ipv6->s6_addr32[3] = ipv4;
 }
 
+static bool valid_addr(struct i2r_interface *i, struct in_addr addr) {
+	unsigned netmask = i->if_netmask.sin_addr.s_addr;
+
+	return ((addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask));
+}
+
 /* Create Endpoint just from the IP address */
 static struct endpoint *create_ep(struct i2r_interface *i, struct in_addr addr)
 {
@@ -3153,10 +3159,14 @@ static void receive_raw(struct buf *buf)
 			dest.s_addr = buf->ip.daddr;
 			strcpy(source_str, inet_ntoa(source));
 			strcpy(dest_str, inet_ntoa(dest));
-			snprintf(header, sizeof(header), "%s -> %s", source_str, dest_str);
+			snprintf(header, sizeof(header), "%s(%s) -> %s", source_str,
+				       hexbytes(buf->e.ether_shost, ETH_ALEN, '-'),
+			       	       dest_str);
 
-			if (buf->ip.saddr == 0) {
-				reason = "IP packet from 0.0.0.0";
+			buf->addr = source;
+
+			if (!valid_addr(i, buf->addr)) {
+				reason = "-Invalid source IP";
 				goto discard;
 			}
 
