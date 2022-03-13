@@ -101,8 +101,9 @@ static bool bridging = true;		/* Allow briding */
 static bool unicast = false;		/* Bridge unicast packets */
 static bool flow_steering = false;	/* Use flow steering to filter packets */
 static int log_packets = 0;		/* Show details on discarded packets */
-static int testing = false;		/* Run some tests on startup */
-
+static bool testing = false;		/* Run some tests on startup */
+static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
+static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 
 /* Timestamp in milliseconds */
 static unsigned long timestamp(void)
@@ -1302,11 +1303,12 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multi
 	init_qp_attr_ex.comp_mask = IBV_QP_INIT_ATTR_CREATE_FLAGS|IBV_QP_INIT_ATTR_PD;
 	init_qp_attr_ex.pd = c->pd;
 
-	if (multicast)
+	if (multicast && loopback_blocking)
 		init_qp_attr_ex.create_flags = IBV_QP_CREATE_BLOCK_SELF_MCAST_LB;
 
 	ret = rdma_create_qp_ex(c->id, &init_qp_attr_ex);
-	if (ret && errno == ENOTSUP) {
+
+	if (ret && errno == ENOTSUP && loopback_blocking) {
 		logg(LOG_WARNING, "QP create: MC loopback blocking failed. Retrying without\n");
 		init_qp_attr_ex.create_flags = 0;
 		ret = rdma_create_qp_ex(c->id, &init_qp_attr_ex);
@@ -1437,12 +1439,15 @@ static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port
 {
 	struct rdma_channel *c = NULL;
 
-	c = create_channel(i, receive_raw, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
+	if (!packet_socket) {
+		c = create_channel(i, receive_raw, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
 
-	if (!c)	 {/* Fallback to a Packet socket */
+		if (!c)
 			logg(LOG_WARNING, "Falling back to raw socket on %s to monitor traffic\n", i->text);
-		c = create_packet_socket(i, i->ifindex);
 	}
+
+	if (!c)
+		c = create_packet_socket(i, i->ifindex);
 
 	return c;
 }
@@ -4345,6 +4350,14 @@ static void exec_opt(int op, char *optarg)
 			flow_steering = true;
 			break;
 
+		case 'a':
+			loopback_blocking = false;
+			break;
+
+		case 'y':
+			packet_socket = true;
+			break;
+
 		case 'v':
 			log_packets++;
 			break;
@@ -4373,6 +4386,8 @@ static void exec_opt(int op, char *optarg)
 			printf("-f|--flow		*experimental*	Enable flow steering to do hardware filtering of packets\n");
 			printf("-v|--log-packets			Show detailed information about discarded packets\n");
 			printf("-c|--config <file>			Read config from file\n");
+			printf("-y|--packetsocket			Use Packet Socket instead of RAW QP\n");
+			printf("-a|--loopback				Do not request loopback blocking\n");
 			exit(1);
 	}
 }
@@ -4384,7 +4399,7 @@ int main(int argc, char **argv)
 
 	mc_hash = hash_create(offsetof(struct mc, addr), sizeof(struct in_addr));
 
-	while ((op = getopt_long(argc, argv, "vtfunb::xl::i:r:m:o:d:p:c:",
+	while ((op = getopt_long(argc, argv, "vtfunb::xl::i:r:m:o:d:p:c:ya",
 					opts, NULL)) != -1)
 		exec_opt(op, optarg);
 
