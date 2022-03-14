@@ -1375,10 +1375,23 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 
 	if (ret) {
 		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to Init state. %s\n", c->text, errname());
+		ibv_destroy_qp(c->qp);
+		ibv_destroy_cq(c->cq);
 		free(c);
 		return NULL;
 	}
 
+#ifdef HAVE_MSTFLINT
+	if (c->i == i2r + INFINIBAND && type == channel_raw) {
+		if (set_ib_sniffer(ibv_get_device_name(c->i->context->device), c->i->port, c->qp)) {
+			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
+			ibv_destroy_qp(c->qp);
+			ibv_destroy_cq(c->cq);
+			free(c);
+			return NULL;
+		}
+	}
+#endif
 	return c;
 }
 
@@ -2091,13 +2104,10 @@ static void setup_flow(struct rdma_channel *c)
 {
 	if (!c)
 		return;
-#ifdef HAVE_MSTFLINT
-	if (c->i == i2r + INFINIBAND) {
-		if (set_ib_sniffer(ibv_get_device_name(c->i->context->device), c->i->port, c->qp))
-			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
+
+	/* Sadly flow steering is not supported on Infiniband */
+	if (c->i == i2r + INFINIBAND)
 		return;
-	}
-#endif
 
 	if (flow_steering) {
 			struct i2r_interface *i = c->i;
