@@ -227,7 +227,7 @@ struct endpoint {
 	struct rdma_channel *c;
 	struct in_addr addr;
 	union ibv_gid gid;
-	unsigned short lid;
+	uint16_t lid;
 	struct ibv_ah *ah;
 	struct forward *forwards;
 };
@@ -893,7 +893,7 @@ static char *__hexbytes(char *b, uint8_t *q, unsigned len, char separator)
 
 static char *hexbytes(uint8_t *q, unsigned len, char separator)
 {
-	static char b[150];
+	static char b[1000];
 
 	if (3* len >= sizeof(b)) {
 		logg(LOG_NOTICE, "hexbytes: string length constrained\n");
@@ -1538,7 +1538,7 @@ static void setup_interface(enum interfaces in)
 		i->raw = create_raw_channel(i, i->port, 100);
 		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
 		if (i == i2r + INFINIBAND)
-			i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(unsigned short));
+			i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
 		else
 			i->ep = i->ip_to_ep;;
 	}
@@ -2920,7 +2920,7 @@ static void receive_raw(struct buf *buf)
 	int len = w->byte_len;
 	struct bth bth = { };
 	struct deth deth;	/* BTH subheader */
-	char header[200];
+	char header[200] = "";
 
 	if (i == i2r + INFINIBAND) {
 		__be16 lrh[4];
@@ -2934,8 +2934,8 @@ static void receive_raw(struct buf *buf)
 		lids[1] = w->slid = ib_get_slid(ih);
 		w->sl = ib_get_sl(ih);
 
-		if ((w->slid & 0xc000)) {
-			reason = "Source LID is Multicast/Broadcast";
+		if ((w->slid & 0xc000) || !lids[0] || !lids[1]) {
+			reason = "Invalid SLID or DLID";
 			goto discard;
 		}
 
@@ -3374,10 +3374,15 @@ static void handle_receive_packet(void *private)
 	ssize_t len;
 	struct buf *buf = alloc_buffer(c);
 
-	len = recv(c->fh, &buf->raw, DATA_SIZE, 0);
+	len = recv(c->fh, buf->raw, DATA_SIZE, 0);
 
 	if (len < 0) {
 		logg(LOG_ERR, "recv error on %s:%s\n", c->text, errname());
+		return;
+	}
+
+	if (len < 10) {
+		logg(LOG_ERR, "Packet size below minimal %ld\n", len);
 		return;
 	}
 		
@@ -3809,7 +3814,7 @@ static void logging(void)
 	n = 0;
 	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES;i++)
       	   if (i->context)	{
-		n+= sprintf(counts + n, "%s(MC %d/%d, UD %d/%d, %s %d)",
+		n+= sprintf(counts + n, "%s(MC %d/%d, UD %d/%d, %s %d) ",
 			i->text,
 			i->multicast->stats[packets_received],
 			i->multicast->stats[packets_sent],
