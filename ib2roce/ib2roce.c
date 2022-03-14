@@ -2849,6 +2849,7 @@ static const char *process_arp(struct i2r_interface *i, struct buf *buf, unsigne
 		if (!ep)
 			return "Cannot create Endpoint";
 
+		logg(LOG_NOTICE, "ARP: Created Endpoint IP=%s LID=%d\n", inet_ntoa(ep->addr), ep->lid);
 		memcpy(&ep->gid, mac, arp.ar_hln);
 		if (lids[j]) {
 			if (ep->lid) {
@@ -3052,13 +3053,13 @@ static void receive_raw(struct buf *buf)
 
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
-				reason = "-Only UDP packets";
+				reason = "Only UDP packets";
 				goto discard;
 
 			}
 
 			if (buf->e.ether_dhost[0] & 0x1) {
-				reason = "-Multicast on RAW channel";
+				reason = "Multicast on RAW channel";
 				goto discard;
 			}
 
@@ -3119,7 +3120,7 @@ static void receive_raw(struct buf *buf)
 		if (ec_header.type == ETHERTYPE_ARP)
 			process_arp(i, buf, lids);
 		else
-			reason = "Only ARPs when QP > 1";
+			reason = "-Only ARPs when QP > 1";
 
 		if (reason)
 			goto discard;
@@ -3132,8 +3133,14 @@ static void receive_raw(struct buf *buf)
 	/* Start MAD payload */
 	PULL(buf, buf->umad);
 
+	logg(LOG_NOTICE, "QP1 packet %s from %s LID %d SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
+		inet_ntoa(ep->addr), ep->lid, w->src_qp, __bth_qpn(&bth),
+ 		umad_method_str(buf->umad.mgmt_class, buf->umad.method),
+		umad_common_mad_status_str(buf->umad.status),
+		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id));
+
 	if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
-		reason = "Only CM Class MADs are supported";
+		reason = "-Only CM Class MADs are supported";
 		goto discard;
 	}
 
@@ -3148,10 +3155,9 @@ static void receive_raw(struct buf *buf)
 
 discard:
 	if (reason[0] != '-' || log_packets > 1) 
-		logg(LOG_NOTICE, "Discard %s %s: %s Length=%u/prot=%u/pos=%lu Packet=%s\n",
+		logg(LOG_NOTICE, "Discard %s %s: %s Length=%u/prot=%u/pos=%lu\n",
 			c->text, reason, header,
-			len, buf->w->byte_len, buf->cur - buf->raw,
-			_hexbytes(buf->raw, buf->w->byte_len));
+			buf->w->byte_len, len, buf->cur - buf->raw);
 
 	st(c, packets_invalid);
 packet_done:
