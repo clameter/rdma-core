@@ -2287,11 +2287,17 @@ static bool valid_addr(struct i2r_interface *i, struct in_addr addr) {
 }
 
 /* Create endpoint from the ah_attr values */
-static struct endpoint *ah_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at)
+static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at)
 {
 	struct endpoint *ep;
 	struct in_addr addr;
 	struct ibv_ah *ah;
+
+	memcpy(&addr, (void *)&at->grh.dgid + 12, sizeof(struct in_addr));
+
+	if (!at->dlid && !addr.s_addr)
+		abort();		/* Nothing given that could be resolved */
+
 
 	if (at->dlid) {
 		ep = hash_find(i->ep, &at->dlid);
@@ -2304,8 +2310,6 @@ static struct endpoint *ah_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 			return ep;
 		}
 	}
-
-	memcpy(&addr, (void *)&at->grh.dgid + 12, sizeof(struct in_addr));
 
 	if (addr.s_addr) {
 		ep = hash_find(i->ip_to_ep, &addr.s_addr);
@@ -2324,13 +2328,14 @@ static struct endpoint *ah_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 		at->is_global = 1;
 		map_ipv4_addr_to_ipv6(addr.s_addr, (struct in6_addr *)&at->grh.dgid);
 
-	} else {	/* INFINIBAND is a bit more involved and some calls here may take a long time*/
+	} else
+	if (addr.s_addr) {	/* INFINIBAND is a bit more involved and some calls here may take a long time*/
 
 		struct rdma_cm_id *id;
 		struct sockaddr_in sin = {
 			.sin_family = AF_INET,
-			.sin_addr = ep->addr,
-			.sin_port = 0,
+			.sin_addr = addr,
+			.sin_port = 1,
 		};
 
 		if (rdma_create_id(NULL, &id, NULL, RDMA_PS_UDP)) {
@@ -2338,8 +2343,7 @@ static struct endpoint *ah_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 			return NULL;
 		}
 
-
-		if (rdma_resolve_addr(id, i->multicast->bindaddr, (struct sockaddr *)&sin, 2000)) {
+		if (rdma_resolve_addr(id, NULL, (struct sockaddr *)&sin, 2000)) {
 
 			logg(LOG_ERR, "Failed to resolve address %s:%d:%s\n", inet_ntoa(sin.sin_addr), sin.sin_port, errname());
 			rdma_destroy_id(id);
@@ -2361,7 +2365,6 @@ static struct endpoint *ah_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 		if (at->port_num != id->port_num)
 			abort();
 
-		logg(LOG_NOTICE, "IB Resolved IP address %s DLID=%d sl=%d\n", inet_ntoa(addr), at->dlid, at->sl);
 		rdma_destroy_id(id);
 
 	}
@@ -2382,9 +2385,11 @@ static struct endpoint *ah_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 	ep->lid = at->dlid;
 	ep->ah = ah;
 
-	hash_add(i->ip_to_ep, ep);
+	/* Dont add the address if it has not been determined yet */
+	if (addr.s_addr)
+		hash_add(i->ip_to_ep, ep);
 
-	/* Infiniband needs lookups by IP and LID */
+	/* But IB must have the LID defined so we can at least add that hash */
 	if (i2r + INFINIBAND == i)
 		hash_add(i->ep, ep);
 
@@ -2413,7 +2418,7 @@ static struct endpoint *ip_to_ep(struct i2r_interface *i, struct in_addr addr)
 	};
 
 	memcpy((void *)&at.grh.dgid + 12, &addr, sizeof(struct in_addr));
-	return ah_to_ep(i, &at);
+	return at_to_ep(i, &at);
 }
 
 /*
@@ -2482,7 +2487,7 @@ static struct endpoint *buf_to_ep(struct buf *buf)
 
 	memcpy((void *)&at.grh.dgid + 12, &addr, sizeof(struct in_addr));
 
-	return ah_to_ep(i, &at);
+	return at_to_ep(i, &at);
 }
 
 /*
