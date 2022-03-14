@@ -2983,9 +2983,18 @@ static void receive_raw(struct buf *buf)
 
 	} else { /* Ethernet. We expect a ROCE packet */
 		unsigned ethertype;
+		char source_str[30];
+		char dest_str[30];
+		struct in_addr source, dest;
 
 		pull(buf, &buf->e, sizeof(struct ether_header));
+
 		ethertype = ntohs(buf->e.ether_type);
+		if (ethertype < 0x600) {
+			len = ethertype;
+			ethertype = ETHERTYPE_IP;
+		}
+
 		buf->ether_valid = true;
 
 		if (memcmp(i->if_mac, buf->e.ether_shost, ETH_ALEN) == 0) {
@@ -3010,13 +3019,10 @@ static void receive_raw(struct buf *buf)
 
 			if (!reason)
 				goto packet_done;
+
 			goto discard;
 
 		case ETHERTYPE_IP:
-
-			char source_str[30];
-			char dest_str[30];
-			struct in_addr source, dest;
 
 			PULL(buf, buf->ip);
 			buf->ip_valid = true;
@@ -3059,37 +3065,37 @@ static void receive_raw(struct buf *buf)
 
 			if (ntohs(buf->udp.dest) != ROCE_PORT) {
 
-				reason = "-Not the ROCE UDP port";
+				reason = "Not the ROCE UDP port";
 				goto discard;
 			}
 			break;
 		default:
 			reason = "-Not IP traffic";
-			/* Fall through */
+			goto discard;
 		}
-		goto discard;
 	}
 
 	buf->source_ep = ep;
 
+
 	PULL(buf, bth);
 	buf->end -= ICRC_SIZE;
 
-	if (ntohl(bth.qpn) == 0) {
+	if (__bth_qpn(&bth) == 0) {
 		reason = "Raw channels do not handle QP0 traffic";
 		goto discard;
 	}
 
-	if (bth.opcode != IB_OPCODE_UD_SEND_ONLY &&
-		bth.opcode !=  IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
+	if (__bth_opcode(&bth) != IB_OPCODE_UD_SEND_ONLY &&
+		__bth_opcode(&bth) !=  IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
 			reason = "Only UD Sends are supported";
                         goto discard;
         }
 
 	PULL(buf, deth);
-	w->src_qp = deth.sqp;
+	w->src_qp = __deth_sqp(&deth);
 
-	if (bth.opcode == IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
+	if (__bth_opcode(&bth) == IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
 		PULL(buf, buf->immdt);
 		buf->imm_valid = true;
 		buf->imm = buf->immdt.imm;
@@ -3097,7 +3103,7 @@ static void receive_raw(struct buf *buf)
 
 	buf->cur += __bth_pad(&bth);
 
-	if (bth.qpn > 2) {
+	if (__bth_qpn(&bth) > 2) {
 		struct {
 			unsigned short type;
 			unsigned short reserved;
@@ -3404,7 +3410,10 @@ static void handle_receive_packet(void *private)
 	buf->w = &w;
 	reset_flags(buf);
 	PULL(buf, buf->e);
+
 	ethertype = ntohs(buf->e.ether_type);
+	if (ethertype < 0x600)
+		ethertype = ETHERTYPE_IP;
 
 	if (ethertype == ETHERTYPE_IP) {
 		PULL(buf, buf->ip);
