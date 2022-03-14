@@ -75,6 +75,7 @@
 #include "fifo.h"
 #include "hash.h"
 #include "ibraw.h"
+#include "cma-hdr.h"
 
 #define VERSION "2022.0220"
 
@@ -2730,7 +2731,6 @@ struct sidr_req {
 	uint16_t	pkey;
 	uint16_t	reserved;
 	uint64_t	service_id;
-	char private[100];
 } __packed;
 
 #if 0
@@ -2753,47 +2753,6 @@ static void print_sidr(void)
 }
 
 #endif
-
-static bool scan_private(char *s, struct in_addr *tx, struct in_addr *rx)
-{
-	struct {
-		struct in_addr x;
-		char ip[4];
-	} addr;
-	unsigned short port;
-	int r;
-	char *p = s;
-	char type[2];
-
-	tx->s_addr = 0;
-	rx->s_addr = 0;
-	while (*p) {
-		/* Find the beginning of the rmmXXX */
-		while (*p != 'r')
-			p++;
-
-		if (!*p)
-			goto exit;
-
-		r = sscanf(p, "rmm%cx at %hhu.%hhu.%hhu.%hhu|%hu", type, addr.ip, addr.ip + 1, addr.ip + 2, addr.ip + 3, &port);
-
-		logg(LOG_NOTICE, "Scan result = %d Type=%s IP=%s port=%d offset=%ld\n", r, type, inet_ntoa(addr.x), port, p - s);
-
-		if (r != 6)
-			return false;
-
-		if (*type == 'R')
-			*rx = addr.x;
-		else if (*type == 'T')
-			*tx = addr.x;
-		else
-			goto exit;
-
-		p += 10;
-	}
-exit:
-	return tx->s_addr || rx->s_addr;
-}
 
 /*
  * Simple listener to quickly gather IP/ GID information off the wire
@@ -2883,12 +2842,27 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 	} else { /* Infiniband */
 		struct in_addr source;
 		struct sidr_req sr;
+		struct cma_hdr ch; 
 
 		PULL(buf, sr);
+		PULL(buf, ch);
 
-		dest.s_addr = 0;
-		if (!scan_private(sr.private + 36, &source, &dest))
-			return "SIDR REQ: Dest and Source IP not determined";
+		if (ch.cma_version != CMA_VERSION)
+			return "SIDR REQ: Unsupported CMA version";
+
+		if (cma_get_ip_ver(&ch) != 4)
+			return "SIDR REQ: Only IPv4 private data supported";
+
+
+		/* For some reason this is being crossed here */
+		source.s_addr = ch.dst_addr.ip4.addr;
+		dest.s_addr = ch.src_addr.ip4.addr;
+
+		if (!valid_addr(source_i, source))
+			return "SIDR REQ: Invalid Source address";
+
+		if (!valid_addr(dest_i, dest))
+			return "SIDR REQ: Invalid Destination address";
 
 		if (source_ep->addr.s_addr == 0 && source.s_addr) {
 			source_ep->addr = source;
@@ -2904,8 +2878,6 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 	dest_ep = ip_to_ep(dest_i, dest);
 	if (!dest_ep)
 		return "Cannot forward MAD packet. AH is not known";
-
-	logg(LOG_NOTICE, "SIDR REQ: Dest %s on %s QP=%d\n", inet_ntoa(dest_ep->addr), dest_i->text, w->src_qp);
 
 	if (bridging) {
 
