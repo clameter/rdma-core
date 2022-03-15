@@ -2872,21 +2872,15 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 		source.s_addr = ch.dst_addr.ip4.addr;
 		dest.s_addr = ch.src_addr.ip4.addr;
 
-		if (!valid_addr(source_i, source))
-			return "SIDR REQ: Invalid Source address";
-
 		if (!valid_addr(dest_i, dest))
 			return "SIDR REQ: Invalid Destination address";
 
-		if (source_ep->addr.s_addr == 0 && source.s_addr) {
+		if (valid_addr(source_i, source) && source_ep->addr.s_addr == 0) {
 			source_ep->addr = source;
 			hash_add(source_i->ip_to_ep, source_ep);
 			logg(LOG_NOTICE, "SIDR REQ: Private data supplied IP address %s to Endpoint at LID %d\n",
 				inet_ntoa(source), w->slid);
 		}
-
-		if (!dest.s_addr)
-			return "SIDR REQ: Destination not determined";
 	}
 
 	dest_ep = ip_to_ep(dest_i, dest);
