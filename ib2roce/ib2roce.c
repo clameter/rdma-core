@@ -2411,7 +2411,7 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 		return NULL;
 	}
 
-	if (!unicast_lid(at->dlid)) {
+	if (at->dlid && !unicast_lid(at->dlid)) {
 		logg(LOG_ERR, "at_to_ep: %s Invalid LID %x\n", i->text, at->dlid);
 		return NULL;
 	}
@@ -2803,7 +2803,7 @@ static void print_sidr(void)
 /*
  * Simple listener to quickly gather IP/ GID information off the wire
  */
-static const char *process_arp(struct i2r_interface *i, struct buf *buf, unsigned short lids[2])
+static const char *process_arp(struct i2r_interface *i, struct buf *buf, uint16_t lids[2])
 {
 	uint8_t mac[20];
 	unsigned j;
@@ -2854,7 +2854,7 @@ static const char *process_arp(struct i2r_interface *i, struct buf *buf, unsigne
 		if (!ep)
 			return "Cannot create Endpoint";
 
-		logg(LOG_NOTICE, "ARP: Created Endpoint IP=%s LID=%d\n", inet_ntoa(ep->addr), ep->lid);
+		logg(LOG_NOTICE, "ARP: Created Endpoint IP=%s LID=%x\n", inet_ntoa(ep->addr), ep->lid);
 		memcpy(&ep->gid, mac, arp.ar_hln);
 		if (lids[j]) {
 			if (ep->lid) {
@@ -2941,7 +2941,7 @@ static void receive_raw(struct buf *buf)
 	struct i2r_interface *i = c->i;
 	struct ibv_wc *w = buf->w;
 	struct endpoint *ep;
-	unsigned short lids[2] = { 0, 0 };
+	uint16_t lids[2] = { 0, 0 };
 	unsigned short dlid = 0;
 	void *mad_pos;
 	const char *reason;
@@ -2963,7 +2963,13 @@ static void receive_raw(struct buf *buf)
 		w->sl = ib_get_sl(ih);
 
 		if (!unicast_lid(w->slid) || !lids[1]) {
+			logg(LOG_NOTICE, "SLID=%x DLID=%x\n", lids[0], lids[1]);
 			reason = "Invalid SLID or DLID";
+			goto discard;
+		}
+
+		if (w->slid == i->port_attr.lid) {
+			reason = "Unicast Loopback";
 			goto discard;
 		}
 
@@ -3144,7 +3150,7 @@ static void receive_raw(struct buf *buf)
 	/* Start MAD payload */
 	PULL(buf, buf->umad);
 
-	logg(LOG_NOTICE, "QP1 packet %s from %s LID %d SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
+	logg(LOG_NOTICE, "QP1 packet %s from %s LID %x SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
 		inet_ntoa(ep->addr), ep->lid, w->src_qp, __bth_qpn(&bth),
  		umad_method_str(buf->umad.mgmt_class, buf->umad.method),
 		umad_common_mad_status_str(buf->umad.status),
@@ -3561,7 +3567,7 @@ static void status_write(void)
 				n += snprintf(b + n, sizeof(buf) - n, "\n%3d. %s", offset + j + 1, inet_ntoa(e[j]->addr));
 
 				if (ep->lid)
-					n += snprintf(b + n, sizeof(buf) - n, " LID=%d", ep->lid);
+					n += snprintf(b + n, sizeof(buf) - n, " LID=%x", ep->lid);
 
 				if (ep->gid.global.interface_id)
 					n += snprintf(b + n, sizeof(buf) - n, " GID=%s",
