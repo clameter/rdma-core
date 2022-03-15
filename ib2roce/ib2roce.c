@@ -3010,9 +3010,8 @@ static void receive_raw(struct buf *buf)
 			dest.s_addr = buf->ip.daddr;
 			strcpy(source_str, inet_ntoa(source));
 			strcpy(dest_str, inet_ntoa(dest));
-			snprintf(header, sizeof(header), "%s(%s) -> %s", source_str,
-				       hexbytes(buf->e.ether_shost, ETH_ALEN, '-'),
-			       	       dest_str);
+			snprintf(header, sizeof(header), "%s -> %s",
+				source_str, dest_str);
 
 			buf->addr = source;
 
