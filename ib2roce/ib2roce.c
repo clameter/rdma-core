@@ -2932,11 +2932,11 @@ static void receive_raw(struct buf *buf)
 
 		len = ntohs(lrh[2]) *4;
 
-		lids[0] = ib_get_dlid(ih);
-		lids[1] = w->slid = ib_get_slid(ih);
+		lids[0] = w->slid = ib_get_slid(ih);
+		lids[1] = ib_get_dlid(ih);
 		w->sl = ib_get_sl(ih);
 
-		if (!unicast_lid(w->slid) || !lids[0]) {
+		if (!unicast_lid(w->slid) || !lids[1]) {
 			reason = "Invalid SLID or DLID";
 			goto discard;
 		}
