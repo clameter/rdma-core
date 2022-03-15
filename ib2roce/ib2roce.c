@@ -2264,9 +2264,28 @@ static bool remove_forward(struct endpoint *source, unsigned source_qp)
 		} else {
 			source->forwards = f->next;
 		}
+		free(f);
 		return true;
 	} else
 		return false;
+}
+
+/*
+ * Remove all forwards of an endpoint and indicate how many
+ * were removed.
+ */
+static unsigned int remove_forwards(struct endpoint *source)
+{
+	unsigned int n = 0;
+
+	while (source->forwards) {
+		struct forward *f = source->forwards;
+
+		source->forwards = f->next;
+		free(f);
+		n++;
+	}
+	return n;
 }
 
 /*
