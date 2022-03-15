@@ -1083,6 +1083,17 @@ static void channel_destroy(struct rdma_channel *c)
 	free(c);
 }
 
+#ifdef HAVE_MSTFLINT
+static void shutdown_sniffer(int arg) {
+	struct i2r_interface *i = i2r + INFINIBAND;
+
+	if (clear_ib_sniffer(i->port, i->raw->qp))
+		logg(LOG_ERR, "Failed to switch off sniffer mode on %s\n", i->raw->text);
+	else
+		logg(LOG_NOTICE, "ABORT handler cleared the sniffer mode on Infiniband\n");
+}
+#endif
+
 static void qp_destroy(struct i2r_interface *i)
 {
 #ifdef HAVE_MSTFLINT
@@ -1391,6 +1402,8 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 			free(c);
 			return NULL;
 		}
+		/* Install abort handler so that we can be sure that the capture mode is switched off */
+		signal(SIGABRT, &shutdown_sniffer);
 	}
 #endif
 	return c;
