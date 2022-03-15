@@ -2900,18 +2900,46 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 			return "SIDR REQ: Only IPv4 private data supported";
 
 
-		/* For some reason this is being crossed here */
-		source.s_addr = ch.dst_addr.ip4.addr;
-		dest.s_addr = ch.src_addr.ip4.addr;
+		source.s_addr = ch.src_addr.ip4.addr;
+		dest.s_addr = ch.dst_addr.ip4.addr;
 
-		if (!valid_addr(dest_i, dest))
+		if (dest.s_addr && !valid_addr(dest_i, dest))
 			return "SIDR REQ: Invalid Destination address";
 
 		if (valid_addr(source_i, source) && source_ep->addr.s_addr == 0) {
-			source_ep->addr = source;
-			hash_add(source_i->ip_to_ep, source_ep);
-			logg(LOG_NOTICE, "SIDR REQ: Private data supplied IP address %s to Endpoint at LID %d\n",
-				inet_ntoa(source), w->slid);
+			struct endpoint *sep = hash_find(source_i->ip_to_ep, &source);
+
+			if (sep) {
+				char b[40];
+				struct endpoint *tep;
+
+				strcpy(b, inet_ntoa(source_ep->addr));
+
+				logg(LOG_NOTICE, "SIDR_REQ: Two endpoints claim the same IP : EP1(%p by ip)= (%s,%x) EP2(from receive_raw) = (%p %s,%x)\n",
+					sep, inet_ntoa(sep->addr), sep->lid, source_ep, b, source_ep->lid);
+
+				tep = hash_find(source_i->ep, &source_ep->lid);
+				if (tep)
+					logg(LOG_NOTICE, "SIDR REQ lookup by lid = %p %s, %x\n", tep, tep ? inet_ntoa(tep->addr) : "--", tep ? tep->lid : 0);
+				else
+					logg(LOG_NOTICE, "SIDR REQ nothing found when looking up by lid =%x\n", source_ep->lid); 
+
+				if (source_ep->forwards) {
+					logg(LOG_WARNING, "SIDR REQ: Removing forwards frp, EP %p lid=%u\n", source_ep, source_ep->lid);
+					remove_forwards(source_ep);
+				}
+				logg(LOG_WARNING, "SIDR REQ: Removing EP=%p\n", source_ep);
+				hash_del(source_i->ep, source_ep);
+				free(source_ep);
+				buf->source_ep = sep;
+
+			} else {
+			
+				source_ep->addr = source;
+				hash_add(source_i->ip_to_ep, source_ep);
+				logg(LOG_NOTICE, "SIDR REQ: Private data supplied IP address %s to Endpoint at LID %x\n",
+					inet_ntoa(source), w->slid);
+			}
 		}
 	}
 
