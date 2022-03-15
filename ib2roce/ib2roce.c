@@ -2287,6 +2287,10 @@ static bool valid_addr(struct i2r_interface *i, struct in_addr addr) {
 	return ((addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask));
 }
 
+static bool unicast_lid(uint16_t lid) {
+	return lid > 0 && lid < 0xc000;
+}
+
 /* Create endpoint from the ah_attr values */
 static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at)
 {
@@ -2315,7 +2319,7 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 	if (addr.s_addr) {
 		ep = hash_find(i->ip_to_ep, &addr.s_addr);
 		if (ep) {
-			if (at->dlid && ep->lid == 0 && at->dlid != 0xffff) {
+			if (at->dlid && ep->lid == 0 && unicast_lid(at->dlid)) {
 				/* Add earlier unknown LID */
 				ep->lid = at->dlid;
 				hash_add(i->ep, &ep);
@@ -2474,7 +2478,7 @@ static struct endpoint *buf_to_ep(struct buf *buf)
 			}
 			buf->cur = position;
 		}
-		if ((w->slid & 0xc000)) {
+		if (!unicast_lid(w->slid)) {
 
 			/* No source LID */
 			logg(LOG_ERR, "Invalid Source LID %x\n", w->slid);
@@ -2922,7 +2926,7 @@ static void receive_raw(struct buf *buf)
 		lids[1] = w->slid = ib_get_slid(ih);
 		w->sl = ib_get_sl(ih);
 
-		if ((w->slid & 0xc000) || !lids[0] || !lids[1]) {
+		if (!unicast_lid(w->slid) || !lids[0]) {
 			reason = "Invalid SLID or DLID";
 			goto discard;
 		}
