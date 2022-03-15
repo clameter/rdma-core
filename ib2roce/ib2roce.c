@@ -2374,6 +2374,16 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 
 	}
 
+	if (addr.s_addr && !valid_addr(i, addr)) {
+		logg(LOG_ERR, "at_to_ep: %s Invalid address %s\n", i->text, inet_ntoa(addr));
+		return NULL;
+	}
+
+	if (!unicast_lid(at->dlid)) {
+		logg(LOG_ERR, "at_to_ep: %s Invalid LID %x\n", i->text, at->dlid);
+		return NULL;
+	}
+
 	ah = ibv_create_ah(i->pd, at);
 	if (!ah) {
 		logg(LOG_ERR, "create_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
