@@ -66,6 +66,7 @@
 #include <linux/udp.h>
 #include <linux/if_arp.h>
 #include <linux/if_packet.h>
+#include <infiniband/mad.h>
 #include <infiniband/umad_cm.h>
 #include <infiniband/umad_str.h>
 #include "packet.h"
@@ -237,7 +238,8 @@ static struct i2r_interface {
 	struct ibv_context *context;		/* Not for RDMA CM use */
 	struct rdma_event_channel *rdma_events;
 	struct rdma_channel *multicast;
-	struct rdma_channel *ud;
+	struct rdma_channel *qp1;		/* Channel for QP1 communications but not QP1 (userspace) */
+	struct rdma_channel *ud;		/* Regular data */
 	struct rdma_channel *raw;
 	struct ibv_comp_channel *comp_events;
 	struct ibv_cq *cq;
@@ -1048,6 +1050,9 @@ static int post_receive_buffers(struct i2r_interface *i)
 	if (i->ud)
 		ret = post_receive(i->ud, 100);
 
+	if (i->qp1)
+		ret = post_receive(i->qp1, 100);
+
 out:
 	return ret;
 }
@@ -1111,6 +1116,9 @@ static void qp_destroy(struct i2r_interface *i)
 
 	channel_destroy(i->ud);
 	i->ud = NULL;
+
+	channel_destroy(i->qp1);
+	i->qp1 = NULL;
 }
 
 /* Retrieve Kernel Stack info about the interface */
@@ -1563,6 +1571,7 @@ static void setup_interface(enum interfaces in)
 
 	if (unicast) {
 		i->ud = create_ud_channel(i, i->port, 100, RDMA_UDP_QKEY);
+		i->qp1 = create_ud_channel(i, i->port, 1, IB_DEFAULT_QP1_QKEY);
 		i->raw = create_raw_channel(i, i->port, 100);
 		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
 		if (i == i2r + INFINIBAND)
@@ -2956,7 +2965,7 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 		add_forward(dest_ep, 1, source_ep, w->src_qp);
 
 		buf->cur = mad_pos;
-		send_ud(dest_i->ud, buf, dest_ep->ah, 1);
+		send_ud(dest_i->qp1, buf, dest_ep->ah, 1);
 		logg(LOG_NOTICE, "SIDR REQ forwarded to %s:1. Reply redirection 1->%d\n", inet_ntoa(dest_ep->addr), w->src_qp);
 	} else
 		free_buffer(buf);
@@ -3986,6 +3995,11 @@ static void arm_channels(void)
 		if (i->ud) {
 			start_channel(i->ud);
 			ibv_req_notify_cq(i->ud->cq, 0);
+		}
+
+		if (i->qp1) {
+			start_channel(i->qp1);
+			ibv_req_notify_cq(i->qp1->cq, 0);
 		}
 	}
 
