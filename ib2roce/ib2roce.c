@@ -2907,7 +2907,10 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 	struct in_addr dest;
 	struct endpoint *dest_ep = NULL;
 	struct ibv_wc *w = buf->w;
+	char source_str[40];
+	struct sidr_req sr;
 
+	PULL(buf, sr);
 	buf->c = dest_i->ud;
 
 	/* Establish Destination */
@@ -2917,10 +2920,8 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 
 	} else { /* Infiniband */
 		struct in_addr source;
-		struct sidr_req sr;
 		struct cma_hdr ch; 
 
-		PULL(buf, sr);
 		PULL(buf, ch);
 
 		if (ch.cma_version != CMA_VERSION)
@@ -2973,23 +2974,98 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 		}
 	}
 
+	strcpy(source_str, inet_ntoa(source_ep->addr));
 	dest_ep = ip_to_ep(dest_i, dest);
 	if (!dest_ep)
-		return "Cannot forward MAD packet. AH is not known";
+		return "Cannot forward SIDR REP since the address is unknown";
 
 	if (bridging) {
-
-		remove_forward(dest_ep, 1);
-
-		/* Is the source qp in wc really valid for raw sockets ? */
-		add_forward(dest_ep, 1, source_ep, w->src_qp);
+		struct sidr_state *ss = malloc(sizeof(struct sidr_state));
 
 		buf->cur = mad_pos;
+		buf->end = mad_pos + 256;
 		send_ud(dest_i->qp1, buf, dest_ep->ah, 1);
-		logg(LOG_NOTICE, "SIDR REQ forwarded to %s:1. Reply redirection 1->%d\n", inet_ntoa(dest_ep->addr), w->src_qp);
+		logg(LOG_NOTICE, "SIDR REQ forwarded from %s to %s\n",
+			source_str, inet_ntoa(dest_ep->addr));
+
+		/* Save state */
+		ss->request_id = sr.request_id;
+		ss->source = source_ep;
+		ss->dest = dest_ep;
+		if (hash_find(sidrs, &ss->request_id)) {
+			logg(LOG_ERR, "SIDR_REQ: Removed earlier pending request\n");
+			hash_del(sidrs, ss);
+		}
+		hash_add(sidrs, ss);
+		
 	} else
 		free_buffer(buf);
 
+	return NULL;
+}
+
+/*
+ * SDIR REP needs to do the whole work since we do not keep state
+ * elsewhere
+ *
+ * SDIR REQ was forwarded to EP. Now the SDIR_REP is coming back
+ *
+ * The Dest is the EP that sends us the response.
+ *
+ * We need to determine the true source (tm) and replace
+ * the QPN so that future packets arriving from
+ * the EP will be properly forwarded and also the other
+ * way around.
+ */
+static const char * sidr_rep(struct buf *buf, void *mad_pos)
+{
+	struct sidr_rep sr;
+	struct sidr_state *ss;
+
+	PULL(buf, sr);
+
+	if (sr.status)
+		return "SIDR_REP: Request rejected";
+
+	ss = hash_find(sidrs, &sr.request_id);
+	if (!ss)
+		return "SDIR_REP: Cannot find outstanding SIDR_REQ";
+
+	hash_del(sidrs, ss);
+
+	if (ss->dest != buf->source_ep)
+		abort();
+
+	/*
+	 * We do not know the source QPN. So just accept anything that
+ 	 * has the right destination. Not good
+ 	 */
+	add_forward(ss->source, 0, ss->dest, sr.qpn);
+
+	sr.qpn = ss->source->c->i->ud->qp->qp_num;
+
+	logg(LOG_NOTICE, "SIDR_REP: %s method=%s status=%s qpn=%x attr_id=%s attr_mod=%x SID=%x RID=%x Q_KEY=%x QPN=%x Status=%x\n",
+		buf->c->text, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
+		umad_common_mad_status_str(buf->umad.status), ntohl(sr.qpn), 
+		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
+		ntohl(sr.service_id), ntohl(sr.request_id), ntohs(sr.q_key), ntohl(sr.qpn), sr.status);
+
+	if (bridging) {
+		char source_str[40];
+
+		strcpy(source_str, inet_ntoa(ss->source->addr));
+
+		buf->cur = buf->raw;
+		buf->end = buf->cur + 256;
+		memcpy(buf->raw, &sr, sizeof(sr));
+
+		send_ud(ss->source->c->i->qp1, buf, ss->source->ah, 1);
+		logg(LOG_NOTICE, "SIDR REP forwarded from %s to %s\n",
+			inet_ntoa(ss->dest->addr), source_str);
+	} else
+		free_buffer(buf);
+
+	free(ss);
 	return NULL;
 }
 
@@ -3015,6 +3091,9 @@ static void receive_raw(struct buf *buf)
 		PULL(buf, lrh);
 
 		len = ntohs(lrh[2]) *4;
+		if (len != w->byte_len) {
+			buf->end = buf->raw + len;
+		}
 
 		lids[0] = w->slid = ib_get_slid(ih);
 		lids[1] = ib_get_dlid(ih);
@@ -3226,6 +3305,13 @@ static void receive_raw(struct buf *buf)
 		return;
 	}
 
+	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REP) {
+		reason = sidr_rep(buf, mad_pos);
+		if (reason)
+			goto discard;
+		return;
+	}
+
 	reason = "Only SIDR_REQ";
 
 discard:
@@ -3237,59 +3323,6 @@ discard:
 	st(c, packets_invalid);
 packet_done:
 	free_buffer(buf);
-}
-
-
-/*
- * The SIDR REP does only packet inspection since the packed briding
- * happens in receive_ud
- */
-static void sidr_rep(struct buf *buf, struct endpoint *source, struct endpoint *dest)
-{
-	struct sidr_rep sr;
-	unsigned short dest_qp;
-	struct forward *f;
-
-	PULL(buf, sr);
-
-	if (sr.status)
-		return;
-
-	dest_qp = sr.qpn;
-
-	/*
-	 * We should have the parameters now to establish the corect forwarding between the
-	 * QPs on the two hosts
-	 */
-
-	/* Traffic will originate on the indicated QP from the Destination (that is the sender of the SIDR_REP) */
-	f = update_forward(source, 1, dest_qp);
-	if (!f) {
-		logg(LOG_ERR, "Received SIDR_REP without a SIDR_REQ\n");
-		return;
-	}
-
-	if (remove_forward(dest, f->source_qp))
-		syslog(LOG_WARNING, "Removing prior existing connection\n");
-
-	/* Traffic from the originator needs to be forwarded to the QP of the sender */
-	add_forward(dest, f->source_qp, source, dest_qp);
-	return;
-
-#if 0
-	char *payload = alloca(1500);
-	buf->cur = buf->raw;
-	__hexbytes(payload, buf->cur, buf->end - buf->cur, ' ');
-
-	logg(LOG_NOTICE, "SIDR_REP: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x SID=%x RID=%x Q_KEY=%x QPN=%x Status=%x %s\n",
-		buf->c->text, buf->bth.apsn, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-		umad_common_mad_status_str(buf->umad.status),
-		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
-		ntohl(sr.service_id), ntohl(sr.request_id), ntohs(sr.q_key), ntohl(sr.qpn), sr.status,
-		payload);
-
-	free_buffer(buf);
-#endif
 }
 
 /* Unicast packet reception */
@@ -3315,36 +3348,6 @@ static void receive_ud(struct buf *buf)
 		reason = "No QPN is connected";
 		goto discard;
 	}
-
-	if (w->src_qp == 1) {
-		/* QP1 traffic SIDR REP as a response to SIDR REQ */
-		void *mad_pos = buf->cur;
-
-		syslog(LOG_NOTICE, "Traffic on QP1 from %s\n", inet_ntoa(e->addr));
-
-		PULL(buf, buf->umad);
-
-		buf->cur = mad_pos;
-
-		if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
-			goto bridge;
-		}
-
-		if (ntohs(buf->umad.attr_id) != UMAD_CM_ATTR_SIDR_REP) {
-			goto bridge;
-		}
-
-		sidr_rep(buf, buf->source_ep, e);
-		return;
-	}
-
-	/* Now we have the destination endpoint */
-	e = f->dest;
-
-bridge:
-	send_ud(e->c, buf, e->ah, f->dest_qp);
-
-	return;
 
 discard:
 	logg(LOG_NOTICE, "Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
