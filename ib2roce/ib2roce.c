@@ -1436,6 +1436,11 @@ static struct rdma_channel *create_packet_socket(struct i2r_interface *i, int po
 		.sll_halen = sizeof(struct in_addr),
 	};
 
+	if (i == i2r + INFINIBAND) {
+		logg(LOG_ERR, "Packet Sockets do not work right on Infiniband");
+		return NULL;
+	}
+
 	fh = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 
 	if (fh < 0) {
@@ -2375,8 +2380,7 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 		at->is_global = 1;
 		map_ipv4_addr_to_ipv6(addr.s_addr, (struct in6_addr *)&at->grh.dgid);
 
-	} else
-	if (addr.s_addr) {	/* INFINIBAND is a bit more involved and some calls here may take a long time*/
+	} else if (addr.s_addr) {	/* INFINIBAND is a bit more involved and some calls here may take a long time*/
 
 		struct rdma_cm_id *id;
 		struct sockaddr_in sin = {
@@ -2510,7 +2514,17 @@ static struct endpoint *buf_to_ep(struct buf *buf)
 		if (!addr.s_addr)
 			addr.s_addr = buf->ip.saddr;
 
-	} else {	/* Infiniband */
+	} else
+        if (i == i2r + INFINIBAND) {	/* Infiniband */
+
+		if (!unicast_lid(w->slid)) {
+
+			/* No source LID */
+			logg(LOG_ERR, "Invalid Source LID %x on %s\n", w->slid, c->text);
+			free(ep);
+
+			return NULL;
+		}
 		if (buf->grh_valid) {
 			void *position = buf->cur;
 
@@ -2529,14 +2543,6 @@ static struct endpoint *buf_to_ep(struct buf *buf)
 					logg(LOG_ERR, "No IP address for QP1 packet on %s\n", c->text);
 			}
 			buf->cur = position;
-		}
-		if (!unicast_lid(w->slid)) {
-
-			/* No source LID */
-			logg(LOG_ERR, "Invalid Source LID %x\n", w->slid);
-			free(ep);
-
-			return NULL;
 		}
 	}
 
