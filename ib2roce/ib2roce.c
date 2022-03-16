@@ -2862,26 +2862,40 @@ struct sidr_req {
 	uint64_t	service_id;
 } __packed;
 
-#if 0
-static void print_sidr(void)
+struct sidr_rep {
+	uint32_t request_id;
+	uint8_t	status;
+	uint8_t ail;
+	uint16_t vendorid1;
+	uint32_t qpn;
+	uint64_t service_id;
+	uint32_t q_key;
+	char add_info[72];
+	char private[136];
+} __packed;
+
+struct sidr_state {
+	uint32_t request_id;            /* Should be generated locally in the future */
+	struct endpoint *source;
+	struct endpoint *dest;
+};
+
+static struct hash *sidrs;
+
+static void sidr_state_init(void)
 {
-	char *payload = alloca(1500);
-	struct sidr_req sr;
+	if (sizeof(struct umad_hdr) != 3 * 8)
+		abort();
 
-	PULL(buf, sr);
+	if (sizeof(struct sidr_req) != 2 * 8)
+		abort();
 
-	buf->cur = buf->raw;
-	__hexbytes(payload, buf->cur, buf->end - buf->cur, ' ');
+	if (sizeof(struct sidr_rep) != 3* 8 + 72 + 136)
+		abort();
 
-	logg(LOG_NOTICE, "SIDR_REQ: %s APSN=%x method=%s status=%s attr_id=%s attr_mod=%x SID=%lx RID=%x pkey=%x %s\n",
-		header, buf->bth.apsn, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-		umad_common_mad_status_str(buf->umad.status),
-		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
-		be64toh(sr.service_id), ntohl(sr.request_id), ntohs(sr.pkey),
-		payload);
+	sidrs = hash_create(offsetof(struct sidr_state, request_id), sizeof(uint32_t));
 }
 
-#endif
 
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 {
@@ -3225,18 +3239,6 @@ packet_done:
 	free_buffer(buf);
 }
 
-
-struct sidr_rep {
-	uint32_t request_id;
-	uint8_t	status;
-	uint8_t ail;
-	uint16_t vendorid1;
-	uint32_t qpn;
-	uint64_t service_id;
-	uint32_t q_key;
-	char add_info[72];
-	char private[100];
-} __packed;
 
 /*
  * The SIDR REP does only packet inspection since the packed briding
@@ -4388,6 +4390,8 @@ int main(int argc, char **argv)
 	int op, ret = 0;
 
 	mc_hash = hash_create(offsetof(struct mc, addr), sizeof(struct in_addr));
+
+	sidr_state_init();
 
 	while ((op = getopt_long(argc, argv, "vtfunb::xl::i:r:m:o:d:p:c:ya",
 					opts, NULL)) != -1)
