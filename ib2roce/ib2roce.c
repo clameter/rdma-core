@@ -1327,10 +1327,11 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multi
 }
 
 /* Not using rdmacm so this is easier on the callbacks */
-static struct rdma_channel *create_channel(struct i2r_interface *i, receive_callback receive,
+static struct rdma_channel *create_channel(struct i2r_interface *i, uint32_t qkey,
 		int port, unsigned nr_cq, const char *text, int qp_type, enum channel_type type)
 {
-	struct rdma_channel *c = new_rdma_channel(i, receive, type);
+	struct rdma_channel *c = new_rdma_channel(i,
+		       type == channel_raw ? receive_raw : receive_ud, type);
 	int ret;
 	struct ibv_qp_init_attr_ex init_qp_attr_ex;
 
@@ -1375,7 +1376,7 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 	c->attr.port_num = port;
 	c->attr.qp_state = IBV_QPS_INIT;
 	c->attr.pkey_index = 0;
-	c->attr.qkey = RDMA_UDP_QKEY;
+	c->attr.qkey = qkey;
 
 //	c->attr.qkey = 0x12345;		/* Default QKEY from ibdump source code */
 
@@ -1409,9 +1410,9 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, receive_call
 	return c;
 }
 
-static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port, unsigned nr_cq)
+static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port, unsigned nr_cq, uint32_t qkey)
 {
-	return create_channel(i, receive_ud, port, nr_cq, "-ud", IBV_QPT_UD, channel_ud);
+	return create_channel(i, qkey, port, nr_cq, "-ud", IBV_QPT_UD, channel_ud);
 }
 
 static struct rdma_channel *create_packet_socket(struct i2r_interface *i, int port)
@@ -1453,7 +1454,7 @@ static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port
 	struct rdma_channel *c = NULL;
 
 	if (!packet_socket) {
-		c = create_channel(i, receive_raw, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
+		c = create_channel(i, RDMA_UDP_QKEY, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
 
 		if (!c)
 			logg(LOG_WARNING, "Falling back to raw socket on %s to monitor traffic\n", i->text);
@@ -1561,7 +1562,7 @@ static void setup_interface(enum interfaces in)
 	}
 
 	if (unicast) {
-		i->ud = create_ud_channel(i, i->port, 100);
+		i->ud = create_ud_channel(i, i->port, 100, RDMA_UDP_QKEY);
 		i->raw = create_raw_channel(i, i->port, 100);
 		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
 		if (i == i2r + INFINIBAND)
@@ -2016,7 +2017,7 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 	/* Get addr info  */
 	wr.wr.ud.ah = ah;
 	wr.wr.ud.remote_qpn = remote_qpn;
-	wr.wr.ud.remote_qkey = RDMA_UDP_QKEY;
+	wr.wr.ud.remote_qkey = c->attr.qkey;
 
 	sge.length = buf->end - buf->cur;
 	sge.lkey = c->i->mr->lkey;
