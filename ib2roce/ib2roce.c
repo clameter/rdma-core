@@ -2731,6 +2731,73 @@ static void receive_main(struct buf *buf)
 	free_buffer(buf);
 }
 
+/*
+ * Simple listener to quickly gather IP/ GID information off the wire
+ */
+static const char *process_arp(struct i2r_interface *i, struct buf *buf, uint16_t lids[2])
+{
+	uint8_t mac[20];
+	unsigned j;
+	struct arphdr arp;
+
+	PULL(buf, arp);
+	
+	if (ntohs(arp.ar_op) != ARPOP_REPLY)
+       		return "-Only ARP replies supported";
+
+	if (arp.ar_pln != sizeof(struct in_addr))
+		return "ARP protocol length != 4";
+
+	if (ntohs(arp.ar_hrd) != ARPHRD_ETHER &&
+	    ntohs(arp.ar_hrd) != ARPHRD_INFINIBAND)
+		return "ARP implementation supports only Ethernet and Infiniband";
+
+	for (j = 0; j < 2; j++, buf->cur += arp.ar_hln + sizeof(struct in_addr)) {
+		struct endpoint *ep;
+
+		memcpy(mac, buf->cur, arp.ar_hln);
+		memcpy(&buf->addr, buf->cur + arp.ar_hln, sizeof(struct in_addr));
+
+		if (!valid_addr(i, buf->addr)) {
+			logg(LOG_NOTICE, "ARP REPLY: Invalid %sIP=%s MAC=%s\n",
+				j ? "Dest" : " Source",
+			       inet_ntoa(buf->addr),
+				hexbytes(mac, arp.ar_hln,':'));
+			continue;
+		}
+
+		ep = hash_find(i->ep, i2r + ROCE == i ? (void *)&buf->addr : (void *)(lids + j));
+		if (ep) {
+			if (!ep->addr.s_addr) {
+
+				ep->addr = buf->addr;
+				hash_add(i->ip_to_ep, ep);
+
+			} else if(ep->addr.s_addr != buf->addr.s_addr)
+
+				return "IP address for MAC changed!";
+
+			continue;
+		}
+
+		buf->w->slid = lids[j];
+		ep = buf_to_ep(buf);
+		if (!ep)
+			return "Cannot create Endpoint";
+
+		logg(LOG_NOTICE, "ARP: Created Endpoint IP=%s LID=%x\n", inet_ntoa(ep->addr), ep->lid);
+		memcpy(&ep->gid, mac, arp.ar_hln);
+		if (lids[j]) {
+			if (ep->lid) {
+				hash_del(i->ep, ep);
+				ep->lid = lids[j];
+				hash_add(i->ep, ep);
+			}
+		}
+	}
+	return NULL;
+}
+
 /* SIDR handshake with gateway involved. This is based on the assumption
  * that we are dealing with rdmacm data streams where an
  * rdma_listen/accept/rdma_disconnect and rdma_connect/rdma_disconnect
@@ -2815,73 +2882,6 @@ static void print_sidr(void)
 }
 
 #endif
-
-/*
- * Simple listener to quickly gather IP/ GID information off the wire
- */
-static const char *process_arp(struct i2r_interface *i, struct buf *buf, uint16_t lids[2])
-{
-	uint8_t mac[20];
-	unsigned j;
-	struct arphdr arp;
-
-	PULL(buf, arp);
-	
-	if (ntohs(arp.ar_op) != ARPOP_REPLY)
-       		return "-Only ARP replies supported";
-
-	if (arp.ar_pln != sizeof(struct in_addr))
-		return "ARP protocol length != 4";
-
-	if (ntohs(arp.ar_hrd) != ARPHRD_ETHER &&
-	    ntohs(arp.ar_hrd) != ARPHRD_INFINIBAND)
-		return "ARP implementation supports only Ethernet and Infiniband";
-
-	for (j = 0; j < 2; j++, buf->cur += arp.ar_hln + sizeof(struct in_addr)) {
-		struct endpoint *ep;
-
-		memcpy(mac, buf->cur, arp.ar_hln);
-		memcpy(&buf->addr, buf->cur + arp.ar_hln, sizeof(struct in_addr));
-
-		if (!valid_addr(i, buf->addr)) {
-			logg(LOG_NOTICE, "ARP REPLY: Invalid %sIP=%s MAC=%s\n",
-				j ? "Dest" : " Source",
-			       inet_ntoa(buf->addr),
-				hexbytes(mac, arp.ar_hln,':'));
-			continue;
-		}
-
-		ep = hash_find(i->ep, i2r + ROCE == i ? (void *)&buf->addr : (void *)(lids + j));
-		if (ep) {
-			if (!ep->addr.s_addr) {
-
-				ep->addr = buf->addr;
-				hash_add(i->ip_to_ep, ep);
-
-			} else if(ep->addr.s_addr != buf->addr.s_addr)
-
-				return "IP address for MAC changed!";
-
-			continue;
-		}
-
-		buf->w->slid = lids[j];
-		ep = buf_to_ep(buf);
-		if (!ep)
-			return "Cannot create Endpoint";
-
-		logg(LOG_NOTICE, "ARP: Created Endpoint IP=%s LID=%x\n", inet_ntoa(ep->addr), ep->lid);
-		memcpy(&ep->gid, mac, arp.ar_hln);
-		if (lids[j]) {
-			if (ep->lid) {
-				hash_del(i->ep, ep);
-				ep->lid = lids[j];
-				hash_add(i->ep, ep);
-			}
-		}
-	}
-	return NULL;
-}
 
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 {
