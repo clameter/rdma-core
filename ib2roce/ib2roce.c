@@ -3207,13 +3207,13 @@ static void receive_raw(struct buf *buf)
 
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
-				reason = "Only UDP packets";
+				reason = "-Only UDP packets";
 				goto discard;
 
 			}
 
 			if (buf->e.ether_dhost[0] & 0x1) {
-				reason = "Multicast on RAW channel";
+				reason = "-Multicast on RAW channel";
 				goto discard;
 			}
 
@@ -3287,8 +3287,9 @@ static void receive_raw(struct buf *buf)
 	/* Start MAD payload */
 	PULL(buf, buf->umad);
 
-	logg(LOG_NOTICE, "QP1 packet %s from %s LID %x SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
-		inet_ntoa(ep->addr), ep->lid, w->src_qp, __bth_qpn(&bth),
+	logg(LOG_NOTICE, "QP1 packet %s from %s LID %x LRH_LEN=%u WC_LEN=%u SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
+		inet_ntoa(ep->addr), ep->lid, len, w->byte_len,
+		 w->src_qp, __bth_qpn(&bth),
  		umad_method_str(buf->umad.mgmt_class, buf->umad.method),
 		umad_common_mad_status_str(buf->umad.status),
 		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id));
