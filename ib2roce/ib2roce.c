@@ -3344,14 +3344,29 @@ static void receive_ud(struct buf *buf)
 
 	f = find_forward(e, w->src_qp);
 
+ 	if (!f) {
+		/* This is dodgy and dangerous but currently I have
+ 		 * no better idea. Since we do not know the source
+ 		 * QPN when processing SIDRS we just let the
+ 		 * source qpn be zero until we get the first
+ 		 * package from the endpoint...
+ 		 * If there are multiple apps running then I guess
+ 		 * desaster may follow.
+ 		 */
+		f = find_forward(e, 0);
+		if (f)
+			f->source_qp = w->src_qp;
+ 	}
+ 
 	if (!f) {
 		reason = "No QPN is connected";
 		goto discard;
-	}
+ 	}
 
+ 	return;
+ 
 discard:
-	logg(LOG_NOTICE, "Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
-
+	logg(LOG_NOTICE, "receive_ud:Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
 	st(c, packets_invalid);
 	free_buffer(buf);
 }
