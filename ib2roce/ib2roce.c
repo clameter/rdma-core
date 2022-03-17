@@ -2569,7 +2569,7 @@ static void learn_source_address(struct buf *buf)
 	if (!unicast)	/* If unicast is not enabled then dont bother to gather addresses */
 		return;
 
-	buf_to_ep(buf);
+	buf->source_ep = buf_to_ep(buf);
 }
 
 /*
@@ -3340,6 +3340,10 @@ static void receive_ud(struct buf *buf)
 	struct ibv_wc *w = buf->w;
 
 	learn_source_address(buf);
+
+	if (!buf->grh_valid)
+		/* Even if there is no GRH there is space reserved at the beginning for UD packets */
+		buf->cur += 40;
 
 	e = buf->source_ep;
 	if (!e) {
