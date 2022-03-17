@@ -2028,7 +2028,7 @@ static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct 
  * Send data to target using native RDMA structs. This one does not support RDMACM since
  * it uses the shared i->mr and not the c->mr required by rdma cm..
  */
-static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, unsigned remote_qpn)
+static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, uint32_t remote_qpn, uint32_t qkey)
 {
 	struct ibv_send_wr wr, *bad_send_wr;
 	struct ibv_sge sge;
@@ -2041,14 +2041,15 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 	memset(&wr, 0, sizeof(wr));
 	wr.sg_list = &sge;
 	wr.num_sge = 1;
-	wr.opcode = IBV_WR_SEND;
+	wr.opcode = buf->imm_valid ? IBV_WR_SEND_WITH_IMM : IBV_WR_SEND;
+	wr.imm_data = buf->imm;
 	wr.send_flags = IBV_SEND_SIGNALED;
 	wr.wr_id = (uint64_t)buf;
 
 	/* Get addr info  */
 	wr.wr.ud.ah = ah;
 	wr.wr.ud.remote_qpn = remote_qpn;
-	wr.wr.ud.remote_qkey = c->attr.qkey;
+	wr.wr.ud.remote_qkey = qkey;
 
 	sge.length = buf->end - buf->cur;
 	sge.lkey = c->i->mr->lkey;
@@ -3006,7 +3007,7 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 
 		buf->cur = mad_pos;
 		buf->end = mad_pos + 256;
-		send_ud(dest_i->qp1, buf, dest_ep->ah, 1);
+		send_ud(dest_i->qp1, buf, dest_ep->ah, 1, IB_DEFAULT_QP1_QKEY);
 		logg(LOG_NOTICE, "SIDR REQ forwarded from %s to %s\n",
 			source_str, inet_ntoa(dest_ep->addr));
 
@@ -3081,7 +3082,7 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 		buf->end = buf->cur + 256;
 		memcpy(buf->raw, &sr, sizeof(sr));
 
-		send_ud(ss->source->c->i->qp1, buf, ss->source->ah, 1);
+		send_ud(ss->source->c->i->qp1, buf, ss->source->ah, 1, IB_DEFAULT_QP1_QKEY);
 		logg(LOG_NOTICE, "SIDR REP forwarded from %s to %s\n",
 			inet_ntoa(ss->dest->addr), source_str);
 	} else
@@ -3381,15 +3382,24 @@ static void receive_ud(struct buf *buf)
  		 * desaster may follow.
  		 */
 		f = find_forward(e, 0);
-		if (f)
+		if (f) {
 			f->source_qp = w->src_qp;
+			logg(LOG_NOTICE, "Inserted QP#%x into forwarding entry for %s\n", w->src_qp, inet_ntoa(e->addr));
+			add_forward(f->dest, f->dest_qp, e, f->source_qp, f->dest_qkey); 
+		}
  	}
  
 	if (!f) {
 		reason = "No QPN is connected";
 		goto discard;
- 	}
+ 	}	
 
+	buf->imm = htonl(f->dest->c->qp->qp_num);
+
+	logg(LOG_NOTICE, "receive_ud %s Packet len=%u 0x%x lid=%d forwarded to %s %s:0x%x lid=%d qkey=%x\n", c->text,
+			w->byte_len, w->src_qp, e->lid, f->dest->c->i->ud->text, inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
+
+	send_ud(f->dest->c->i->ud, buf, f->dest->ah, f->dest_qp, f->dest_qkey);
  	return;
  
 discard:
