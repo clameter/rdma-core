@@ -1061,11 +1061,11 @@ static int post_receive_buffers(struct i2r_interface *i)
 	if (ret)
 		goto out;
 
+	if (i->qp1)
+		ret = post_receive(i->qp1, 10);
+
 	if (i->ud)
 		ret = post_receive(i->ud, 100);
-
-	if (i->qp1)
-		ret = post_receive(i->qp1, 100);
 
 out:
 	return ret;
@@ -1435,9 +1435,9 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, uint32_t qke
 	return c;
 }
 
-static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port, unsigned nr_cq, uint32_t qkey)
+static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port, unsigned nr_cq, uint32_t qkey, const char *suffix)
 {
-	return create_channel(i, qkey, port, nr_cq, "-ud", IBV_QPT_UD, channel_ud);
+	return create_channel(i, qkey, port, nr_cq, suffix, IBV_QPT_UD, channel_ud);
 }
 
 static struct rdma_channel *create_packet_socket(struct i2r_interface *i, int port)
@@ -1592,8 +1592,8 @@ static void setup_interface(enum interfaces in)
 	}
 
 	if (unicast) {
-		i->ud = create_ud_channel(i, i->port, 100, RDMA_UDP_QKEY);
-		i->qp1 = create_ud_channel(i, i->port, 1, IB_DEFAULT_QP1_QKEY);
+		i->ud = create_ud_channel(i, i->port, 100, RDMA_UDP_QKEY, "-ud");
+		i->qp1 = create_ud_channel(i, i->port, 10, IB_DEFAULT_QP1_QKEY, "-qp1");
 		i->raw = create_raw_channel(i, i->port, 100);
 		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
 		if (i == i2r + INFINIBAND)
