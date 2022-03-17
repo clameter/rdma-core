@@ -317,6 +317,7 @@ static int check_rdma_device(enum interfaces i, int port, char *name,
 {
 	char *s;
 	int p = 1;
+	const char *rdmadev = ibv_get_device_name(c->device);
 
 	if (i2r[i].context)
 		/* Already found a match */
@@ -326,17 +327,29 @@ static int check_rdma_device(enum interfaces i, int port, char *name,
 		/* No command line option, take the first port/device */
 		goto success;
 
+	if (strncmp(name, rdmadev, strlen(rdmadev)))
+		return 0;
+
 	/* Port / device specified */
-	s = strchrnul(name,':');
-	if (*s)
+	s = strchr(name, ':');
+	if (s) {
 		/* Portnumber follows device name */
 		p = atoi(s + 1);
 
-	if (strncmp(name, ibv_get_device_name(c->device), s - name))
-		return 0;
+		if (port != p)
+			return 0;
+	}
 
-	if (port != p)
-		return 0;
+	s = strchr(name, '/');
+	if (s && i == INFINIBAND) {
+		/* IP device name follows */
+		char *q = s + 1;
+
+		while (isdigit(*q) || isalpha(*q))
+			 q++;
+
+		memcpy(i2r[INFINIBAND].if_name, s + 1, q - s - 1);
+	}
 
 success:
 	if (a->active_mtu == IBV_MTU_4096)
@@ -1137,9 +1150,12 @@ static void get_if_info(struct i2r_interface *i)
 	 */
 	if (!i->ifindex && i - i2r == INFINIBAND) {
 
-		logg(LOG_WARNING, "Assuming ib0 is the IP device name for %s\n",
-		     ibv_get_device_name(i->context->device));
-		strcpy(i->if_name, "ib0");
+		if (!i->if_name[0]) {
+
+			logg(LOG_WARNING, "Assuming ib0 is the IP device name for %s\n",
+			     ibv_get_device_name(i->context->device));
+			strcpy(i->if_name, "ib0");
+		}
 
 		memcpy(ifr.ifr_name, i->if_name, IFNAMSIZ);
 
@@ -4390,7 +4406,7 @@ static void exec_opt(int op, char *optarg)
 		default:
 			printf("ib2roce " VERSION " Mar 3,2022 (C) 2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
-                        printf("-d|--device <if[:portnumber]>		Infiniband interface\n");
+                        printf("-d|--device <if[:portnumber][/<netdev>]	Infiniband interface\n");
                         printf("-r|--roce <if[:portnumber]>		ROCE interface\n");
                         printf("-m|--multicast <multicast address>[:port][/mgidformat] (bidirectional)\n");
                         printf("-i|--inbound <multicast address>	Incoming multicast only (ib traffic in, roce traffic out)\n");
