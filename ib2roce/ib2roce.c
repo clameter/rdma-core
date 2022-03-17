@@ -2228,13 +2228,28 @@ static void list_endpoints(struct i2r_interface *i)
 		int j;
 
 		for (j = 0; j < nr; j++) {
-			if (e[j]->lid) {
-				if (e[j]->addr.s_addr)
-					n += snprintf(buf + n, sizeof(buf) - n, " %s/lid=%d", inet_ntoa(e[j]->addr), e[j]->lid);
+			struct endpoint *ep = e[j];
+
+			if (ep->lid) {
+
+				if (ep->addr.s_addr)
+					n += snprintf(buf + n, sizeof(buf) - n, " %s/lid=%d", inet_ntoa(ep->addr), ep->lid);
 				else
-					n += snprintf(buf + n, sizeof(buf) - n, " lid=%d", e[j]->lid);
+					n += snprintf(buf + n, sizeof(buf) - n, " lid=%d", ep->lid);
+
 			} else
-				n += snprintf(buf + n, sizeof(buf) - n, " %s", inet_ntoa(e[j]->addr));
+				n += snprintf(buf + n, sizeof(buf) - n, " %s", inet_ntoa(ep->addr));
+
+			if (ep->forwards) {
+				struct forward *f = ep->forwards;
+
+				while (f) {
+					n += snprintf(buf + n, sizeof(buf) - n, "[0x%x->%s:%x/%x]",
+						f->source_qp, inet_ntoa(f->dest->addr), f->dest_qp, f->dest_qkey);
+
+					f = f->next;
+				}
+			}
 		}
 
 		offset += 10;
@@ -2920,21 +2935,29 @@ static void sidr_state_init(void)
 	sidrs = hash_create(offsetof(struct sidr_state, request_id), sizeof(uint32_t));
 }
 
+/*
+ * Send a 256 byte MAD packet to QP1 on an endpoint
+ * What to send is taken directly from the packet that came in.
+ */
+static void send_mad(struct endpoint *e, struct buf *buf, void *mad_pos)
+{
+	buf->cur = mad_pos;
+	buf->end = mad_pos + 256;
+
+	send_ud(e->c->i->qp1, buf, e->ah, 1, IB_DEFAULT_QP1_QKEY);
+}
 
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 {
 	struct i2r_interface *source_i = buf->c->i;
 
 	enum interfaces in = source_i - i2r;
+	struct sidr_req *sr = (void *)buf->cur;
 	struct i2r_interface *dest_i = i2r + (in ^ 1);
 	struct endpoint *source_ep = buf->source_ep;
 	struct in_addr dest;
 	struct endpoint *dest_ep = NULL;
-	struct ibv_wc *w = buf->w;
-	char source_str[40];
-	struct sidr_req sr;
 
-	PULL(buf, sr);
 	buf->c = dest_i->ud;
 
 	/* Establish Destination */
@@ -2944,19 +2967,17 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 
 	} else { /* Infiniband */
 		struct in_addr source;
-		struct cma_hdr ch; 
+		struct cma_hdr *ch = (void *)(buf->cur + sizeof(struct sidr_req)); 
 
-		PULL(buf, ch);
-
-		if (ch.cma_version != CMA_VERSION)
+		if (ch->cma_version != CMA_VERSION)
 			return "SIDR REQ: Unsupported CMA version";
 
-		if (cma_get_ip_ver(&ch) != 4)
+		if (cma_get_ip_ver(ch) != 4)
 			return "SIDR REQ: Only IPv4 private data supported";
 
 
-		source.s_addr = ch.src_addr.ip4.addr;
-		dest.s_addr = ch.dst_addr.ip4.addr;
+		source.s_addr = ch->src_addr.ip4.addr;
+		dest.s_addr = ch->dst_addr.ip4.addr;
 
 		if (dest.s_addr && !valid_addr(dest_i, dest))
 			return "SIDR REQ: Invalid Destination address";
@@ -2979,16 +3000,16 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 				else
 					logg(LOG_NOTICE, "SIDR REQ nothing found when looking up by lid =%x\n", source_ep->lid); 
 
-				if (source_ep->forwards) {
-					logg(LOG_WARNING, "SIDR REQ: Removing forwards frp, EP %p lid=%u\n", source_ep, source_ep->lid);
+				if (source_ep->forwards)
 					remove_forwards(source_ep);
-				}
+
 				logg(LOG_WARNING, "SIDR REQ: Removing EP=%p\n", source_ep);
 				hash_del(source_i->ep, source_ep);
 				free(source_ep);
 				buf->source_ep = sep;
 
 			} else {
+				struct ibv_wc *w = buf->w;
 			
 				source_ep->addr = source;
 				hash_add(source_i->ip_to_ep, source_ep);
@@ -2998,28 +3019,27 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 		}
 	}
 
-	strcpy(source_str, inet_ntoa(source_ep->addr));
 	dest_ep = ip_to_ep(dest_i, dest);
 	if (!dest_ep)
-		return "Cannot forward SIDR REP since the address is unknown";
+		return "Cannot forward SIDR REQ since the address is unknown";
+
+	if (hash_find(sidrs, &sr->request_id)) {
+		logg(LOG_WARNING, "SIDR_REQ: Removed earlier pending request\n");
+		hash_del(sidrs, &sr->request_id);
+	}
+
+	if (find_forward(source_ep, 0))
+		return "Ignoring SIDR REQ since one is already pending from the endpoint";
 
 	if (bridging) {
 		struct sidr_state *ss = malloc(sizeof(struct sidr_state));
 
-		buf->cur = mad_pos;
-		buf->end = mad_pos + 256;
-		send_ud(dest_i->qp1, buf, dest_ep->ah, 1, IB_DEFAULT_QP1_QKEY);
-		logg(LOG_NOTICE, "SIDR REQ forwarded from %s to %s\n",
-			source_str, inet_ntoa(dest_ep->addr));
+		send_mad(dest_ep, buf, mad_pos);
 
 		/* Save state */
-		ss->request_id = sr.request_id;
+		ss->request_id = sr->request_id;
 		ss->source = source_ep;
 		ss->dest = dest_ep;
-		if (hash_find(sidrs, &ss->request_id)) {
-			logg(LOG_ERR, "SIDR_REQ: Removed earlier pending request\n");
-			hash_del(sidrs, ss);
-		}
 		hash_add(sidrs, ss);
 		
 	} else
@@ -3043,15 +3063,23 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
  */
 static const char * sidr_rep(struct buf *buf, void *mad_pos)
 {
-	struct sidr_rep sr;
+	struct sidr_rep *sr = (void *)buf->cur;
 	struct sidr_state *ss;
+	uint32_t qpn_word = ntohl(sr->qpn);
+	uint32_t sr_qpn = qpn_word >> 8;
+	uint32_t sr_qkey = ntohl(sr->q_key);
 
-	PULL(buf, sr);
+	
+	logg(LOG_NOTICE, "SIDR_REP: %s method=%s status=%s attr_id=%s attr_mod=%x ServiceId=%lx ReqId=%x Q_KEY=%x QPN=0x%x Status=%x\n",
+		buf->c->text, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
+		umad_common_mad_status_str(buf->umad.status),
+		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
+		be64toh(sr->service_id), ntohl(sr->request_id), sr_qkey, sr_qpn, sr->status);
 
-	if (sr.status)
+	if (sr->status)
 		return "SIDR_REP: Request rejected";
 
-	ss = hash_find(sidrs, &sr.request_id);
+	ss = hash_find(sidrs, &sr->request_id);
 	if (!ss)
 		return "SDIR_REP: Cannot find outstanding SIDR_REQ";
 
@@ -3060,33 +3088,14 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	if (ss->dest != buf->source_ep)
 		abort();
 
-	/*
-	 * We do not know the source QPN. So just accept anything that
- 	 * has the right destination. Not good
- 	 */
-	add_forward(ss->source, 0, ss->dest, sr.qpn, RDMA_UDP_QKEY);
+	add_forward(ss->source, 0, ss->dest, sr_qpn, sr_qkey);
 
-	sr.qpn = ss->source->c->i->ud->qp->qp_num;
+	qpn_word = (ss->source->c->i->ud->qp->qp_num << 8) | (qpn_word & 0xff);
+	sr->qpn = htonl(qpn_word);
 
-	logg(LOG_NOTICE, "SIDR_REP: %s method=%s status=%s qpn=%x attr_id=%s attr_mod=%x SID=%x RID=%x Q_KEY=%x QPN=%x Status=%x\n",
-		buf->c->text, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-		umad_common_mad_status_str(buf->umad.status), ntohl(sr.qpn), 
-		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
-		ntohl(sr.service_id), ntohl(sr.request_id), ntohs(sr.q_key), ntohl(sr.qpn), sr.status);
-
-	if (bridging) {
-		char source_str[40];
-
-		strcpy(source_str, inet_ntoa(ss->source->addr));
-
-		buf->cur = buf->raw;
-		buf->end = buf->cur + 256;
-		memcpy(buf->raw, &sr, sizeof(sr));
-
-		send_ud(ss->source->c->i->qp1, buf, ss->source->ah, 1, IB_DEFAULT_QP1_QKEY);
-		logg(LOG_NOTICE, "SIDR REP forwarded from %s to %s\n",
-			inet_ntoa(ss->dest->addr), source_str);
-	} else
+	if (bridging)
+		send_mad(ss->source, buf, mad_pos);
+	else
 		free_buffer(buf);
 
 	free(ss);
@@ -3374,14 +3383,6 @@ static void receive_ud(struct buf *buf)
 	f = find_forward(e, w->src_qp);
 
  	if (!f) {
-		/* This is dodgy and dangerous but currently I have
- 		 * no better idea. Since we do not know the source
- 		 * QPN when processing SIDRS we just let the
- 		 * source qpn be zero until we get the first
- 		 * package from the endpoint...
- 		 * If there are multiple apps running then I guess
- 		 * desaster may follow.
- 		 */
 		f = find_forward(e, 0);
 		if (f) {
 			f->source_qp = w->src_qp;
@@ -3395,6 +3396,7 @@ static void receive_ud(struct buf *buf)
 		goto discard;
  	}	
 
+	/* This is to satisfy udaddy. Other apps that may use the immediate data differently may not work */
 	buf->imm = htonl(f->dest->c->qp->qp_num);
 
 	logg(LOG_NOTICE, "receive_ud %s Packet len=%u 0x%x lid=%d forwarded to %s %s:0x%x lid=%d qkey=%x\n", c->text,
