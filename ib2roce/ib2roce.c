@@ -2249,12 +2249,13 @@ static void list_endpoints(struct i2r_interface *i)
  * This function only adds the forward. Check if there is an existing
  * forward before calling this function.
  */
-static void add_forward(struct endpoint *source, uint32_t source_qp, struct endpoint *dest, uint32_t dest_qp)
+static void add_forward(struct endpoint *source, uint32_t source_qp, struct endpoint *dest, uint32_t dest_qp, uint32_t qkey)
 {
 	struct forward *f = calloc(1, sizeof(struct forward));
 
 	f->dest = dest;
 	f->dest_qp = dest_qp;
+	f->dest_qkey = qkey;
 	f->source_qp = source_qp;
 
 	f->next = source->forwards;
@@ -3061,7 +3062,7 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	 * We do not know the source QPN. So just accept anything that
  	 * has the right destination. Not good
  	 */
-	add_forward(ss->source, 0, ss->dest, sr.qpn);
+	add_forward(ss->source, 0, ss->dest, sr.qpn, RDMA_UDP_QKEY);
 
 	sr.qpn = ss->source->c->i->ud->qp->qp_num;
 
