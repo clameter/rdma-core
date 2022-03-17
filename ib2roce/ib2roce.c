@@ -1036,7 +1036,7 @@ static int post_receive(struct rdma_channel *c, int limit)
 		ret = ibv_post_recv(c->qp, &recv_wr, &recv_failure);
 		if (ret) {
 			free_buffer(buf);
-			logg(LOG_WARNING, "ibv_post_recv failed: %s\n", errname());
+			logg(LOG_WARNING, "ibv_post_recv failed: %s:%s\n", c->text, errname());
 			break;
                 }
 		c->active_receive_buffers++;
@@ -1223,7 +1223,7 @@ static void start_channel(struct rdma_channel *c)
 				logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTS state. %s\n", c->text, errname());
 
 		}
-		logg(LOG_NOTICE, "QP %s moved to state %s\n", c->text,  send ? "RTS/RTR" : "RTR" );
+		logg(LOG_NOTICE, "QP %s moved to state %s: QPN=0x%x\n", c->text,  send ? "RTS/RTR" : "RTR", c->qp->qp_num);
 	}
 }
 
@@ -2455,10 +2455,11 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 
 	ah = ibv_create_ah(i->pd, at);
 	if (!ah) {
-		logg(LOG_ERR, "create_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
+		logg(LOG_ERR, "at_to_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
 				i->text, errname(), inet_ntoa(ep->addr));
 		return NULL;
-	}
+	} else
+		logg(LOG_NOTICE, "at_to_ep %s: AH=%p created from %s LID =%x\n", i->text, ah, inet_ntoa(addr), at->dlid); 
 
 	ep = calloc(1, sizeof(struct endpoint));
 	if (!ep)
