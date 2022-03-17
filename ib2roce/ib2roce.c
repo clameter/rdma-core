@@ -2334,6 +2334,10 @@ static bool valid_addr(struct i2r_interface *i, struct in_addr addr) {
 	return ((addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask));
 }
 
+static bool multicast_lid(uint16_t lid) {
+	return lid & 0xc000;
+}
+
 static bool unicast_lid(uint16_t lid) {
 	return lid > 0 && lid < 0xc000;
 }
@@ -3137,7 +3141,7 @@ static void receive_raw(struct buf *buf)
 
 		}
 
-		if ((dlid & 0xc000) == 0xc000) {
+		if (multicast_lid(dlid)) {
 			reason = "-Multicast";
 			goto discard;
 		}
