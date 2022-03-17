@@ -213,7 +213,8 @@ struct rdma_channel {
 struct forward {
 	struct endpoint *dest;
 	struct forward *next;
-	unsigned short source_qp, dest_qp;
+	uint32_t source_qp, dest_qp;
+	uint32_t dest_qkey;
 };
 
 /*
@@ -273,8 +274,8 @@ static struct i2r_interface {
  */
 struct ah_info {
 	struct ibv_ah *ah;	/* Endpoint Identification */
-	unsigned remote_qpn;	/* Address on the Endpoint */
-	unsigned remote_qkey;
+	uint32_t remote_qpn;	/* Address on the Endpoint */
+	uint32_t remote_qkey;
 };
 
 /*
@@ -2248,7 +2249,7 @@ static void list_endpoints(struct i2r_interface *i)
  * This function only adds the forward. Check if there is an existing
  * forward before calling this function.
  */
-static void add_forward(struct endpoint *source, unsigned source_qp, struct endpoint *dest, unsigned dest_qp)
+static void add_forward(struct endpoint *source, uint32_t source_qp, struct endpoint *dest, uint32_t dest_qp)
 {
 	struct forward *f = calloc(1, sizeof(struct forward));
 
@@ -2263,7 +2264,7 @@ static void add_forward(struct endpoint *source, unsigned source_qp, struct endp
 /*
  * Find the forwarding entry for traffic coming in from a source QP on one side
  */
-static struct forward *find_forward(struct endpoint *source, unsigned source_qp)
+static struct forward *find_forward(struct endpoint *source, uint32_t source_qp)
 {
 	struct forward *f = source->forwards;
 
@@ -2279,7 +2280,7 @@ static struct forward *find_forward(struct endpoint *source, unsigned source_qp)
  * This can be used to remove an entry before calling
  * add_forward.
  */
-static bool remove_forward(struct endpoint *source, unsigned source_qp)
+static bool remove_forward(struct endpoint *source, uint32_t source_qp)
 {
 	struct forward *f = source->forwards;
 	struct forward *prior = NULL;
@@ -2322,7 +2323,7 @@ static unsigned int remove_forwards(struct endpoint *source)
 /*
  * Update the forwarder if the source point changes
  */
-static struct forward *update_forward(struct endpoint *source, unsigned old_source_qp, unsigned new_source_qp)
+static struct forward *update_forward(struct endpoint *source, uint32_t old_source_qp, uint32_t new_source_qp)
 {
 	struct forward *f = source->forwards;
 
