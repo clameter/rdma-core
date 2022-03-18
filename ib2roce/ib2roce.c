@@ -3028,9 +3028,6 @@ static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 		hash_del(sidrs, &sr->request_id);
 	}
 
-	if (find_forward(source_ep, 0))
-		return "Ignoring SIDR REQ since one is already pending from the endpoint";
-
 	if (bridging) {
 		struct sidr_state *ss = malloc(sizeof(struct sidr_state));
 
@@ -3090,6 +3087,9 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 
 	if (ss->dest != buf->source_ep)
 		abort();
+
+	if (find_forward(ss->source, 0))
+		return "Ignoring SIDR REQ since one is already pending from the endpoint";
 
 	add_forward(ss->source, 0, ss->dest, sr_qpn, sr_qkey);
 
