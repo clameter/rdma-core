@@ -3079,6 +3079,9 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	if (sr->status)
 		return "SIDR_REP: Request rejected";
 
+	if (sr_qkey != RDMA_UDP_QKEY)
+		logg(LOG_WARNING, "%s: Nonstandard QKEY = %x\n", buf->c->text, sr_qkey);
+
 	ss = hash_find(sidrs, &sr->request_id);
 	if (!ss)
 		return "SDIR_REP: Cannot find outstanding SIDR_REQ";
