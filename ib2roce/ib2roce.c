@@ -3399,8 +3399,12 @@ static void receive_ud(struct buf *buf)
 		goto discard;
  	}	
 
-	/* This is to satisfy udaddy. Other apps that may use the immediate data differently may not work */
-	buf->imm = htonl(f->dest->c->qp->qp_num);
+	/*
+	 * This is to satisfy udaddy. Other apps that may use the immediate data differently may not work
+	 * if the value in immm matches the src_qp.... Maybe we should not do this by default ?
+	 */
+	if (ntohl(buf->imm) == w->src_qp)
+		buf->imm = htonl(f->dest->c->qp->qp_num);
 
 	logg(LOG_NOTICE, "receive_ud %s Packet len=%u 0x%x lid=%d forwarded to %s %s:0x%x lid=%d qkey=%x\n", c->text,
 			w->byte_len, w->src_qp, e->lid, f->dest->c->i->ud->text, inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
