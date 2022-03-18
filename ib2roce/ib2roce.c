@@ -3108,7 +3108,6 @@ static void receive_raw(struct buf *buf)
 	struct rdma_channel *c = buf->c;
 	struct i2r_interface *i = c->i;
 	struct ibv_wc *w = buf->w;
-	struct endpoint *ep;
 	uint16_t lids[2] = { 0, 0 };
 	unsigned short dlid = 0;
 	void *mad_pos;
@@ -3144,10 +3143,10 @@ static void receive_raw(struct buf *buf)
 			goto discard;
 		}
 
-		ep = buf_to_ep(buf, ip_none);
+		buf->source_ep = buf_to_ep(buf, ip_none);
 
 		snprintf(header, sizeof(header), "SLID=%x/%s DLID=%x SL=%d LVer=%d",
-			w->slid, inet_ntoa(ep->addr), dlid, w->sl, ib_get_lver(ih));
+			w->slid, inet_ntoa(buf->source_ep->addr), dlid, w->sl, ib_get_lver(ih));
 
 		if (ib_get_lnh(ih) < 2) {
 			reason = "IP v4/v6 packet";
@@ -3165,8 +3164,8 @@ static void receive_raw(struct buf *buf)
 				inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
 				inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN));
 
-			if (ep->gid.global.interface_id == 0) /* No GID yet ? */
-				memcpy(&ep->gid, &buf->grh.sgid, sizeof(union ibv_gid));
+			if (buf->source_ep->gid.global.interface_id == 0) /* No GID yet ? */
+				memcpy(&buf->source_ep->gid, &buf->grh.sgid, sizeof(union ibv_gid));
 
 		}
 
@@ -3234,7 +3233,7 @@ static void receive_raw(struct buf *buf)
 				goto discard;
 			}
 
-			ep = buf_to_ep(buf, source);
+			buf->source_ep = buf_to_ep(buf, source);
 
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
@@ -3260,14 +3259,12 @@ static void receive_raw(struct buf *buf)
 				goto discard;
 			}
 			break;
+
 		default:
 			reason = "-Not IP traffic";
 			goto discard;
 		}
 	}
-
-	buf->source_ep = ep;
-
 
 	PULL(buf, bth);
 	buf->end -= ICRC_SIZE;
@@ -3319,7 +3316,7 @@ static void receive_raw(struct buf *buf)
 	PULL(buf, buf->umad);
 
 	logg(LOG_NOTICE, "QP1 packet %s from %s LID %x LRH_LEN=%u WC_LEN=%u SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
-		inet_ntoa(ep->addr), ep->lid, len, w->byte_len,
+		inet_ntoa(buf->source_ep->addr), buf->source_ep->lid, len, w->byte_len,
 		 w->src_qp, __bth_qpn(&bth),
  		umad_method_str(buf->umad.mgmt_class, buf->umad.method),
 		umad_common_mad_status_str(buf->umad.status),
