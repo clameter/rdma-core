@@ -2281,12 +2281,16 @@ static void add_forward(struct endpoint *source, uint32_t source_qp, struct endp
 
 /*
  * Find the forwarding entry for traffic coming in from a source QP on one side
+ *
+ * dest == NULL enables wildcard search just based on source_qp
+ *
+ * source_qp = 0 indicated that the source_qp is not known yet.
  */
-static struct forward *find_forward(struct endpoint *source, uint32_t source_qp)
+static struct forward *find_forward(struct endpoint *source, struct endpoint *dest, uint32_t source_qp)
 {
 	struct forward *f = source->forwards;
 
-	while (f && f->source_qp != source_qp)
+	while (f && f->source_qp != source_qp && (!dest || f->dest == dest))
 		f = f->next;
 
 	return f;
@@ -3086,8 +3090,8 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	if (ss->dest != buf->source_ep)
 		abort();
 
-	if (find_forward(ss->source, 0))
-		return "Ignoring SIDR REQ since one is already pending from the endpoint";
+	if (find_forward(ss->source, (buf->c->i == i2r + INFINIBAND) ? NULL : ss->dest, 0))
+		return "Ignoring SIDR REQ since one is already pending";
 
 	add_forward(ss->source, 0, ss->dest, sr_qpn, sr_qkey);
 
@@ -3359,9 +3363,10 @@ static void receive_ud(struct buf *buf)
 {
 	struct rdma_channel *c = buf->c;
 	const char *reason;
-	struct endpoint *e;
+	struct endpoint *e, *d;
 	struct forward *f;
 	struct ibv_wc *w = buf->w;
+	struct i2r_interface *dest_i = i2r + ((c->i - i2r) ^ 1);
 
 	learn_source_address(buf);
 
@@ -3375,10 +3380,19 @@ static void receive_ud(struct buf *buf)
 		goto discard;
 	}
 
-	f = find_forward(e, w->src_qp);
+	if (buf->ip_valid) {
+		struct in_addr addr;
+
+		addr.s_addr = buf->ip.daddr;
+		d = ip_to_ep(dest_i, addr);
+
+	} else
+		d = NULL;
+
+	f = find_forward(e, d, w->src_qp);
 
  	if (!f) {
-		f = find_forward(e, 0);
+		f = find_forward(e, d, 0);
 		if (f) {
 			f->source_qp = w->src_qp;
 			logg(LOG_NOTICE, "Inserted QP#%x into forwarding entry for %s\n", w->src_qp, inet_ntoa(e->addr));
@@ -3399,9 +3413,9 @@ static void receive_ud(struct buf *buf)
 		buf->imm = htonl(f->dest->i->ud->qp->qp_num);
 
 	logg(LOG_NOTICE, "receive_ud %s Packet len=%u 0x%x lid=%d forwarded to %s %s:0x%x lid=%d qkey=%x\n", c->text,
-			w->byte_len, w->src_qp, e->lid, f->dest->i->ud->text, inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
+			w->byte_len, w->src_qp, e->lid, dest_i->ud->text, inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
 
-	send_ud(f->dest->i->ud, buf, f->dest->ah, f->dest_qp, f->dest_qkey);
+	send_ud(dest_i->ud, buf, f->dest->ah, f->dest_qp, f->dest_qkey);
  	return;
  
 discard:
