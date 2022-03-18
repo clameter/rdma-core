@@ -129,6 +129,8 @@ static void logg(int prio, const char *fmt, ...)
 		vprintf(fmt, valist);
 }
 
+const struct in_addr ip_none = { .s_addr = 0 };
+
 /*
  * Handling of special Multicast Group MGID encodings on Infiniband
  */
@@ -769,7 +771,6 @@ struct buf {
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
 			struct endpoint *source_ep;
-			struct in_addr addr;
 
 			bool ether_valid;	/* Ethernet header valid */
 			bool ip_valid;		/* IP header valid */
@@ -2524,13 +2525,12 @@ static struct endpoint *ip_to_ep(struct i2r_interface *i, struct in_addr addr)
 /*
  * Get information from an endpoint or create one with the info available
  */
-static struct endpoint *buf_to_ep(struct buf *buf)
+static struct endpoint *buf_to_ep(struct buf *buf, struct in_addr addr)
 {
 	struct i2r_interface *i = buf->c->i;
 	struct endpoint *ep = NULL;
 	struct rdma_channel *c = buf->c;
 	struct ibv_wc *w = buf->w;
-	struct in_addr addr = buf->addr;
 
 	struct ibv_ah_attr at = {
 		.dlid = w->slid,
@@ -2548,12 +2548,6 @@ static struct endpoint *buf_to_ep(struct buf *buf)
 		}
 	};
 
-	if (buf->ip_valid) { /* ROCE. This may be called without buf->grh_valid from the raw path */
-
-		if (!addr.s_addr)
-			addr.s_addr = buf->ip.saddr;
-
-	} else
         if (i == i2r + INFINIBAND) {	/* Infiniband */
 
 		if (!unicast_lid(w->slid)) {
@@ -2585,8 +2579,6 @@ static struct endpoint *buf_to_ep(struct buf *buf)
 		}
 	}
 
-	buf->addr.s_addr = 0;
-
 	memcpy((void *)&at.grh.dgid + 12, &addr, sizeof(struct in_addr));
 
 	return at_to_ep(i, &at);
@@ -2601,10 +2593,15 @@ static struct endpoint *buf_to_ep(struct buf *buf)
  */
 static void learn_source_address(struct buf *buf)
 {
+	struct in_addr addr = ip_none;
+
 	if (!unicast)	/* If unicast is not enabled then dont bother to gather addresses */
 		return;
 
-	buf->source_ep = buf_to_ep(buf);
+	if (buf->ip_valid)
+		addr.s_addr = buf->ip.saddr;
+
+	buf->source_ep = buf_to_ep(buf, addr);
 }
 
 /*
@@ -2793,26 +2790,27 @@ static const char *process_arp(struct i2r_interface *i, struct buf *buf, uint16_
 
 	for (j = 0; j < 2; j++, buf->cur += arp.ar_hln + sizeof(struct in_addr)) {
 		struct endpoint *ep;
+		struct in_addr addr;
 
 		memcpy(mac, buf->cur, arp.ar_hln);
-		memcpy(&buf->addr, buf->cur + arp.ar_hln, sizeof(struct in_addr));
+		memcpy(&addr, buf->cur + arp.ar_hln, sizeof(struct in_addr));
 
-		if (!valid_addr(i, buf->addr)) {
+		if (!valid_addr(i, addr)) {
 			logg(LOG_NOTICE, "ARP REPLY: Invalid %sIP=%s MAC=%s\n",
 				j ? "Dest" : " Source",
-			       inet_ntoa(buf->addr),
+			       inet_ntoa(addr),
 				hexbytes(mac, arp.ar_hln,':'));
 			continue;
 		}
 
-		ep = hash_find(i->ep, i2r + ROCE == i ? (void *)&buf->addr : (void *)(lids + j));
+		ep = hash_find(i->ep, i2r + ROCE == i ? (void *)&addr : (void *)(lids + j));
 		if (ep) {
 			if (!ep->addr.s_addr) {
 
-				ep->addr = buf->addr;
+				ep->addr = addr;
 				hash_add(i->ip_to_ep, ep);
 
-			} else if(ep->addr.s_addr != buf->addr.s_addr)
+			} else if(ep->addr.s_addr != addr.s_addr)
 
 				return "IP address for MAC changed!";
 
@@ -2820,7 +2818,7 @@ static const char *process_arp(struct i2r_interface *i, struct buf *buf, uint16_
 		}
 
 		buf->w->slid = lids[j];
-		ep = buf_to_ep(buf);
+		ep = buf_to_ep(buf, addr);
 		if (!ep)
 			return "Cannot create Endpoint";
 
@@ -3146,8 +3144,7 @@ static void receive_raw(struct buf *buf)
 			goto discard;
 		}
 
-		buf->addr.s_addr = 0;
-		ep = buf_to_ep(buf);
+		ep = buf_to_ep(buf, ip_none);
 
 		snprintf(header, sizeof(header), "SLID=%x/%s DLID=%x SL=%d LVer=%d",
 			w->slid, inet_ntoa(ep->addr), dlid, w->sl, ib_get_lver(ih));
@@ -3232,14 +3229,12 @@ static void receive_raw(struct buf *buf)
 			snprintf(header, sizeof(header), "%s -> %s",
 				source_str, dest_str);
 
-			buf->addr = source;
-
-			if (!valid_addr(i, buf->addr)) {
+			if (!valid_addr(i, source)) {
 				reason = "-Invalid source IP";
 				goto discard;
 			}
 
-			ep = buf_to_ep(buf);
+			ep = buf_to_ep(buf, source);
 
 			if (buf->ip.protocol != IPPROTO_UDP) {
 
