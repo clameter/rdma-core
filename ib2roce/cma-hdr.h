@@ -9,7 +9,8 @@
 union cma_ip_addr {
 	struct in6_addr ip6;
 	struct {
-		__be32 pad[3];
+		__be32 qpn;
+		__be32 pad[2];
 		__be32 addr;
 	} ip4;
 };
