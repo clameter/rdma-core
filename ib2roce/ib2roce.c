@@ -2917,6 +2917,7 @@ struct sidr_rep {
 
 struct sidr_state {
 	uint32_t request_id;            /* Should be generated locally in the future */
+	uint32_t source_qp;
 	struct endpoint *source;
 	struct endpoint *dest;
 };
@@ -2951,100 +2952,115 @@ static void send_mad(struct endpoint *e, struct buf *buf, void *mad_pos)
 
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
 {
-	struct i2r_interface *source_i = buf->c->i;
-
-	enum interfaces in = source_i - i2r;
+	struct sidr_state *ss = malloc(sizeof(struct sidr_state));
 	struct sidr_req *sr = (void *)buf->cur;
-	struct i2r_interface *dest_i = i2r + (in ^ 1);
-	struct endpoint *source_ep = buf->source_ep;
+	struct cma_hdr *ch = (void *)(buf->cur + sizeof(struct sidr_req)); 
+	struct i2r_interface *source_i = buf->c->i;
+	struct i2r_interface *dest_i = i2r + ((source_i - i2r) ^ 1);
 	struct in_addr dest;
-	struct endpoint *dest_ep = NULL;
+	struct in_addr source;
+	const char *reason = NULL;
 
-	buf->c = dest_i->ud;
+	if (ch->cma_version != CMA_VERSION) {
+		reason = "SIDR REQ: Unsupported CMA version";
+		goto no_cma;
+	}
 
+	if (cma_get_ip_ver(ch) != 4) {
+		reason = "SIDR REQ: Only IPv4 private data supported";
+		goto no_cma;
+	}
+
+	ss->source = buf->source_ep;
+	ss->source_qp = ch->src_addr.ip4.qpn;
+	ss->request_id = sr->request_id;
+
+no_cma:
 	/* Establish Destination */
 	if (buf->ip_valid) {	/* ROCE */
 
 		dest.s_addr = buf->ip.daddr;
 
 	} else { /* Infiniband */
-		struct in_addr source;
-		struct cma_hdr *ch = (void *)(buf->cur + sizeof(struct sidr_req)); 
 
-		if (ch->cma_version != CMA_VERSION)
-			return "SIDR REQ: Unsupported CMA version";
-
-		if (cma_get_ip_ver(ch) != 4)
-			return "SIDR REQ: Only IPv4 private data supported";
-
-
+		if (reason)		/* CMA is required for Infiniband */
+			goto err;
+	
 		source.s_addr = ch->src_addr.ip4.addr;
 		dest.s_addr = ch->dst_addr.ip4.addr;
 
-		if (dest.s_addr && !valid_addr(dest_i, dest))
-			return "SIDR REQ: Invalid Destination address";
+		if (dest.s_addr && !valid_addr(dest_i, dest)) {
+			reason = "SIDR REQ: Invalid Destination address";
+			goto err;
+		}
 
-		if (valid_addr(source_i, source) && source_ep->addr.s_addr == 0) {
+		if (valid_addr(source_i, source) && ss->source->addr.s_addr == 0) {
 			struct endpoint *sep = hash_find(source_i->ip_to_ep, &source);
 
 			if (sep) {
 				char b[40];
 				struct endpoint *tep;
 
-				strcpy(b, inet_ntoa(source_ep->addr));
+				strcpy(b, inet_ntoa(ss->source->addr));
 
 				logg(LOG_NOTICE, "SIDR_REQ: Two endpoints claim the same IP : EP1(%p by ip)= (%s,%x) EP2(from receive_raw) = (%p %s,%x)\n",
-					sep, inet_ntoa(sep->addr), sep->lid, source_ep, b, source_ep->lid);
+					sep, inet_ntoa(sep->addr), sep->lid, ss->source, b, ss->source->lid);
 
-				tep = hash_find(source_i->ep, &source_ep->lid);
+				tep = hash_find(source_i->ep, &ss->source->lid);
 				if (tep)
 					logg(LOG_NOTICE, "SIDR REQ lookup by lid = %p %s, %x\n", tep, tep ? inet_ntoa(tep->addr) : "--", tep ? tep->lid : 0);
 				else
-					logg(LOG_NOTICE, "SIDR REQ nothing found when looking up by lid =%x\n", source_ep->lid); 
+					logg(LOG_NOTICE, "SIDR REQ nothing found when looking up by lid =%x\n", ss->source->lid); 
 
-				if (source_ep->forwards)
-					remove_forwards(source_ep);
+				if (ss->source->forwards)
+					remove_forwards(ss->source);
 
-				logg(LOG_WARNING, "SIDR REQ: Removing EP=%p\n", source_ep);
-				hash_del(source_i->ep, source_ep);
-				free(source_ep);
-				buf->source_ep = sep;
+				logg(LOG_WARNING, "SIDR REQ: Removing EP=%p\n", ss->source);
+				hash_del(source_i->ep, ss->source);
+				free(ss->source);
+				ss->source = sep;
 
 			} else {
 				struct ibv_wc *w = buf->w;
 			
-				source_ep->addr = source;
-				hash_add(source_i->ip_to_ep, source_ep);
+				ss->source->addr = source;
+				hash_add(source_i->ip_to_ep, ss->source);
 				logg(LOG_NOTICE, "SIDR REQ: Private data supplied IP address %s to Endpoint at LID %x\n",
 					inet_ntoa(source), w->slid);
 			}
 		}
 	}
 
-	dest_ep = ip_to_ep(dest_i, dest);
-	if (!dest_ep)
-		return "Cannot forward SIDR REQ since the address is unknown";
+	ss->dest = ip_to_ep(dest_i, dest);
+	if (!ss->dest) {
+		reason = "Cannot forward SIDR REQ since the address is unknown";
+		goto err;
+	}
 
-	if (hash_find(sidrs, &sr->request_id)) {
+	if (hash_find(sidrs, &ss->request_id)) {
 		logg(LOG_WARNING, "SIDR_REQ: Removed earlier pending request\n");
-		hash_del(sidrs, &sr->request_id);
+		hash_del(sidrs, &ss->request_id);
 	}
 
 	if (bridging) {
-		struct sidr_state *ss = malloc(sizeof(struct sidr_state));
 
-		send_mad(dest_ep, buf, mad_pos);
+		/* Source QPN is not valid for target network */
+		ch->src_addr.ip4.qpn = 0;
 
-		/* Save state */
-		ss->request_id = sr->request_id;
-		ss->source = source_ep;
-		ss->dest = dest_ep;
+		send_mad(ss->dest, buf, mad_pos);
 		hash_add(sidrs, ss);
 		
-	} else
+	} else {
+
+		free(ss);
 		free_buffer(buf);
+	}
 
 	return NULL;
+
+err:
+	free(ss);
+	return reason;
 }
 
 /*
@@ -3090,10 +3106,14 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	if (ss->dest != buf->source_ep)
 		abort();
 
-	if (find_forward(ss->source, (buf->c->i == i2r + INFINIBAND) ? NULL : ss->dest, 0))
+	if (find_forward(ss->source, (buf->c->i == i2r + INFINIBAND) ? NULL : ss->dest, ss->source_qp))
 		return "Ignoring SIDR REQ since one is already pending";
 
-	add_forward(ss->source, 0, ss->dest, sr_qpn, sr_qkey);
+	add_forward(ss->source, ss->source_qp, ss->dest, sr_qpn, sr_qkey);
+
+	if (ss->source_qp)
+		/* Add the reverse forward if we have the source_qp number */
+		add_forward(ss->dest, sr_qpn, ss->source, ss->source_qp, sr_qkey);
 
 	qpn_word = (ss->source->i->ud->qp->qp_num << 8) | (qpn_word & 0xff);
 	sr->qpn = htonl(qpn_word);
@@ -3392,10 +3412,13 @@ static void receive_ud(struct buf *buf)
 	f = find_forward(e, d, w->src_qp);
 
  	if (!f) {
+		/* Hmm... Not good. Maybe there is a wild chart entry if the source_qp was not determined yet */
 		f = find_forward(e, d, 0);
 		if (f) {
 			f->source_qp = w->src_qp;
 			logg(LOG_NOTICE, "Inserted QP#%x into forwarding entry for %s\n", w->src_qp, inet_ntoa(e->addr));
+
+			/* And add the missing reverse forward */
 			add_forward(f->dest, f->dest_qp, e, f->source_qp, f->dest_qkey); 
 		}
  	}
