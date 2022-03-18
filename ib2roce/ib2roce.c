@@ -227,7 +227,7 @@ struct forward {
  * coming in from the host
  */
 struct endpoint {
-	struct rdma_channel *c;
+	struct i2r_interface *i;
 	struct in_addr addr;
 	union ibv_gid gid;
 	uint16_t lid;
@@ -2480,7 +2480,7 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 	if (!ep)
 		abort();
 
-	ep->c = i->ud;
+	ep->i = i;
 	ep->addr = addr;
 	ep->lid = at->dlid;
 	ep->ah = ah;
@@ -2944,7 +2944,7 @@ static void send_mad(struct endpoint *e, struct buf *buf, void *mad_pos)
 	buf->cur = mad_pos;
 	buf->end = mad_pos + 256;
 
-	send_ud(e->c->i->qp1, buf, e->ah, 1, IB_DEFAULT_QP1_QKEY);
+	send_ud(e->i->qp1, buf, e->ah, 1, IB_DEFAULT_QP1_QKEY);
 }
 
 static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
@@ -3093,7 +3093,7 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 
 	add_forward(ss->source, 0, ss->dest, sr_qpn, sr_qkey);
 
-	qpn_word = (ss->source->c->i->ud->qp->qp_num << 8) | (qpn_word & 0xff);
+	qpn_word = (ss->source->i->ud->qp->qp_num << 8) | (qpn_word & 0xff);
 	sr->qpn = htonl(qpn_word);
 
 	if (bridging)
@@ -3404,12 +3404,12 @@ static void receive_ud(struct buf *buf)
 	 * if the value in immm matches the src_qp.... Maybe we should not do this by default ?
 	 */
 	if (ntohl(buf->imm) == w->src_qp)
-		buf->imm = htonl(f->dest->c->qp->qp_num);
+		buf->imm = htonl(f->dest->i->ud->qp->qp_num);
 
 	logg(LOG_NOTICE, "receive_ud %s Packet len=%u 0x%x lid=%d forwarded to %s %s:0x%x lid=%d qkey=%x\n", c->text,
-			w->byte_len, w->src_qp, e->lid, f->dest->c->i->ud->text, inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
+			w->byte_len, w->src_qp, e->lid, f->dest->i->ud->text, inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
 
-	send_ud(f->dest->c->i->ud, buf, f->dest->ah, f->dest_qp, f->dest_qkey);
+	send_ud(f->dest->i->ud, buf, f->dest->ah, f->dest_qp, f->dest_qkey);
  	return;
  
 discard:
