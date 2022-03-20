@@ -181,7 +181,10 @@ unsigned max_wc_cqs = 1000;
 
 static int cq_high = 0;	/* Largest batch of CQs encountered */
 
-enum channel_type { channel_rdmacm, channel_ud, channel_raw, channel_packet, nr_channel_types };
+enum channel_type { channel_rdmacm, channel_ud, channel_qp1,
+	channel_raw, channel_ibraw,
+	channel_packet, channel_incoming,
+	channel_err, nr_channel_types };
 
 struct buf;
 
@@ -198,6 +201,7 @@ struct rdma_channel {
 	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
 	unsigned int nr_cq;
+	unsigned int nr_receive;
 	unsigned stats[nr_stats];
 	enum channel_type type;
 	bool listening;		/* rdmacm Channel is listening for connections */
@@ -308,8 +312,6 @@ static void add_event(unsigned long time_in_ms, void (*callback));
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 static void register_callback(void (*callback)(void *), int fd, void *private);
 static void handle_receive_packet(void *private);
-
-static receive_callback receive_main, receive_multicast, receive_raw, receive_ud;
 
 static inline struct rdma_cm_id *id(enum interfaces i)
 {
@@ -889,6 +891,72 @@ static struct buf *alloc_buffer(struct rdma_channel *c)
 	return buf;
 }
 
+typedef bool setup_callback(struct rdma_channel *c);
+static receive_callback receive_main, receive_multicast, receive_raw, receive_ud, receive_qp1;
+static setup_callback setup_multicast, setup_channel, setup_raw, setup_packet, setup_incoming;
+
+/*
+ * Matrix of channel types and their characteristics
+ */
+struct channel_info {
+
+	const char *suffix;
+	bool fractional;	/* NR is a fraction of all available buffers */
+	uint32_t nr_cq;		/* NR of CQ entries to allocate allocate to this channel */
+	uint32_t nr_receive;	/* NR buffers for receive queue */
+	uint32_t qkey;
+	uint16_t qp_type;
+	setup_callback *setup;
+	receive_callback *receive;
+	enum channel_type fallback;
+
+} channel_infos[nr_channel_types] = {
+	{ "multicast",	true,	10,	20,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
+	{ "ud",		true,	100,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
+	{ "qp1",	false, 	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
+	{ "raw",	false,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
+	{ "ibraw",	false,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
+	{ "packet",	false,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
+	{ "incoming",	false,	100,	50,	0,		0,			setup_incoming,	receive_main,	channel_err },
+	{ "error",	false,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
+};
+
+static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type)
+{
+	struct rdma_channel *c = calloc(1, sizeof(struct rdma_channel));
+	struct channel_info *ci = channel_infos + type;
+	char *p;
+
+	c->i = i;
+retry:
+	c->type = type;
+	c->receive = ci->receive;
+
+	p = malloc(strlen(i->text) + strlen(ci->suffix) + 2);
+	strcpy(p, i->text);
+	strcat(p, "-");
+	strcat(p, ci->suffix);
+	c->text = p;
+
+	if (ci->fractional) {
+		c->nr_cq = nr_buffers / ci->nr_cq;
+		c->nr_receive = nr_buffers / ci->nr_receive;
+	} else {
+		c->nr_cq = ci->nr_cq;
+		c->nr_receive = ci->nr_receive;
+	}	
+
+	if (ci->setup(c))
+		return c;
+
+	if (type != channel_err) {
+		type = ci->fallback;
+		goto retry;
+	}
+	return NULL;
+}
+
+
 static char hexbyte(unsigned x)
 {
 	if (x < 10)
@@ -1007,17 +1075,17 @@ static char *pgm_dump(struct pgm_header *p)
 /*
  * Handling of RDMA work requests
  */
-static int post_receive(struct rdma_channel *c, int limit)
+static void post_receive(struct rdma_channel *c)
 {
 	struct ibv_recv_wr recv_wr, *recv_failure;
 	struct ibv_sge sge;
 	int ret = 0;
 
-	if (!nextbuffer)
-		return -ENOMEM;
+	if (!c || !nextbuffer)
+		return;
 
-	if (c->active_receive_buffers >= limit)
-		return 0;
+	if (c->active_receive_buffers >= c->nr_receive)
+		return;
 
 	recv_wr.next = NULL;
 	recv_wr.sg_list = &sge;
@@ -1026,14 +1094,13 @@ static int post_receive(struct rdma_channel *c, int limit)
 	sge.length = DATA_SIZE;
 	sge.lkey = c->mr->lkey;
 
-	while (c->active_receive_buffers < limit) {
+	while (c->active_receive_buffers < c->nr_receive) {
 
 		struct buf *buf = alloc_buffer(c);
 
 		if (!buf) {
-			logg(LOG_NOTICE, "No free buffers left\n");
-			ret = -ENOMEM;
-			break;
+			logg(LOG_WARNING, "%s: No free buffers left\n", c->text);
+			return;
 		}
 
 		/* Use the buffer address for the completion handler */
@@ -1043,38 +1110,18 @@ static int post_receive(struct rdma_channel *c, int limit)
 		if (ret) {
 			free_buffer(buf);
 			logg(LOG_WARNING, "ibv_post_recv failed: %s:%s\n", c->text, errname());
-			break;
+			return;
                 }
 		c->active_receive_buffers++;
 	}
-	return ret;
 }
 
-static int post_receive_buffers(struct i2r_interface *i)
+static void post_receive_buffers(struct i2r_interface *i)
 {
-	int ret = 0;
-
-	if (!nextbuffer)
-		return -EAGAIN;
-
-	ret = post_receive(i->multicast, i->multicast->nr_cq / 2);
-	if (ret)
-		goto out;
-
-	if (i->raw && i->raw->type == channel_raw)
-		ret = post_receive(i->raw, 100);
-
-	if (ret)
-		goto out;
-
-	if (i->qp1)
-		ret = post_receive(i->qp1, 10);
-
-	if (i->ud)
-		ret = post_receive(i->ud, 100);
-
-out:
-	return ret;
+	post_receive(i->multicast);
+	post_receive(i->raw);
+	post_receive(i->qp1);
+	post_receive(i->ud);
 }
 
 
@@ -1122,7 +1169,7 @@ static void shutdown_sniffer(int arg) {
 static void qp_destroy(struct i2r_interface *i)
 {
 #ifdef HAVE_MSTFLINT
-	if (i == i2r + INFINIBAND && i->raw && i->raw->type == channel_raw) {
+	if (i == i2r + INFINIBAND && i->raw && i->raw->type == channel_ibraw) {
 		if (clear_ib_sniffer(i->port, i->raw->qp))
 			logg(LOG_ERR, "Failed to switch off sniffer mode on %s\n", i->raw->text);
 	}
@@ -1222,18 +1269,17 @@ static void start_channel(struct rdma_channel *c)
 	if (ret)
 		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTR state. %s\n", c->text, errname());
 
-	if (c->type == channel_ud) {
+	if (c->type == channel_ud || c->type == channel_qp1) {
 
 		c->attr.qp_state = IBV_QPS_RTS;
-		ret = ibv_modify_qp(c->qp, &c->attr,
-			       c->type == channel_ud ? (IBV_QP_STATE | IBV_QP_SQ_PSN) : IBV_QP_STATE);
+		ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE | IBV_QP_SQ_PSN);
 
 		if (ret)
 			logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTS state. %s\n", c->text, errname());
 
 	}
 	logg(LOG_NOTICE, "QP %s moved to state %s: QPN=0x%x\n",
-		 c->text,  c->type == channel_ud ? "RTS/RTR" : "RTR", c->qp->qp_num);
+		 c->text,  (c->type == channel_ud || c->type == channel_qp1)? "RTS/RTR" : "RTR", c->qp->qp_num);
 }
 
 static void stop_channel(struct rdma_channel *c)
@@ -1252,53 +1298,7 @@ static void stop_channel(struct rdma_channel *c)
 	logg(LOG_NOTICE, "QP %s moved to state QPS_INIT\n", c->text);
 }
 
-static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, receive_callback receive, enum channel_type type)
-{
-	struct rdma_channel *c = calloc(1, sizeof(struct rdma_channel));
-
-	c->i = i;
-	c->type = type;
-	c->receive = receive;
-
-	return c;
-}
-
-static const char *make_ifname(struct i2r_interface *i, const char *x)
-{
-	char *p;
-
-	p = malloc(strlen(i->text) + strlen(x) + 1);
-	strcpy(p, i->text);
-	strcat(p, x);
-	return p;
-}
-
-static struct rdma_channel *create_rdma_id(struct i2r_interface *i, struct sockaddr *sa)
-{
-	struct rdma_channel *c = new_rdma_channel(i, receive_multicast, channel_rdmacm);
-	int ret;
-
-
-	c->text = make_ifname(i, "-multicast");
-
-	c->bindaddr = sa;
-	ret = rdma_create_id(i->rdma_events, &c->id, c, RDMA_PS_UDP);
-	if (ret) {
-		logg(LOG_CRIT, "Failed to allocate RDMA CM ID for %s failed (%s).\n",
-			c->text, errname());
-		return NULL;
-	}
-
-	ret = rdma_bind_addr(c->id, c->bindaddr);
-	if (ret) {
-		logg(LOG_CRIT, "Failed to bind %s interface. Error %s\n",
-			c->text, errname());
-		return NULL;
-	}
-	return c;
-}
-
-static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multicast)
+static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 {
 	struct ibv_qp_init_attr_ex init_qp_attr_ex;
 	int ret;
@@ -1326,17 +1326,16 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multi
 		abort();
 	}
 
-	c->nr_cq = nr_cq;
-	c->cq = ibv_create_cq(c->id->verbs, nr_cq, c, c->comp_events, 0);
+	c->cq = ibv_create_cq(c->id->verbs, c->nr_cq, c, c->comp_events, 0);
 	if (!c->cq) {
 		logg(LOG_CRIT, "ibv_create_cq failed for %s : %s nr_cq=%d.\n",
-			c->text, errname(), nr_cq);
+			c->text, errname(), c->nr_cq);
 		return 1;
 	}
 
 	memset(&init_qp_attr_ex, 0, sizeof(init_qp_attr_ex));
-	init_qp_attr_ex.cap.max_send_wr = nr_cq;
-	init_qp_attr_ex.cap.max_recv_wr = nr_cq;
+	init_qp_attr_ex.cap.max_send_wr = c->nr_cq;
+	init_qp_attr_ex.cap.max_recv_wr = c->nr_cq;
 	init_qp_attr_ex.cap.max_send_sge = 1;	/* Highly sensitive settings that can cause -EINVAL if too large (10 f.e.) */
 	init_qp_attr_ex.cap.max_recv_sge = 1;
 	init_qp_attr_ex.cap.max_inline_data = MAX_INLINE_DATA;
@@ -1362,7 +1361,7 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multi
 
 	if (ret) {
 		logg(LOG_CRIT, "rdma_create_qp_ex failed for %s. Error %s. #CQ=%d\n",
-				c->text, errname(), nr_cq);
+				c->text, errname(), c->nr_cq);
 		return 1;
 	}
 
@@ -1376,38 +1375,68 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, unsigned nr_cq, bool multi
 	return 0;
 }
 
-/* Not using rdmacm so this is easier on the callbacks */
-static struct rdma_channel *create_channel(struct i2r_interface *i, uint32_t qkey,
-		int port, unsigned nr_cq, const char *text, int qp_type, enum channel_type type)
+bool setup_multicast(struct rdma_channel *c)
 {
-	struct rdma_channel *c = new_rdma_channel(i,
-		       type == channel_raw ? receive_raw : receive_ud, type);
+	struct i2r_interface *i = c->i;
+	struct sockaddr_in *sin;
+	int ret;
+
+	sin = calloc(1, sizeof(struct sockaddr_in));
+	sin->sin_family = AF_INET;
+	sin->sin_addr = i->if_addr.sin_addr;
+	sin->sin_port = htons(default_port);
+	c->bindaddr = (struct sockaddr *)sin;
+
+	ret = rdma_create_id(i->rdma_events, &c->id, c, RDMA_PS_UDP);
+	if (ret) {
+		logg(LOG_CRIT, "Failed to allocate RDMA CM ID for %s failed (%s).\n",
+			c->text, errname());
+		return false;
+	}
+
+	ret = rdma_bind_addr(c->id, c->bindaddr);
+	if (ret) {
+		logg(LOG_CRIT, "Failed to bind %s interface. Error %s\n",
+			c->text, errname());
+		return false;
+	}
+
+	return allocate_rdmacm_qp(c, true);
+}
+
+bool setup_incoming(struct rdma_channel *c)
+{
+	return allocate_rdmacm_qp(c, true);
+}
+
+/* Not using rdmacm so this is easier on the callbacks */
+static bool setup_channel(struct rdma_channel *c)
+{
+	struct i2r_interface *i = c->i;
 	int ret;
 	struct ibv_qp_init_attr_ex init_qp_attr_ex;
 
-	c->i = i;
-	c->text = make_ifname(i, text);
 	c->mr = i->mr;
 	c->comp_events = i->comp_events;
 	c->pd = i->pd;
 
-	c->nr_cq = nr_cq;
-	c->cq = ibv_create_cq(i->context, nr_cq, c, i->comp_events, 0);
+
+	c->cq = ibv_create_cq(i->context, c->nr_cq, c, i->comp_events, 0);
 	if (!c->cq) {
 		logg(LOG_CRIT, "ibv_create_cq failed for %s.\n",
 			c->text);
-		return NULL;
+		return false;
 	}
 
 	memset(&init_qp_attr_ex, 0, sizeof(init_qp_attr_ex));
-	init_qp_attr_ex.cap.max_send_wr = nr_cq;
-	init_qp_attr_ex.cap.max_recv_wr = nr_cq;
+	init_qp_attr_ex.cap.max_send_wr = c->nr_cq;
+	init_qp_attr_ex.cap.max_recv_wr = c->nr_cq;
 	init_qp_attr_ex.cap.max_send_sge = 1;	/* Highly sensitive settings that can cause -EINVAL if too large (10 f.e.) */
 	init_qp_attr_ex.cap.max_recv_sge = 1;
 	init_qp_attr_ex.cap.max_inline_data = MAX_INLINE_DATA;
 	init_qp_attr_ex.qp_context = c;
 	init_qp_attr_ex.sq_sig_all = 0;
-	init_qp_attr_ex.qp_type = qp_type,
+	init_qp_attr_ex.qp_type = channel_infos[c->type].qp_type,
 	init_qp_attr_ex.send_cq = c->cq;
 	init_qp_attr_ex.recv_cq = c->cq;
 
@@ -1418,48 +1447,39 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, uint32_t qke
 	c->qp = ibv_create_qp_ex(i->context, &init_qp_attr_ex);
 	if (!c->qp) {
 		logg(LOG_CRIT, "ibv_create_qp_ex failed for %s. Error %s. Port=%d #CQ=%d\n",
-				c->text, errname(), port, nr_cq);
-		free(c);
-		return NULL;
+				c->text, errname(), i->port, c->nr_cq);
+		return false;
 	}
 
-	c->attr.port_num = port;
+	c->attr.port_num = i->port;
 	c->attr.qp_state = IBV_QPS_INIT;
 	c->attr.pkey_index = 0;
-	c->attr.qkey = qkey;
-
-//	c->attr.qkey = 0x12345;		/* Default QKEY from ibdump source code */
+	c->attr.qkey = channel_infos[c->type].qkey;
 
 	ret = ibv_modify_qp(c->qp, &c->attr,
-		       (i == i2r + ROCE && type == channel_raw) ?
-				(IBV_QP_STATE | IBV_QP_PORT) :
-				( IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)
+	       (i == i2r + ROCE && c->type == channel_raw) ?
+			(IBV_QP_STATE | IBV_QP_PORT) :
+			( IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)
 	);
 
 	if (ret) {
 		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to Init state. %s\n", c->text, errname());
 		ibv_destroy_qp(c->qp);
 		ibv_destroy_cq(c->cq);
-		free(c);
-		return NULL;
+		c->qp = NULL;
+		return false;
 	}
-
-	return c;
+	return true;
 }
 
-static struct rdma_channel *create_ud_channel(struct i2r_interface *i, int port, unsigned nr_cq, uint32_t qkey, const char *suffix)
+static bool setup_packet(struct rdma_channel *c)
 {
-	return create_channel(i, qkey, port, nr_cq, suffix, IBV_QPT_UD, channel_ud);
-}
-
-static struct rdma_channel *create_packet_socket(struct i2r_interface *i, int port)
-{
-	struct rdma_channel *c;
+	struct i2r_interface *i = c->i;
 	int fh;
 	struct sockaddr_ll ll  = {
 		.sll_family = AF_PACKET,
 		.sll_protocol = htons(ETH_P_ALL),
-		.sll_ifindex = port,
+		.sll_ifindex = i->ifindex,
 		.sll_hatype = ARPHRD_ETHER,
 		.sll_pkttype = PACKET_BROADCAST | PACKET_HOST | PACKET_OTHERHOST,
 		.sll_halen = sizeof(struct in_addr),
@@ -1467,64 +1487,48 @@ static struct rdma_channel *create_packet_socket(struct i2r_interface *i, int po
 
 	if (i == i2r + INFINIBAND) {
 		logg(LOG_ERR, "Packet Sockets do not work right on Infiniband");
-		return NULL;
+		return false;
 	}
 
 	fh = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 
 	if (fh < 0) {
 		logg(LOG_ERR, "Raw Socker creation failed for %s:%s\n", i->text, errname());
-		return NULL;
+		return false;
 	}
 
 	if (bind(fh, (struct sockaddr *)&ll, sizeof(struct sockaddr_ll))) {
 		logg(LOG_ERR, "Cannot bind raw socket for %s:%s\n", i->text, errname());
-		return NULL;
+		return false;
 	}
 
-	c = new_rdma_channel(i, receive_raw, channel_packet);
-	c->i = i;
-	c->text = make_ifname(i, "-packet");
-	c->type = channel_packet;
 	c->fh = fh;
 	register_callback(handle_receive_packet, fh, c);
-	return c;
+	return true;
 }
 
-static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port, unsigned nr_cq)
+static bool setup_raw(struct rdma_channel *c)
 {
-	struct rdma_channel *c = NULL;
-
-	if (!packet_socket) {
-		c = create_channel(i, RDMA_UDP_QKEY, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
+	if (!setup_channel(c))
+		return false;
 
 #ifdef HAVE_MSTFLINT
+	if (i == i2r + INFINIBAND) {
+		if (set_ib_sniffer(ibv_get_device_name(i->context->device), i->port, c->qp)) {
 
-		if (c && i == i2r + INFINIBAND) {
-			if (set_ib_sniffer(ibv_get_device_name(c->i->context->device), c->i->port, c->qp)) {
+			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
+			ibv_destroy_qp(c->qp);
+			ibv_destroy_cq(c->cq);
+			return false;
 
-				logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
-				ibv_destroy_qp(c->qp);
-				ibv_destroy_cq(c->cq);
-				free(c);
-				c = NULL;
+		} else 
 
-			} else 
-
-			/* Install abort handler so that we can be sure that the capture mode is switched off */
-			signal(SIGABRT, &shutdown_sniffer);
-			signal(SIGSEGV, &shutdown_sniffer);
-		}
+		/* Install abort handler so that we can be sure that the capture mode is switched off */
+		signal(SIGABRT, &shutdown_sniffer);
+		signal(SIGSEGV, &shutdown_sniffer);
 	}
 #endif
-		if (!c)
-			logg(LOG_WARNING, "Falling back to raw socket on %s to monitor traffic\n", i->text);
-	}
-
-	if (!c)
-		c = create_packet_socket(i, i->ifindex);
-
-	return c;
+	return true;
 }
 
 static void setup_interface(enum interfaces in)
@@ -1532,7 +1536,6 @@ static void setup_interface(enum interfaces in)
 	struct i2r_interface *i = i2r + in;
 	struct ibv_gid_entry *e;
 	char buf[INET6_ADDRSTRLEN];
-	struct sockaddr_in *sin;
 
 	if (in == INFINIBAND)
 		i->maclen = 20;
@@ -1581,27 +1584,24 @@ static void setup_interface(enum interfaces in)
 	/* Get more info about the IP network attached to the RDMA device */
 	get_if_info(i);
 
-	/* Create RDMA interface setup */
+	/* Affinity should change here to a core close to the NIC */
+
+	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
+	i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
+	if (i == i2r + INFINIBAND)
+		i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
+	else
+		i->ep = i->ip_to_ep;;
+
+
+	/* Create RDMA elements that are interface wide */
+
 	i->rdma_events = rdma_create_event_channel();
 	if (!i->rdma_events) {
 		logg(LOG_CRIT, "rdma_create_event_channel() for %s failed (%s).\n",
 			i->text, errname());
 		abort();
 	}
-
-	sin = calloc(1, sizeof(struct sockaddr_in));
-	sin->sin_family = AF_INET;
-	sin->sin_addr = i->if_addr.sin_addr;
-	sin->sin_port = htons(default_port);
-
-	i->multicast = create_rdma_id(i, (struct sockaddr *)sin);
-	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
-
-	if (!i->multicast)
-		abort();
-
-	if (allocate_rdmacm_qp(i->multicast, 1000, true))
-		abort();
 
 	i->pd = ibv_alloc_pd(i->context);
 	if (!i->pd) {
@@ -1612,7 +1612,7 @@ static void setup_interface(enum interfaces in)
 	i->comp_events = ibv_create_comp_channel(i->context);
 	if (!i->comp_events) {
 		logg(LOG_CRIT, "ibv_create_comp_channel failed for %s : %s.\n",
-					i->text, errname());
+			i->text, errname());
 		abort();
 	}
 
@@ -1622,17 +1622,25 @@ static void setup_interface(enum interfaces in)
 		abort();
 	}
 
+	i->multicast = new_rdma_channel(i, channel_rdmacm);
+
 	if (unicast) {
-		i->ud = create_ud_channel(i, i->port, 100, RDMA_UDP_QKEY, "-ud");
-		i->qp1 = create_ud_channel(i, i->port, 10, IB_DEFAULT_QP1_QKEY, "-qp1");
-		i->raw = create_raw_channel(i, i->port, 100);
-		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
-		if (i == i2r + INFINIBAND)
-			i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
-		else
-			i->ep = i->ip_to_ep;;
+
+		i->ud = new_rdma_channel(i, channel_ud);
+		i->qp1 = new_rdma_channel(i, channel_qp1);
+
+		if (i == i2r + INFINIBAND) {
+			i->raw = new_rdma_channel(i, channel_ibraw);
+			/* Sadly fallback is not working here */
+		} else {
+			if (packet_socket)
+				i->raw = new_rdma_channel(i, channel_packet);
+			else
+				i->raw = new_rdma_channel(i, channel_raw);
+		}
 	}
 
+	/* Affinity can change back */
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u.\n",
 		i->text,
 		ibv_get_device_name(i->context->device),
@@ -1772,7 +1780,7 @@ static void resolve_start(struct rdma_unicast *ru)
 		sin->sin_family = AF_INET;
 		sin->sin_addr = i->if_addr.sin_addr;
 		sin->sin_port = 0;
-		ru->c = create_rdma_id(i, (struct sockaddr *)sin);
+		ru->c = new_rdma_channel(i, channel_incoming);
 		ru->c->ru = ru;
 	}
 
@@ -1893,9 +1901,9 @@ static void handle_rdma_event(void *private)
 				logg(LOG_NOTICE, "RDMA_CM_EVENT_ROUTE_RESOLVED for %s:%d\n",
 					inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
 
-				allocate_rdmacm_qp(ru->c, 100, false);
+				allocate_rdmacm_qp(ru->c, false);
 
-				post_receive(ru->c, 50);
+				post_receive(ru->c);
 				ibv_req_notify_cq(ru->c->cq, 0);
 
 				if (rdma_connect(ru->c->id, &rcp) < 0) {
@@ -1922,19 +1930,17 @@ static void handle_rdma_event(void *private)
 		case RDMA_CM_EVENT_CONNECT_REQUEST:
 			{
 				struct rdma_conn_param rcp = { };
-				struct rdma_channel *c = new_rdma_channel(i, receive_main, channel_rdmacm);
+				struct rdma_channel *c = new_rdma_channel(i, channel_rdmacm);
 
 				logg(LOG_NOTICE, "RDMA_CM_CONNECT_REQUEST id=%p listen_id=%p\n",
 					event->id, event->listen_id);
 
 				c->id->context = c;
-				c->text = "incoming-ud-qp";
 
-				if (allocate_rdmacm_qp(c, 100, false))
+				if (allocate_rdmacm_qp(c, false))
 					goto err;
 
-				if (post_receive(c, 50))
-					goto err;
+				post_receive(c);
 
 				ibv_req_notify_cq(c->cq, 0);
 
@@ -2982,7 +2988,7 @@ static void send_mad(struct endpoint *e, struct buf *buf, void *mad_pos)
 	send_ud(e->i->qp1, buf, e->ah, 1, IB_DEFAULT_QP1_QKEY);
 }
 
-static const char *sidr_req(struct buf *buf, void *mad_pos, unsigned short dlid)
+static const char *sidr_req(struct buf *buf, void *mad_pos)
 {
 	struct sidr_state *ss = malloc(sizeof(struct sidr_state));
 	struct sidr_req *sr = (void *)buf->cur;
@@ -3384,7 +3390,7 @@ static void receive_raw(struct buf *buf)
 	}
 
 	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
-		reason = sidr_req(buf, mad_pos, lids[1]);
+		reason = sidr_req(buf, mad_pos);
 		if (reason)
 			goto discard;
 		return;
@@ -3476,6 +3482,62 @@ static void receive_ud(struct buf *buf)
 discard:
 	logg(LOG_NOTICE, "receive_ud:Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
 	st(c, packets_invalid);
+	free_buffer(buf);
+}
+
+/*
+ * Receive Channel mostly used to send QP1 traffic.
+ * But it can also be used to receive QP1 traffic when redirected to a gateway
+ */
+static void receive_qp1(struct buf *buf)
+{
+	const char *reason;
+	struct ibv_wc *w = buf->w;
+	void *mad_pos;
+
+	learn_source_address(buf);
+
+	if (!buf->grh_valid)
+		/* Even if there is no GRH there is space reserved at the beginning for UD packets */
+		buf->cur += 40;
+
+	mad_pos = buf->cur;
+
+	PULL(buf, buf->umad);
+
+	logg(LOG_NOTICE, "QP1 packet %s from %s LID %x WC_LEN=%u SQP=%x method=%s status=%s attr_id=%s\n", buf->c->text,
+		inet_ntoa(buf->source_ep->addr), buf->source_ep->lid, w->byte_len,
+		w->src_qp, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
+		umad_common_mad_status_str(buf->umad.status),
+		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id));
+
+	if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
+		reason = "-Only CM Class MADs are supported";
+		goto discard;
+	}
+
+	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
+		reason = sidr_req(buf, mad_pos);
+		if (reason)
+			goto discard;
+		return;
+	}
+
+	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REP) {
+		reason = sidr_rep(buf, mad_pos);
+		if (reason)
+			goto discard;
+		return;
+	}
+
+	reason = "Only SIDR_REQ/REP supporte on QP1";
+
+discard:
+	if (reason[0] != '-' || log_packets > 1) 
+		logg(LOG_NOTICE, "QP1: Discard %s %s: Length=%u/pos=%lu\n",
+			buf->c->text, reason, w->byte_len, buf->cur - buf->raw);
+
+	st(buf->c, packets_invalid);
 	free_buffer(buf);
 }
 
@@ -3576,9 +3638,9 @@ static void handle_comp_event(void *private)
 		}
 	}
 
-exit:
 	/* Since we freed some buffers up we may be able to post more of them */
-	post_receive_buffers(i);
+	post_receive(c);
+exit:
 }
 
 /* Special handling using raw socket */
@@ -4039,7 +4101,7 @@ static void logging(void)
 			i->multicast->stats[packets_sent],
 			i->ud ? i->ud->stats[packets_received] : 0,
 			i->ud ?	i->ud->stats[packets_sent] : 0,
-			i->raw ? (i->raw->type == channel_raw ? "RAW" : "PACKET") : "-",
+			i->raw ? channel_infos[i->raw->type].suffix : "--",
 			i->raw ? i->raw->stats[packets_received]: 0);
 	}
 
@@ -4119,7 +4181,7 @@ static void arm_channels(void)
 			ibv_req_notify_cq(i->multicast->cq, 0);
 		}
 
-		if (i->raw && i->raw->type == channel_raw) {
+		if (i->raw && (i->raw->type == channel_raw || i->raw->type == channel_ibraw)) {
 			start_channel(i->raw);
 			ibv_req_notify_cq(i->raw->cq, 0);
 
