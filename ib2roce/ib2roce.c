@@ -1423,19 +1423,6 @@ static struct rdma_channel *create_channel(struct i2r_interface *i, uint32_t qke
 		return NULL;
 	}
 
-#ifdef HAVE_MSTFLINT
-	if (c->i == i2r + INFINIBAND && type == channel_raw) {
-		if (set_ib_sniffer(ibv_get_device_name(c->i->context->device), c->i->port, c->qp)) {
-			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
-			ibv_destroy_qp(c->qp);
-			ibv_destroy_cq(c->cq);
-			free(c);
-			return NULL;
-		}
-		/* Install abort handler so that we can be sure that the capture mode is switched off */
-		signal(SIGABRT, &shutdown_sniffer);
-	}
-#endif
 	return c;
 }
 
@@ -1490,6 +1477,24 @@ static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port
 	if (!packet_socket) {
 		c = create_channel(i, RDMA_UDP_QKEY, port, nr_cq, "-raw", i == i2r + ROCE  ? IBV_QPT_RAW_PACKET : IBV_QPT_UD, channel_raw);
 
+#ifdef HAVE_MSTFLINT
+
+		if (c && i == i2r + INFINIBAND) {
+			if (set_ib_sniffer(ibv_get_device_name(c->i->context->device), c->i->port, c->qp)) {
+
+				logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
+				ibv_destroy_qp(c->qp);
+				ibv_destroy_cq(c->cq);
+				free(c);
+				c = NULL;
+
+			} else 
+
+			/* Install abort handler so that we can be sure that the capture mode is switched off */
+			signal(SIGABRT, &shutdown_sniffer);
+		}
+	}
+#endif
 		if (!c)
 			logg(LOG_WARNING, "Falling back to raw socket on %s to monitor traffic\n", i->text);
 	}
