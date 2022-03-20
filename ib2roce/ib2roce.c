@@ -1492,6 +1492,7 @@ static struct rdma_channel *create_raw_channel(struct i2r_interface *i, int port
 
 			/* Install abort handler so that we can be sure that the capture mode is switched off */
 			signal(SIGABRT, &shutdown_sniffer);
+			signal(SIGSEGV, &shutdown_sniffer);
 		}
 	}
 #endif
@@ -4508,7 +4509,7 @@ int main(int argc, char **argv)
 
 	sidr_state_init();
 
-	while ((op = getopt_long(argc, argv, "ab::c:d:fhi:l::m:no:p:r:tuvxyz:",
+	while ((op = getopt_long(argc, argv, "ab::c:d:fhi:l::m:no:p:i:tuvxyz:",
 					opts, NULL)) != -1)
 		exec_opt(op, optarg);
 
@@ -4553,6 +4554,7 @@ int main(int argc, char **argv)
 	if (background)
 		close(status_fd);
 
+	logging();
 	shutdown_roce();
 	shutdown_ib();
 
