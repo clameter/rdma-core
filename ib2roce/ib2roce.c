@@ -1206,29 +1206,48 @@ out:
 
 static void start_channel(struct rdma_channel *c)
 {
-	if (c->type == channel_rdmacm) {
-		/* kick off if necessary */
-	} else {
-		int ret;
-		bool send = c->type == channel_ud;
+	int ret;
 
-		c->attr.qp_state = IBV_QPS_RTR;
-		/* Only Ethernet can send on a raw socket */
-		ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE);
+	if (!c)
+		return;
+
+	if (c->type == channel_rdmacm)
+       		return;
+
+	c->attr.qp_state = IBV_QPS_RTR;
+
+	ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE);
+	if (ret)
+		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTR state. %s\n", c->text, errname());
+
+	if (c->type == channel_ud) {
+
+		c->attr.qp_state = IBV_QPS_RTS;
+		ret = ibv_modify_qp(c->qp, &c->attr,
+			       c->type == channel_ud ? (IBV_QP_STATE | IBV_QP_SQ_PSN) : IBV_QP_STATE);
+
 		if (ret)
-			logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTR state. %s\n", c->text, errname());
+			logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTS state. %s\n", c->text, errname());
 
-		if (send) {
-			c->attr.qp_state = IBV_QPS_RTS;
-			ret = ibv_modify_qp(c->qp, &c->attr,
-				       c->type == channel_ud ? (IBV_QP_STATE | IBV_QP_SQ_PSN) : IBV_QP_STATE);
-
-			if (ret)
-				logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTS state. %s\n", c->text, errname());
-
-		}
-		logg(LOG_NOTICE, "QP %s moved to state %s: QPN=0x%x\n", c->text,  send ? "RTS/RTR" : "RTR", c->qp->qp_num);
 	}
+	logg(LOG_NOTICE, "QP %s moved to state %s: QPN=0x%x\n",
+		 c->text,  c->type == channel_ud ? "RTS/RTR" : "RTR", c->qp->qp_num);
+}
+
+static void stop_channel(struct rdma_channel *c)
+{
+	int ret;
+
+	if (c->type == channel_rdmacm)
+		return;
+
+	c->attr.qp_state = IBV_QPS_INIT;
+
+	ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE);
+	if (ret)
+		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to INIT state. %s\n", c->text, errname());
+
+	logg(LOG_NOTICE, "QP %s moved to state QPS_INIT\n", c->text);
 }
 
 static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, receive_callback receive, enum channel_type type)
@@ -2073,8 +2092,9 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
 
 	if (ret) {
-		errno = - ret;
+		errno = ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s\n", errname(), c->text);
+		stop_channel(c);
 	} else
 		if (log_packets > 1)
 			logg(LOG_NOTICE, "RDMA Send to QPN=%x QKEY=%x %d bytes\n",
