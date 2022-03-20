@@ -2535,7 +2535,6 @@ static struct endpoint *ip_to_ep(struct i2r_interface *i, struct in_addr addr)
 static struct endpoint *buf_to_ep(struct buf *buf, struct in_addr addr)
 {
 	struct i2r_interface *i = buf->c->i;
-	struct endpoint *ep = NULL;
 	struct rdma_channel *c = buf->c;
 	struct ibv_wc *w = buf->w;
 
@@ -2561,7 +2560,6 @@ static struct endpoint *buf_to_ep(struct buf *buf, struct in_addr addr)
 
 			/* No source LID */
 			logg(LOG_ERR, "Invalid Source LID %x on %s\n", w->slid, c->text);
-			free(ep);
 
 			return NULL;
 		}
@@ -2578,13 +2576,13 @@ static struct endpoint *buf_to_ep(struct buf *buf, struct in_addr addr)
 					/* Direct PGM packet inspection without verification if this is really PGM */
 					memcpy(&addr, buf->pgm.pgm_gsi, sizeof(struct in_addr));
 					logg(LOG_NOTICE, "Extracted IP address from PGM header: %s %s\n",
-						c->text, inet_ntoa(ep->addr));
-				} else
-					logg(LOG_ERR, "No IP address for QP1 packet on %s\n", c->text);
+						c->text, inet_ntoa(addr));
+				}
 			}
 			buf->cur = position;
 		}
-	}
+	} else	/* SLID contains crap */
+		at.dlid = 0;
 
 	memcpy((void *)&at.grh.dgid + 12, &addr, sizeof(struct in_addr));
 
