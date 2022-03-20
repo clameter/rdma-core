@@ -220,7 +220,7 @@ typedef void receive_callback(struct buf *);
 
 struct rdma_channel {
 	struct i2r_interface *i;	/* The network interface of this channel */
-	struct core *core;		/* Core the channel is on or NULL if comp_events is used */
+	struct core_info *core;		/* Core the channel is on or NULL if comp_events is used */
 	receive_callback *receive;
 	struct ibv_cq *cq;		/* Every channel has a distinct CQ */
 	struct ibv_qp *qp;		/* All of the ibv_xxes are pointing to the interface versions if this is not a rdmacm channel */
@@ -1026,19 +1026,23 @@ struct core_info {
 	unsigned nr_channels;
 	struct ibv_cq *cq[MAX_CQS_PER_CORE];	/* The CQs to monitor */
 	enum core_state state;
-	struct rdma_channel channel[MAX_CQS_PER_CORE];
-	pthread_t thread;					/* Thread */
+	unsigned processor;			/* Affinity to which proc */
+	pthread_t thread;			/* Thread */
 	pthread_attr_t attr;
-	thread_callback *callback;
+	struct rdma_channel channel[MAX_CQS_PER_CORE];
 } core_infos[MAX_CORE];
 
 static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type)
 {
 	struct rdma_channel *c;
-	struct channel_info *ci = channel_infos + type;
+	struct channel_info *ci;
 	char *p;
 	short core;
-	int channel_nr = -1;
+	int channel_nr;
+
+retry:
+	ci = channel_infos + type;
+	channel_nr = -1;
 
 	/* Change affinity to the one fo the interface */
 	core = core_lookup(i, type);
@@ -1048,19 +1052,16 @@ static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum chann
 		channel_nr = coi->nr_channels;
 		c = coi->channel + channel_nr;
 		coi->nr_channels++;
+		c->core = coi;
 
 	} else
 		c = calloc(1, sizeof(struct rdma_channel));
 
 	c->i = i;
 
-retry:
-	if (type == channel_err) {
-		if (channel_nr < 0)
-			free(c);
-		return NULL;
-	}
 
+	if (type == channel_err)
+		goto err;
 	c->type = type;
 	c->receive = ci->receive;
 
@@ -1084,9 +1085,19 @@ retry:
 		return c;
 	}
 
-	printf("ci->setup failed for %s\n", c->text);
-	type = ci->fallback;
-	goto retry;
+	if (type != ci->fallback) {
+		type = ci->fallback;
+		free(p);
+		if (channel_nr < 0)
+			free(c);
+		goto retry;
+	}
+
+err:
+	if (channel_nr < 0)
+		free(c);
+
+	return NULL;
 }
 
 static void process_cqes(struct rdma_channel *c, struct ibv_wc *w, unsigned cqs);
@@ -1717,7 +1728,7 @@ static bool setup_packet(struct rdma_channel *c)
 	fh = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
 
 	if (fh < 0) {
-		logg(LOG_ERR, "Raw Socker creation failed for %s:%s\n", i->text, errname());
+		logg(LOG_ERR, "Raw Socket creation failed for %s:%s\n", i->text, errname());
 		return false;
 	}
 
