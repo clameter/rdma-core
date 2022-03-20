@@ -2395,6 +2395,10 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 
 
 	if (at->dlid) {
+
+		if (i == i2r + ROCE)
+			abort();
+
 		ep = hash_find(i->ep, &at->dlid);
 		if (ep) {
 			if (ep->addr.s_addr == 0 && addr.s_addr) {
@@ -2478,8 +2482,7 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 		logg(LOG_ERR, "at_to_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
 				i->text, errname(), inet_ntoa(ep->addr));
 		return NULL;
-	} else
-		logg(LOG_NOTICE, "at_to_ep %s: AH=%p created from %s LID =%x\n", i->text, ah, inet_ntoa(addr), at->dlid); 
+	}
 
 	ep = calloc(1, sizeof(struct endpoint));
 	if (!ep)
@@ -3163,7 +3166,7 @@ static void receive_raw(struct buf *buf)
 		}
 
 		if (w->slid == i->port_attr.lid) {
-			reason = "Unicast Loopback";
+			reason = "-Unicast Loopback";
 			goto discard;
 		}
 
