@@ -751,7 +751,6 @@ static int leave_mc(enum interfaces i)
  * Manage freelist using simple single linked list with the pointer
  * to the next free element at the beginning of the free buffer
  */
-
 static unsigned nr_buffers = 100000;
 static bool huge = false;
 
@@ -847,6 +846,10 @@ static void init_buf(void)
 	flags = MAP_PRIVATE | MAP_ANONYMOUS;
 	if (huge)
 		flags |= MAP_HUGETLB;
+
+	if (nr_buffers * BUFFER_SIZE > 1000000000)
+		logg(LOG_WARNING, "Allocate %u MByte of memory for %u buffers\n",
+				nr_buffers * BUFFER_SIZE / 1024 / 1024, nr_buffers);
 
 	buffers = mmap(0, nr_buffers * BUFFER_SIZE, PROT_READ|PROT_WRITE, flags, -1, 0);
 	if (!buffers) {
@@ -4300,6 +4303,7 @@ struct option opts[] = {
 	{ "test", no_argument, NULL, 't' },
 	{ "unicast", no_argument, NULL, 'u' },
 	{ "config", required_argument, NULL, 'c' },
+	{ "buffers", required_argument, NULL, 'z' },
 	{ NULL, 0, NULL, 0 }
 };
 
@@ -4363,6 +4367,15 @@ static void exec_opt(int op, char *optarg)
 	int n;
 
 	switch (op) {
+		case 'a':
+			loopback_blocking = false;
+			break;
+
+		case 'b':
+			beacon = true;
+			beacon_arg = optarg;
+			break;
+
 		case 'c':
 			readconfig(optarg);
 			break;
@@ -4371,14 +4384,12 @@ static void exec_opt(int op, char *optarg)
 			ib_name = optarg;
 			break;
 
-		case 'r':
-			roce_name = optarg;
+		case 'f':
+			flow_steering = true;
 			break;
 
-		case 'm':
-			ret = new_mc_addr(optarg, false, false);
-			if (ret)
-				exit(1);
+		case 'h':
+			huge = true;
 			break;
 
 		case 'i':
@@ -4387,11 +4398,6 @@ static void exec_opt(int op, char *optarg)
 				exit(1);
 			break;
 
-		case 'o':
-			ret =  new_mc_addr(optarg, true, false);
-			if (ret)
-				exit(1);
-			break;
 
 		case 'l':
 			if (optarg) {
@@ -4412,41 +4418,28 @@ static void exec_opt(int op, char *optarg)
 			exit(1);
 			break;
 
-		case 'x':
-			debug = true;
-			break;
-
-		case 'b':
-			beacon = true;
-			beacon_arg = optarg;
+		case 'm':
+			ret = new_mc_addr(optarg, false, false);
+			if (ret)
+				exit(1);
 			break;
 
 		case 'n':
 			bridging = false;
 			break;
 
+		case 'o':
+			ret =  new_mc_addr(optarg, true, false);
+			if (ret)
+				exit(1);
+			break;
+
 		case 'p':
 			default_port = atoi(optarg);
 			break;
 
-		case 'u':
-			unicast = true;
-			break;
-
-		case 'f':
-			flow_steering = true;
-			break;
-
-		case 'a':
-			loopback_blocking = false;
-			break;
-
-		case 'y':
-			packet_socket = true;
-			break;
-
-		case 'v':
-			log_packets++;
+		case 'r':
+			roce_name = optarg;
 			break;
 
 		case 't':
@@ -4455,26 +4448,48 @@ static void exec_opt(int op, char *optarg)
 			testing = true;
 			break;
 
+		case 'u':
+			unicast = true;
+			break;
+
+		case 'v':
+			log_packets++;
+			break;
+
+		case 'x':
+			debug = true;
+			break;
+
+		case 'y':
+			packet_socket = true;
+			break;
+
+		case 'z':
+			nr_buffers = atoi(optarg);
+			break;
+
 		default:
-			printf("ib2roce " VERSION " Mar 3,2022 (C) 2022 Christoph Lameter <cl@linux.com>\n");
+			printf("ib2roce " VERSION " Mar 8,2022 (C) 2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
-                        printf("-d|--device <if[:portnumber][/<netdev>]	Infiniband interface\n");
-                        printf("-r|--roce <if[:portnumber]>		ROCE interface\n");
-                        printf("-m|--multicast <multicast address>[:port][/mgidformat] (bidirectional)\n");
-                        printf("-i|--inbound <multicast address>	Incoming multicast only (ib traffic in, roce traffic out)\n");
-                        printf("-o|--outbound <multicast address>	Outgoing multicast only / sendonly /(ib trafic out, roce traffic in)\n");
+			printf("-a|--loopback				Do not request loopback blocking\n");
+			printf("-b|--beacon <multicast address>		Send beacon every second\n");
+			printf("-c|--config <file>			Read config from file\n");
+                       	printf("-d|--device <if[:portnumber][/<netdev>]	Infiniband interface\n");
+			printf("-f|--flow		*experimental*	Enable flow steering to do hardware filtering of packets\n");
+			printf("-h|--huge				Use Huge pages\n");
+			printf("-i|--inbound <multicast address>	Incoming multicast only (ib traffic in, roce traffic out)\n");
 			printf("-l|--mgid				List availabe MGID formats for Infiniband\n");
 			printf("-l|--mgid <format>			Set default MGID format\n");
-			printf("-x|--debug				Do not daemonize, enter debug mode\n");
-			printf("-p|--port >number>			Set default port number\n");
-			printf("-b|--beacon <multicast address>		Send beacon every second\n");
+			printf("-m|--multicast <multicast address>[:port][/mgidformat] (bidirectional)\n");
 			printf("-n|--nobridge				Do everything but do not bridge packets\n");
+			printf("-o|--outbound <multicast address>	Outgoing multicast only / sendonly /(ib trafic out, roce traffic in)\n");
+			printf("-p|--port >number>			Set default port number\n");
+			printf("-r|--roce <if[:portnumber]>		ROCE interface\n");
 			printf("-u|--unicast		*experimental*	Unicast forwarding support\n");
-			printf("-f|--flow		*experimental*	Enable flow steering to do hardware filtering of packets\n");
 			printf("-v|--log-packets			Show detailed information about discarded packets\n");
-			printf("-c|--config <file>			Read config from file\n");
+			printf("-x|--debug				Do not daemonize, enter debug mode\n");
 			printf("-y|--packetsocket			Use Packet Socket instead of RAW QP\n");
-			printf("-a|--loopback				Do not request loopback blocking\n");
+			printf("-z|--buffers <nr>			How many packet buffers of 8k size to allocate[1mio]\n");
 			exit(1);
 	}
 }
@@ -4488,7 +4503,7 @@ int main(int argc, char **argv)
 
 	sidr_state_init();
 
-	while ((op = getopt_long(argc, argv, "vtfunb::xl::i:r:m:o:d:p:c:ya",
+	while ((op = getopt_long(argc, argv, "ab::c:d:fhi:l::m:no:p:r:tuvxyz:",
 					opts, NULL)) != -1)
 		exec_opt(op, optarg);
 
