@@ -48,6 +48,7 @@
 #include <syslog.h>
 #include <fcntl.h>
 #include <ctype.h>
+#include <pthread.h>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -116,6 +117,8 @@ static unsigned long timestamp(void)
 	return t.tv_sec * 1000 + (t.tv_nsec + 500000) / 1000000;
 }
 
+#define cpu_relax()	asm volatile("rep; nop")
+
 __attribute__ ((format (printf, 2, 3)))
 static void logg(int prio, const char *fmt, ...)
 {
@@ -128,6 +131,31 @@ static void logg(int prio, const char *fmt, ...)
 	else
 		vprintf(fmt, valist);
 }
+
+static pthread_mutex_t mutex;		/* Generic serialization mutex */
+
+static void lock(void)
+{
+	if (pthread_mutex_lock(&mutex))
+		logg(LOG_ERR, "Mutex lock failed: %s\n", errname());
+}
+
+static void unlock(void)
+{
+	if (pthread_mutex_unlock(&mutex))
+		logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
+}
+
+static bool trylock(void)
+{
+	if (pthread_mutex_trylock(&mutex)) {
+		if (errno != EBUSY)
+			logg(LOG_ERR, "Mutex trylock failed: %s\n", errname());
+		return false;
+	}
+	return true;
+}
+
 
 const struct in_addr ip_none = { .s_addr = 0 };
 
@@ -192,6 +220,7 @@ typedef void receive_callback(struct buf *);
 
 struct rdma_channel {
 	struct i2r_interface *i;	/* The network interface of this channel */
+	struct core *core;		/* Core the channel is on or NULL if comp_events is used */
 	receive_callback *receive;
 	struct ibv_cq *cq;		/* Every channel has a distinct CQ */
 	struct ibv_qp *qp;		/* All of the ibv_xxes are pointing to the interface versions if this is not a rdmacm channel */
@@ -263,6 +292,7 @@ static struct i2r_interface {
 	struct sockaddr_in if_addr;
 	struct sockaddr_in if_netmask;
 	unsigned ifindex;
+	unsigned numa_node;			/* NUMA Affinity of the interface */
 	unsigned gid_index;
 	union ibv_gid gid;
 	struct ibv_device_attr device_attr;
@@ -521,10 +551,14 @@ static struct mc *hash_lookup_mc(struct in_addr addr)
 
 static int hash_add_mc(struct mc *m)
 {
+	lock();
+
 	if (hash_find(mc_hash, &m->addr))
 		return -EEXIST;
 
 	hash_add(mc_hash, m);
+
+	unlock();
 	return 0;
 }
 
@@ -895,12 +929,15 @@ typedef bool setup_callback(struct rdma_channel *c);
 static receive_callback receive_main, receive_multicast, receive_raw, receive_ud, receive_qp1;
 static setup_callback setup_multicast, setup_channel, setup_raw, setup_packet, setup_incoming;
 
+#define NO_CORE (-1)
 /*
  * Matrix of channel types and their characteristics
  */
 struct channel_info {
 
 	const char *suffix;
+	short core;		/* On which core relativ to the first core for the interface shall this be placed */
+	short alt_core;	/* If that core is not available what is the other choice */
 	bool fractional;	/* NR is a fraction of all available buffers */
 	uint32_t nr_cq;		/* NR of CQ entries to allocate allocate to this channel */
 	uint32_t nr_receive;	/* NR buffers for receive queue */
@@ -911,24 +948,119 @@ struct channel_info {
 	enum channel_type fallback;
 
 } channel_infos[nr_channel_types] = {
-	{ "multicast",	true,	10,	20,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
-	{ "ud",		true,	100,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
-	{ "qp1",	false, 	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
-	{ "raw",	false,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
-	{ "ibraw",	false,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
-	{ "packet",	false,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
-	{ "incoming",	false,	100,	50,	0,		0,			setup_incoming,	receive_main,	channel_err },
-	{ "error",	false,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
+	{ "multicast",	0, 0,	true,	10,	20,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
+	{ "ud",		2, 1,	true,	100,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
+	{ "qp1",	1, 1,	false, 	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
+	{ "raw",	3, 1,	false,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
+	{ "ibraw",	3, 1,	false,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
+	{ "packet",	-1, -1,	false,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
+	{ "incoming",	-1, -1,	false,	100,	50,	0,		0,			setup_incoming,	receive_main,	channel_err },
+	{ "error",	-1, -1,	false,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
 };
+
+/*
+ * Core layout
+ *
+ * The basic ib2roce thread is outside of the cores here running
+ * in high latency mode which is used for management and for all
+ * activities not pushed to the polling cores.
+ *
+ * Cores | Layout
+ * 0     | Basic thread does everything using poll system call. High latency
+ * 1     | All CQs on one core. qp1, raw channels on the basic thread
+ * 2	 | Separation of comp channels according to the Interface
+ * 4	 | Separation of comp channels according to the Interface and multicast/unicast
+ * 8     | place QP1 and raw channels on separate cores
+ *
+ * Typical 8 core layout
+ * Core  | comp channel
+ * 0 	 | Infiniband Multicast
+ * 1	 | ROCE Multicast		Fallback to Core #0 if cores < 2
+ * 2	 | Infiniband UD channel	Fallback to Core #0 if cores < 4
+ * 3	 | ROCE UD channel		Fallback to Core #1 if cores < 4
+ * 4	 | Infiniband QP1 channel	Fallback to high latency thread if cores < 8
+ * 5	 | ROCE QP1 channel		Fallback to high latency thread if cores < 8
+ * 6     | INfiniband RAW channel	Fallback to high latency thread if cores < 8
+ * 7 	 | ROCE RaW channel		Fallback to high latency thread if cores < 8
+ */
+
+#define MAX_CORE 8
+#define MAX_CQS_PER_CORE 2
+
+static unsigned cores = 0;		/* How many cores can we consume */
+
+enum core_state { core_off, core_init, core_running, core_err, nr_core_states };
+ 
+/*
+ * Determine the core to be used for a channel
+ */
+static short core_lookup(struct i2r_interface *i,  enum channel_type type)
+{
+	enum interfaces in = i - i2r;
+	short wanted_core = channel_infos[type].core;
+	short avail_cores = cores / 2; 	/* Half for IB and half for ROCE  */
+
+	if (!cores)
+		goto nocore;
+
+	if (wanted_core == NO_CORE)
+		goto nocore;
+	
+	if (wanted_core <= avail_cores)
+		return in * avail_cores + wanted_core;
+
+	wanted_core = channel_infos[type].alt_core;
+	if (wanted_core <= cores)
+		return in * avail_cores + wanted_core;
+
+	/* If nothing worked put it onto th4 first core */
+	return in * avail_cores;
+
+nocore:
+	return NO_CORE;
+}
+
+typedef void thread_callback(void *);
+
+struct core_info {
+	unsigned nr_channels;
+	struct ibv_cq *cq[MAX_CQS_PER_CORE];	/* The CQs to monitor */
+	enum core_state state;
+	struct rdma_channel channel[MAX_CQS_PER_CORE];
+	pthread_t thread;					/* Thread */
+	pthread_attr_t attr;
+	thread_callback *callback;
+} core_infos[MAX_CORE];
 
 static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type)
 {
-	struct rdma_channel *c = calloc(1, sizeof(struct rdma_channel));
+	struct rdma_channel *c;
 	struct channel_info *ci = channel_infos + type;
 	char *p;
+	short core;
+	int channel_nr = -1;
+
+	/* Change affinity to the one fo the interface */
+	core = core_lookup(i, type);
+	if (core != NO_CORE) {
+		struct core_info *coi = core_infos + core;
+
+		channel_nr = coi->nr_channels;
+		c = coi->channel + channel_nr;
+		coi->nr_channels++;
+
+	} else
+		c = calloc(1, sizeof(struct rdma_channel));
 
 	c->i = i;
+
 retry:
+	if (type == channel_err) {
+		if (channel_nr < 0)
+			free(c);
+		return NULL;
+	}
+
 	c->type = type;
 	c->receive = ci->receive;
 
@@ -946,17 +1078,102 @@ retry:
 		c->nr_receive = ci->nr_receive;
 	}	
 
-	if (ci->setup(c))
+	if (ci->setup(c)) {
+		if (channel_nr >= 0)
+			core_infos[core].cq[channel_nr] = c->cq;
 		return c;
-
-	if (type != channel_err) {
-		type = ci->fallback;
-		goto retry;
 	}
+
+	printf("ci->setup failed for %s\n", c->text);
+	type = ci->fallback;
+	goto retry;
+}
+
+static void process_cqes(struct rdma_channel *c, struct ibv_wc *w, unsigned cqs);
+
+/*
+ * Polling function for each core enabling low latency operations.
+ * This currently does not support NUMA affinities. It may need
+ * to benefit from manually setting affinities but -- aside from the
+ * obvious need to run on the NIC numa node that it serves --
+ * the Linux scheduler should take care of most of what is needed.
+ *
+ * NOHZ should be enabled though to avoid hiccups from timer interrupts
+ */
+static void *busyloop(void *private)
+{
+	struct rdma_channel *c;
+	struct core_info *core = private;
+	int cqs;
+	int i;
+	struct ibv_wc wc[max_wc_cqs];
+
+	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+
+	core->state = core_init;
+	/*
+	 * Initialize relevant data structures for this thread. These must be allocated
+	 * from the thread to ensure that they are thread local
+	 */
+
+	core->state = core_running;
+loop:
+	cpu_relax();
+	/* Scan CQs */
+	for(i = 0; i < core->nr_channels; i++) {
+		cqs = ibv_poll_cq(core->cq[i], max_wc_cqs, wc);
+		if (cqs)
+			goto process_cq;
+	}
+	goto loop;
+
+process_cq:
+	c = core->channel + i;
+
+	if (cqs < 0) {
+		logg(LOG_WARNING, "Busyloop: CQ polling failed with: %s on %s\n",
+			errname(), c->text);
+		core->state = core_err;
+		goto loop;;
+	}
+
+	process_cqes(c, wc, cqs);
+	goto loop;
+
 	return NULL;
 }
 
+/* Called after all the channels have been setup */
+static void start_cores(void)
+{
+	int i;
 
+	for(i = 0; i < cores; i++) {
+		struct core_info *ci = core_infos + i;
+
+		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + i)) {
+			logg(LOG_CRIT, "Pthread create failed: %s\n", errname());
+			abort();
+		}
+	}
+}
+
+static void stop_cores(void)
+{
+	int i;
+
+	for(i = 0; i < cores; i++) {
+		struct core_info *ci = core_infos + i;
+
+		pthread_cancel(ci->thread);
+
+		if (pthread_join(ci->thread, NULL)) {
+			logg(LOG_CRIT, "pthread_join failed: %s\n", errname());
+			abort();
+		}
+	}
+}
+ 
 static char hexbyte(unsigned x)
 {
 	if (x < 10)
@@ -1152,7 +1369,8 @@ static void channel_destroy(struct rdma_channel *c)
 
 	}
 	clear_channel_bufs(c);
-	free(c);
+	if (!c->core)
+		free(c);
 }
 
 #ifdef HAVE_MSTFLINT
@@ -1312,25 +1530,29 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 	if (!c->pd) {
 		logg(LOG_CRIT, "ibv_alloc_pd failed for %s.\n",
 			c->text);
-		return 1;
+		return false;
 	}
 
 	/*
 	 * Must alloate comp_events channel using the context created by rdmacm
 	 * otherwise ibv_create_cq will fail.
+	 * Only needed if the rdma cm channel is not served by polling.
 	 */
-	c->comp_events = ibv_create_comp_channel(c->id->verbs);
-	if (!c->comp_events) {
-		logg(LOG_CRIT, "ibv_create_comp_channel failed for %s : %s.\n",
-			c->text, errname());
-		abort();
-	}
+	if (c->core) {
+		c->comp_events = ibv_create_comp_channel(c->id->verbs);
+		if (!c->comp_events) {
+			logg(LOG_CRIT, "ibv_create_comp_channel failed for %s : %s.\n",
+				c->text, errname());
+			abort();
+		}
+	} else
+		c->comp_events = NULL;
 
 	c->cq = ibv_create_cq(c->id->verbs, c->nr_cq, c, c->comp_events, 0);
 	if (!c->cq) {
 		logg(LOG_CRIT, "ibv_create_cq failed for %s : %s nr_cq=%d.\n",
 			c->text, errname(), c->nr_cq);
-		return 1;
+		return false;
 	}
 
 	memset(&init_qp_attr_ex, 0, sizeof(init_qp_attr_ex));
@@ -1362,7 +1584,7 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 	if (ret) {
 		logg(LOG_CRIT, "rdma_create_qp_ex failed for %s. Error %s. #CQ=%d\n",
 				c->text, errname(), c->nr_cq);
-		return 1;
+		return false;
 	}
 
 	/* Copy QP to convenient location that is shared by all types of channels */
@@ -1370,9 +1592,9 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 	c->mr = ibv_reg_mr(c->pd, buffers, nr_buffers * sizeof(struct buf), IBV_ACCESS_LOCAL_WRITE);
 	if (!c->mr) {
 		logg(LOG_CRIT, "ibv_reg_mr failed for %s:%s.\n", c->text, errname());
-		return 1;
+		return false;
 	}
-	return 0;
+	return true;
 }
 
 bool setup_multicast(struct rdma_channel *c)
@@ -1417,11 +1639,13 @@ static bool setup_channel(struct rdma_channel *c)
 	struct ibv_qp_init_attr_ex init_qp_attr_ex;
 
 	c->mr = i->mr;
-	c->comp_events = i->comp_events;
+
+	if (!c->core)
+		c->comp_events = i->comp_events;
+
 	c->pd = i->pd;
 
-
-	c->cq = ibv_create_cq(i->context, c->nr_cq, c, i->comp_events, 0);
+	c->cq = ibv_create_cq(i->context, c->nr_cq, c, c->comp_events, 0);
 	if (!c->cq) {
 		logg(LOG_CRIT, "ibv_create_cq failed for %s.\n",
 			c->text);
@@ -1623,6 +1847,9 @@ static void setup_interface(enum interfaces in)
 	}
 
 	i->multicast = new_rdma_channel(i, channel_rdmacm);
+
+	if (!i->multicast)
+		abort();
 
 	if (unicast) {
 
@@ -1937,7 +2164,7 @@ static void handle_rdma_event(void *private)
 
 				c->id->context = c;
 
-				if (allocate_rdmacm_qp(c, false))
+				if (!allocate_rdmacm_qp(c, false))
 					goto err;
 
 				post_receive(c);
@@ -2430,7 +2657,7 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 	if (!at->dlid && !addr.s_addr)
 		abort();		/* Nothing given that could be resolved */
 
-
+redo:
 	if (at->dlid) {
 
 		if (i == i2r + ROCE)
@@ -2438,10 +2665,15 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 
 		ep = hash_find(i->ep, &at->dlid);
 		if (ep) {
-			if (ep->addr.s_addr == 0 && addr.s_addr) {
+			if (ep->addr.s_addr == 0 && addr.s_addr)
+			{
 				/* Ok we can add the IP address that was unknown earlier */
-				ep->addr = addr;
+				lock();
+				ep = hash_find(i->ep, &at->dlid);
+				if (ep && ep->addr.s_addr == 0)
+					ep->addr = addr;
 				hash_add(i->ip_to_ep, &ep);
+				unlock();
 			}
 			return ep;
 		}
@@ -2452,8 +2684,12 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 		if (ep) {
 			if (at->dlid && ep->lid == 0 && unicast_lid(at->dlid)) {
 				/* Add earlier unknown LID */
-				ep->lid = at->dlid;
+				lock();
+				ep = hash_find(i->ip_to_ep, &addr.s_addr);
+				if (ep->lid == 0)
+					ep->lid = at->dlid;
 				hash_add(i->ep, &ep);
+				unlock();
 			}
 			return ep;
 		}
@@ -2530,13 +2766,24 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 	ep->lid = at->dlid;
 	ep->ah = ah;
 
-	/* Dont add the address if it has not been determined yet */
-	if (addr.s_addr)
-		hash_add(i->ip_to_ep, ep);
+	lock();
 
-	/* But IB must have the LID defined so we can at least add that hash */
-	if (i2r + INFINIBAND == i)
-		hash_add(i->ep, ep);
+	if (!hash_find(i->ip_to_ep, ep) && (i == i2r + ROCE || !hash_find(i->ep, ep))) {
+
+		/* Dont add the address if it has not been determined yet */
+		if (addr.s_addr)
+			hash_add(i->ip_to_ep, ep);
+
+		/* But IB must have the LID defined so we can at least add that hash */
+		if (i2r + INFINIBAND == i)
+			hash_add(i->ep, ep);
+	} else	/* Concurrent update. Need to redo this action */
+		ep = NULL;
+
+	unlock();
+
+	if (!ep)
+		goto redo;
 
 	return ep;
 }
@@ -2848,9 +3095,16 @@ static const char *process_arp(struct i2r_interface *i, struct buf *buf, uint16_
 		ep = hash_find(i->ep, i2r + ROCE == i ? (void *)&addr : (void *)(lids + j));
 		if (ep) {
 			if (!ep->addr.s_addr) {
+				lock();
 
-				ep->addr = addr;
-				hash_add(i->ip_to_ep, ep);
+				ep = hash_find(i->ep, i2r + ROCE == i ? (void *)&addr : (void *)(lids + j));
+				if (!ep->addr.s_addr) {
+
+					ep->addr = addr;
+					hash_add(i->ip_to_ep, ep);
+				}
+
+				unlock();
 
 			} else if(ep->addr.s_addr != addr.s_addr)
 
@@ -3032,6 +3286,8 @@ no_cma:
 			goto err;
 		}
 
+		lock();
+
 		if (valid_addr(source_i, source) && ss->source->addr.s_addr == 0) {
 			struct endpoint *sep = hash_find(source_i->ip_to_ep, &source);
 
@@ -3067,6 +3323,8 @@ no_cma:
 					inet_ntoa(source), w->slid);
 			}
 		}
+
+		unlock();
 	}
 
 	ss->dest = ip_to_ep(dest_i, dest);
@@ -3074,6 +3332,8 @@ no_cma:
 		reason = "Cannot forward SIDR REQ since the address is unknown";
 		goto err;
 	}
+
+	lock();
 
 	if (hash_find(sidrs, &ss->request_id)) {
 		logg(LOG_WARNING, "SIDR_REQ: Removed earlier pending request\n");
@@ -3093,6 +3353,8 @@ no_cma:
 		free(ss);
 		free_buffer(buf);
 	}
+
+	unlock();
 
 	return NULL;
 
@@ -3135,14 +3397,20 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	if (sr_qkey != RDMA_UDP_QKEY)
 		logg(LOG_WARNING, "%s: Nonstandard QKEY = %x\n", buf->c->text, sr_qkey);
 
+	lock();
+
 	ss = hash_find(sidrs, &sr->request_id);
 	if (!ss)
 		return "SDIR_REP: Cannot find outstanding SIDR_REQ";
 
 	hash_del(sidrs, ss);
 
+	unlock();
+
 	if (ss->dest != buf->source_ep)
 		abort();
+
+	lock();
 
 	if (find_forward(ss->source, (buf->c->i == i2r + INFINIBAND) ? NULL : ss->dest, ss->source_qp))
 		return "Ignoring SIDR REQ since one is already pending";
@@ -3152,6 +3420,8 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	if (ss->source_qp)
 		/* Add the reverse forward if we have the source_qp number */
 		add_forward(ss->dest, sr_qpn, ss->source, ss->source_qp, sr_qkey);
+
+	unlock();
 
 	qpn_word = (ss->source->i->ud->qp->qp_num << 8) | (qpn_word & 0xff);
 	sr->qpn = htonl(qpn_word);
@@ -3546,35 +3816,9 @@ static void reset_flags(struct buf *buf)
 	memset(&buf->ether_valid, 0, (void *)&buf->ip_csum_ok - (void *)&buf->ether_valid);
 }
 
-static void handle_comp_event(void *private)
+static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs)
 {
-	struct ibv_comp_channel *events = private;
-	struct rdma_channel *c;
-	struct i2r_interface *i;
-	struct ibv_cq *cq;
-	int cqs;
-	struct ibv_wc wc[max_wc_cqs];
-	int j;
-
-	ibv_get_cq_event(events, &cq, (void **)&c);
-	i = c->i;
-
-	ibv_ack_cq_events(cq, 1);
-	if (ibv_req_notify_cq(cq, 0)) {
-		logg(LOG_CRIT, "ibv_req_notify_cq: Failed\n");
-		abort();
-	}
-
-	/* Retrieve completion events and process incoming data */
-	cqs = ibv_poll_cq(cq, max_wc_cqs, wc);
-	if (cqs < 0) {
-		logg(LOG_WARNING, "CQ polling failed with: %s on %s\n",
-			errname(), c->text);
-		goto exit;
-	}
-
-	if (cqs == 0)
-		goto exit;
+	unsigned j;
 
 	if (cqs > cq_high)
 		cq_high = cqs;
@@ -3610,7 +3854,7 @@ static void handle_comp_event(void *private)
 			if (w->wc_flags & IBV_WC_GRH) {
 				PULL(buf, buf->grh);
 				buf->grh_valid = true;
-				if (i == i2r + ROCE) {
+				if (c->i == i2r + ROCE) {
 					/*
 					 * In the ROCE ipv4 case the IP header is
 					 * at the end of the GRH instead of a
@@ -3640,7 +3884,34 @@ static void handle_comp_event(void *private)
 
 	/* Since we freed some buffers up we may be able to post more of them */
 	post_receive(c);
-exit:
+}
+
+static void handle_comp_event(void *private)
+{
+	struct ibv_comp_channel *events = private;
+	struct rdma_channel *c;
+	struct ibv_cq *cq;
+	int cqs;
+	struct ibv_wc wc[max_wc_cqs];
+
+	ibv_get_cq_event(events, &cq, (void **)&c);
+
+	ibv_ack_cq_events(cq, 1);
+	if (ibv_req_notify_cq(cq, 0)) {
+		logg(LOG_CRIT, "ibv_req_notify_cq: Failed\n");
+		abort();
+	}
+
+	/* Retrieve completion events and process incoming data */
+	cqs = ibv_poll_cq(cq, 100, wc);
+	if (cqs < 0) {
+		logg(LOG_WARNING, "CQ polling failed with: %s on %s\n",
+			errname(), c->text);
+		return;
+	}
+
+	if (cqs)
+		process_cqes(c, wc, cqs);
 }
 
 /* Special handling using raw socket */
@@ -4145,7 +4416,8 @@ static void register_poll_events(void)
 	   if (i->context) {
 
 		register_callback(handle_rdma_event, i->rdma_events->fd, i);
-		register_callback(handle_comp_event, i->multicast->comp_events->fd, i->multicast->comp_events);
+		if (i->multicast->comp_events)
+			register_callback(handle_comp_event, i->multicast->comp_events->fd, i->multicast->comp_events);
 		register_callback(handle_async_event, i->context->async_fd, i);
 
 		if (i->raw || i->ud)	/* They share the interface comp_events notifier */
@@ -4394,6 +4666,7 @@ struct option opts[] = {
 	{ "unicast", no_argument, NULL, 'u' },
 	{ "config", required_argument, NULL, 'c' },
 	{ "buffers", required_argument, NULL, 'z' },
+	{ "cores", required_argument, NULL, 'k' },
 	{ NULL, 0, NULL, 0 }
 };
 
@@ -4489,6 +4762,12 @@ static void exec_opt(int op, char *optarg)
 			break;
 
 
+		case 'k':
+			cores = atoi(optarg);
+			if (cores > 8)
+				abort();
+			break;
+
 		case 'l':
 			if (optarg) {
 				mgid_mode = find_mgid_mode(optarg);
@@ -4568,6 +4847,7 @@ static void exec_opt(int op, char *optarg)
 			printf("-f|--flow		*experimental*	Enable flow steering to do hardware filtering of packets\n");
 			printf("-h|--huge				Use Huge pages\n");
 			printf("-i|--inbound <multicast address>	Incoming multicast only (ib traffic in, roce traffic out)\n");
+			printf("-k|--cores <nr>				Spin on the given # of cores\n");
 			printf("-l|--mgid				List availabe MGID formats for Infiniband\n");
 			printf("-l|--mgid <format>			Set default MGID format\n");
 			printf("-m|--multicast <multicast address>[:port][/mgidformat] (bidirectional)\n");
@@ -4593,7 +4873,7 @@ int main(int argc, char **argv)
 
 	sidr_state_init();
 
-	while ((op = getopt_long(argc, argv, "ab::c:d:fhi:l::m:no:p:i:tuvxyz:",
+	while ((op = getopt_long(argc, argv, "ab::c:d:fhi:k:l::m:no:p:i:tuvxyz:",
 					opts, NULL)) != -1)
 		exec_opt(op, optarg);
 
@@ -4633,7 +4913,11 @@ int main(int argc, char **argv)
 
 	register_poll_events();
 
+	start_cores();
+
 	event_loop();
+
+	stop_cores();
 
 	if (background)
 		close(status_fd);
