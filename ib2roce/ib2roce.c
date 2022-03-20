@@ -177,6 +177,8 @@ static const char *stats_text[nr_stats] = {
 	"LeaveRequests"
 };
 
+unsigned max_wc_cqs = 1000;
+
 static int cq_high = 0;	/* Largest batch of CQs encountered */
 
 enum channel_type { channel_rdmacm, channel_ud, channel_raw, channel_packet, nr_channel_types };
@@ -3489,7 +3491,7 @@ static void handle_comp_event(void *private)
 	struct i2r_interface *i;
 	struct ibv_cq *cq;
 	int cqs;
-	struct ibv_wc wc[100];
+	struct ibv_wc wc[max_wc_cqs];
 	int j;
 
 	ibv_get_cq_event(events, &cq, (void **)&c);
@@ -3502,7 +3504,7 @@ static void handle_comp_event(void *private)
 	}
 
 	/* Retrieve completion events and process incoming data */
-	cqs = ibv_poll_cq(cq, 100, wc);
+	cqs = ibv_poll_cq(cq, max_wc_cqs, wc);
 	if (cqs < 0) {
 		logg(LOG_WARNING, "CQ polling failed with: %s on %s\n",
 			errname(), c->text);
