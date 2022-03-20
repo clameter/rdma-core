@@ -49,6 +49,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <pthread.h>
+#include <numa.h>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -293,6 +294,7 @@ static struct i2r_interface {
 	struct sockaddr_in if_netmask;
 	unsigned ifindex;
 	unsigned numa_node;			/* NUMA Affinity of the interface */
+	struct bitmask *cpus;
 	unsigned gid_index;
 	union ibv_gid gid;
 	struct ibv_device_attr device_attr;
@@ -1157,12 +1159,22 @@ process_cq:
 /* Called after all the channels have been setup */
 static void start_cores(void)
 {
-	int i;
+	struct i2r_interface *i;
+	int j;
 
-	for(i = 0; i < cores; i++) {
-		struct core_info *ci = core_infos + i;
+	for(j = 0; j < cores; j++) {
+		struct core_info *ci = core_infos + j;
 
-		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + i)) {
+		if (cores > 1) {
+			if (j < cores / 2) 
+				i = i2r + INFINIBAND;
+			else
+				i = i2r + ROCE;
+
+			pthread_attr_setaffinity_np(&ci->attr, i->cpus->size, (const cpu_set_t *)i->cpus->maskp);
+		}
+
+		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + j)) {
 			logg(LOG_CRIT, "Pthread create failed: %s\n", errname());
 			abort();
 		}
@@ -1422,6 +1434,7 @@ static void get_if_info(struct i2r_interface *i)
 {
 	int fh = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
 	struct ifreq ifr;
+	char buffer[80];
 	const char *reason = "socket(AF_INET, SOCK_DGRAM, IPPROTO_IP)";
 
 	if (fh < 0)
@@ -1470,16 +1483,26 @@ static void get_if_info(struct i2r_interface *i)
 	memcpy(&i->if_netmask, &ifr.ifr_netmask, sizeof(struct sockaddr_in));
 	ioctl(fh, SIOCGIFHWADDR, &ifr);
 	memcpy(&i->if_mac, &ifr.ifr_hwaddr.sa_data, ETH_ALEN);
-	goto out;
+	close(fh);
+
+	/* Read NUMA node of the IF */
+	snprintf(buffer, sizeof(buffer), "/sys/class/net/%s/device/numa_node", i->if_name);
+	fh = open(buffer, O_RDONLY);
+	read(fh, buffer, sizeof(buffer));
+	close(fh);
+
+	i->numa_node = atoi(buffer);
+
+	/* Determine CPUs that are local to the IF */
+	i->cpus = numa_allocate_cpumask();
+	numa_node_to_cpus(i->numa_node, i->cpus);
+	return;
 
 err:
 	logg(LOG_CRIT, "Cannot determine IP interface setup for %s %s : %s\n",
 		     ibv_get_device_name(i->context->device), reason, errname());
 
 	abort();
-
-out:
-	close(fh);
 }
 
 static void start_channel(struct rdma_channel *c)
@@ -1879,7 +1902,7 @@ static void setup_interface(enum interfaces in)
 	}
 
 	/* Affinity can change back */
-	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u.\n",
+	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u NUMA=%d.\n",
 		i->text,
 		ibv_get_device_name(i->context->device),
 		i->if_name, i->ifindex,
@@ -1889,7 +1912,8 @@ static void setup_interface(enum interfaces in)
 		i->multicast ? i->multicast->nr_cq: 0,
 		i->ud ? i->ud->nr_cq : 0,
 		i->raw ? i->raw->nr_cq : 0,
-		i->mtu
+		i->mtu,
+		i->numa_node
 	);
 }
 
