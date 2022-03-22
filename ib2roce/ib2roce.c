@@ -877,9 +877,13 @@ static void free_buffer(struct buf *buf)
 #ifdef DEBUG
 	memset(buf->raw, 0, DATA_SIZE);
 #endif
+	lock();
+
 	buf->free = true;
 	buf->next = nextbuffer;
 	nextbuffer = buf;
+
+	unlock();
 }
 
 /* Remove all buffers related to a channel */
@@ -930,13 +934,17 @@ static void init_buf(void)
 
 static struct buf *alloc_buffer(struct rdma_channel *c)
 {
-	struct buf *buf = nextbuffer;
+	struct buf *buf;
+
+	lock();
+	buf = nextbuffer;
 
 	if (buf) {
 		nextbuffer = buf->next;
 		buf->free = false;
 	}
 	buf->c = c;
+	unlock();
 
 #ifdef DEBUG
 	buf->next = NULL;
