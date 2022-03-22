@@ -1965,7 +1965,7 @@ static void setup_interface(enum interfaces in)
 
 	i->mr = ibv_reg_mr(i->pd, buffers, nr_buffers * sizeof(struct buf), IBV_ACCESS_LOCAL_WRITE);
 	if (!i->mr) {
-		logg(LOG_CRIT, "ibv_reg_mr failed for %s.\n", i->text);
+		logg(LOG_CRIT, "ibv_reg_mr failed for %s:%s.\n", i->text, errname());
 		abort();
 	}
 
@@ -5111,6 +5111,8 @@ int main(int argc, char **argv)
 			mgid_mode->id,
 			nr_buffers);
 
+	init_buf();	/* Setup interface registers memmory */
+
 	setup_interface(INFINIBAND);
 	setup_interface(ROCE);
 
@@ -5123,7 +5125,6 @@ int main(int argc, char **argv)
 	if (beacon)
 		beacon_setup(beacon_arg);
 
-	init_buf();
 
 	register_poll_events();
 	post_receive_buffers();
