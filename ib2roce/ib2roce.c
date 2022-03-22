@@ -3438,19 +3438,21 @@ no_cma:
 
 	if (bridging) {
 
-		/* Source QPN is not valid for target network */
-		ch->src_addr.ip4.qpn = 0;
+		hash_add(sidrs, ss);
+		unlock();
+
+		/* Source QPN is not valid for target network use the QP number */
+		ch->src_addr.ip4.qpn = ss->source->i->ud->qp->qp_num;
 
 		send_mad(ss->dest, buf, mad_pos);
-		hash_add(sidrs, ss);
 		
 	} else {
+		unlock();
 
 		free(ss);
 		free_buffer(buf);
 	}
 
-	unlock();
 
 	return NULL;
 
@@ -3496,8 +3498,10 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	lock();
 
 	ss = hash_find(sidrs, &sr->request_id);
-	if (!ss)
+	if (!ss) {
+		unlock();
 		return "SDIR_REP: Cannot find outstanding SIDR_REQ";
+	}
 
 	hash_del(sidrs, ss);
 
@@ -3816,6 +3820,8 @@ static void receive_ud(struct buf *buf)
 	f = find_forward(e, d, w->src_qp);
 
  	if (!f) {
+		lock();
+
 		/* Hmm... Not good. Maybe there is a wild chart entry if the source_qp was not determined yet */
 		f = find_forward(e, d, 0);
 		if (f) {
@@ -3825,6 +3831,8 @@ static void receive_ud(struct buf *buf)
 			/* And add the missing reverse forward */
 			add_forward(f->dest, f->dest_qp, e, f->source_qp, f->dest_qkey); 
 		}
+
+		unlock();
  	}
  
 	if (!f) {
