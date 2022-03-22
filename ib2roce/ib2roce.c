@@ -4788,12 +4788,14 @@ struct enable_option {
 	const char *def_value;
 	const char *description;
 } enable_table[] = {
-{ 	"raw", 	&raw, NULL, "on", "Enable the use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
-{	"flow", &flow_steering, NULL, "on", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{	"bridging", &bridging, NULL, "off", "Disable the forwarding of packets between interfaces" },
 {	"drop", NULL, &drop_packets, "100",  "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
-{	"unicast", &unicast, NULL, "on", "Enable processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{	"flow", &flow_steering, NULL, "on", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{	"huge", &huge, NULL, "on", "Enable the use of Huge memory for the packet pool" }, 
+{	"loopbackprev", &loopback_blocking, NULL, "off", "Disable loopback prevention by the NIC" },
 {	"packetsocket", &packet_socket, NULL, "on", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
-{	"loopback-prevention", &loopback_blocking, NULL, "off", "Disable loopback prevention by the NIC" },
+{ 	"raw", 	&raw, NULL, "on", "Enable the use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{	"unicast", &unicast, NULL, "on", "Enable processing of unicast packets with QP1 handling of SIDR REQ/REP" },
 {	NULL, NULL, NULL, NULL, NULL }
 };
 
@@ -4807,7 +4809,7 @@ static void enable(char *option)
 
 	if (!option || !option[0]) {
 		printf("List of available options that can be enabled\n");
-		printf("Var\tType\tDefault\tDefAction\tDescription\n");
+		printf("Var\t\tType\tDefault\tDefAction\tDescription\n");
 		printf("----------------------------------------------------\n");
 		for(i = 0; enable_table[i].id; i++) {
 			char state[10];
@@ -4822,7 +4824,7 @@ static void enable(char *option)
 			} else
 				snprintf(state, 10, "%d", *eo->int_flag);
 
-			printf("%s\t%s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->def_value, eo->description);
+			printf("%-14s\t%s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->def_value, eo->description);
 		}
 		exit(1);
 	}
@@ -4877,7 +4879,6 @@ struct option opts[] = {
 	{ "mgid", optional_argument, NULL, 'l' },
 	{ "beacon", optional_argument, NULL, 'b' },
 	{ "debug", no_argument, NULL, 'x' },
-	{ "nobridge", no_argument, NULL, 'n' },
 	{ "port", required_argument, NULL, 'p' },
 	{ "verbose", no_argument, NULL, 'v' },
 	{ "test", no_argument, NULL, 't' },
@@ -4948,10 +4949,6 @@ static void exec_opt(int op, char *optarg)
 	int n;
 
 	switch (op) {
-		case 'a':
-			loopback_blocking = false;
-			break;
-
 		case 'b':
 			beacon = true;
 			beacon_arg = optarg;
@@ -4968,16 +4965,11 @@ static void exec_opt(int op, char *optarg)
 		case 'e' : enable(optarg);
 			break;
 
-		case 'h':
-			huge = true;
-			break;
-
 		case 'i':
 			ret = new_mc_addr(optarg, false, true);
 			if (ret)
 				exit(1);
 			break;
-
 
 		case 'k':
 			cores = atoi(optarg);
@@ -5008,10 +5000,6 @@ static void exec_opt(int op, char *optarg)
 			ret = new_mc_addr(optarg, false, false);
 			if (ret)
 				exit(1);
-			break;
-
-		case 'n':
-			bridging = false;
 			break;
 
 		case 'o':
@@ -5049,25 +5037,19 @@ static void exec_opt(int op, char *optarg)
 		default:
 			printf("ib2roce " VERSION " Mar 8,2022 (C) 2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
-			printf("-a|--loopback				Do not request loopback blocking\n");
 			printf("-b|--beacon <multicast address>		Send beacon every second\n");
 			printf("-c|--config <file>			Read config from file\n");
                        	printf("-d|--device <if[:portnumber][/<netdev>]	Infiniband interface\n");
-			printf("-f|--flow		*experimental*	Enable flow steering to do hardware filtering of packets\n");
-			printf("-h|--huge				Use Huge pages\n");
 			printf("-i|--inbound <multicast address>	Incoming multicast only (ib traffic in, roce traffic out)\n");
 			printf("-k|--cores <nr>				Spin on the given # of cores\n");
 			printf("-l|--mgid				List availabe MGID formats for Infiniband\n");
 			printf("-l|--mgid <format>			Set default MGID format\n");
 			printf("-m|--multicast <multicast address>[:port][/mgidformat] (bidirectional)\n");
-			printf("-n|--nobridge				Do everything but do not bridge packets\n");
 			printf("-o|--outbound <multicast address>	Outgoing multicast only / sendonly /(ib trafic out, roce traffic in)\n");
 			printf("-p|--port >number>			Set default port number\n");
 			printf("-r|--roce <if[:portnumber]>		ROCE interface\n");
-			printf("-u|--unicast		*experimental*	Unicast forwarding support\n");
 			printf("-v|--log-packets			Show detailed information about discarded packets\n");
 			printf("-x|--debug				Do not daemonize, enter debug mode\n");
-			printf("-y|--packetsocket			Use Packet Socket instead of RAW QP\n");
 			printf("-z|--buffers <nr>			How many packet buffers of 8k size to allocate[1mio]\n");
 			exit(1);
 	}
@@ -5082,7 +5064,7 @@ int main(int argc, char **argv)
 
 	sidr_state_init();
 
-	while ((op = getopt_long(argc, argv, "ab::c:d:e::fhi:k:l::m:no:p:i:tuvxyz:",
+	while ((op = getopt_long(argc, argv, "b::c:d:e::i:k:l::m:o:p:i:tvxz:",
 					opts, NULL)) != -1) {
 		if (!optarg && argv[optind] && argv[optind][0] != '-') {
 			optarg = argv[optind];
