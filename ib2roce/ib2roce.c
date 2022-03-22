@@ -317,7 +317,6 @@ static struct i2r_interface {
 	struct sockaddr_in if_netmask;
 	unsigned ifindex;
 	unsigned numa_node;			/* NUMA Affinity of the interface */
-	struct bitmask *cpus;
 	unsigned gid_index;
 	union ibv_gid gid;
 	struct ibv_device_attr device_attr;
@@ -1088,6 +1087,7 @@ static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum chann
 {
 	struct rdma_channel *c;
 	struct channel_info *ci;
+	struct core_info *coi = NULL;
 	char *p;
 	short core;
 	int channel_nr;
@@ -1096,10 +1096,9 @@ retry:
 	ci = channel_infos + type;
 	channel_nr = -1;
 
-	/* Change affinity to the one fo the interface */
 	core = core_lookup(i, type);
 	if (core != NO_CORE) {
-		struct core_info *coi = core_infos + core;
+		coi = core_infos + core;
 
 		channel_nr = coi->nr_channels;
 		c = coi->channel + channel_nr;
@@ -1132,8 +1131,20 @@ retry:
 	}	
 
 	if (ci->setup(c)) {
-		if (channel_nr >= 0)
-			core_infos[core].cq[channel_nr] = c->cq;
+		/* Channel setup ok */
+
+		if (coi) {
+			coi->cq[channel_nr] = c->cq;
+
+			if (channel_nr == 1) {
+				/* First channel. Copy the numa node */
+				coi->numa_node = c->i->numa_node;
+			} else {
+				if (coi->numa_node != c->i->numa_node)
+					/* Cannot bind since we are dealing with hardware from multiple nodes */
+					coi->numa_node = -1;
+			}
+		}
 		return c;
 	}
 
@@ -1172,6 +1183,7 @@ static void *busyloop(void *private)
 	struct ibv_wc wc[max_wc_cqs];
 
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+	numa_run_on_node(core->numa_node);
 
 	core->state = core_init;
 	/*
@@ -1209,22 +1221,12 @@ process_cq:
 /* Called after all the channels have been setup */
 static void start_cores(void)
 {
-	struct i2r_interface *i;
 	int j;
 
 	lockstate = state_unlocked;
 
 	for(j = 0; j < cores; j++) {
 		struct core_info *ci = core_infos + j;
-
-		if (cores > 1) {
-			if (j < cores / 2) 
-				i = i2r + INFINIBAND;
-			else
-				i = i2r + ROCE;
-
-			pthread_attr_setaffinity_np(&ci->attr, i->cpus->size, (const cpu_set_t *)i->cpus->maskp);
-		}
 
 		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + j)) {
 			logg(LOG_CRIT, "Pthread create failed: %s\n", errname());
@@ -1545,10 +1547,6 @@ static void get_if_info(struct i2r_interface *i)
 	close(fh);
 
 	i->numa_node = atoi(buffer);
-
-	/* Determine CPUs that are local to the IF */
-	i->cpus = numa_allocate_cpumask();
-	numa_node_to_cpus(i->numa_node, i->cpus);
 	return;
 
 err:
@@ -1895,7 +1893,7 @@ static void setup_interface(enum interfaces in)
 	/* Get more info about the IP network attached to the RDMA device */
 	get_if_info(i);
 
-	/* Affinity should change here to a core close to the NIC */
+	numa_run_on_node(i->numa_node);
 
 	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
 	i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
@@ -1955,6 +1953,8 @@ static void setup_interface(enum interfaces in)
 			}
 		}
 	}
+
+	numa_run_on_node(-1);
 
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u NUMA=%d.\n",
 		i->text,
