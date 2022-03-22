@@ -1771,8 +1771,8 @@ static bool setup_raw(struct rdma_channel *c)
 		return false;
 
 #ifdef HAVE_MSTFLINT
-	if (i == i2r + INFINIBAND) {
-		if (set_ib_sniffer(ibv_get_device_name(i->context->device), i->port, c->qp)) {
+	if (c->i == i2r + INFINIBAND) {
+		if (set_ib_sniffer(ibv_get_device_name(i->context->device), c->i->port, c->qp)) {
 
 			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
 			ibv_destroy_qp(c->qp);
