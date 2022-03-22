@@ -4430,7 +4430,7 @@ static void logging(void)
 
 	if (n == 0) {
 		events = "No upcoming events";
-		interval = 60000;
+		interval = 10000;
 	} else {
 		snprintf(buf2, sizeof(buf2), "Events in %s", buf);
 		events = buf2;
