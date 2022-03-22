@@ -1027,7 +1027,7 @@ struct channel_info {
  */
 
 #define MAX_CORE 8
-#define MAX_CQS_PER_CORE 2
+#define MAX_CQS_PER_CORE 4
 
 static unsigned cores = 0;		/* How many cores can we consume */
 
@@ -1087,6 +1087,8 @@ static void show_core_config(void)
 		for (j = 0; j < ci->nr_channels; j++) {
 			n += sprintf(b + n, "%s ", ci->channel[j].text);
 		}
+
+		n += sprintf(b +n,"\n");
 		logg(LOG_NOTICE, "Core %d: NUMA=%d %s", i, ci->numa_node, b);
 
 	}
@@ -1114,6 +1116,10 @@ retry:
 		c = coi->channel + channel_nr;
 		memset(c, 0, sizeof(struct rdma_channel));
 		coi->nr_channels++;
+		if (coi->nr_channels > MAX_CQS_PER_CORE) {
+			logg(LOG_CRIT, "Too many RDMA channels per core. Max = %d\n", MAX_CQS_PER_CORE);
+			abort();
+		}
 		c->core = coi;
 
 	} else
@@ -1147,12 +1153,14 @@ retry:
 			coi->cq[channel_nr] = c->cq;
 
 			if (channel_nr == 1) {
-				/* First channel. Copy the numa node */
 				coi->numa_node = c->i->numa_node;
 			} else {
-				if (coi->numa_node != c->i->numa_node)
+				if (coi->numa_node != c->i->numa_node) {
+					logg(LOG_WARNING, "Core %d has NUMA %d but Channel %s NUMA %d are has conflicting requirements about NUMA placement\n",
+						core, coi->numa_node, c->text, c->i->numa_node);
 					/* Cannot bind since we are dealing with hardware from multiple nodes */
 					coi->numa_node = -1;
+				}
 			}
 		}
 		return c;
@@ -1163,6 +1171,8 @@ retry:
 		free(p);
 		if (channel_nr < 0)
 			free(c);
+		else
+			coi->nr_channels--;
 		goto retry;
 	}
 
