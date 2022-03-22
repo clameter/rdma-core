@@ -15,6 +15,7 @@ target_link_libraries(ib2roce LINK_PRIVATE
   ${SYSTEMD_LIBRARIES}
   ${CMAKE_THREAD_LIBS_INIT}
   ${CMAKE_DL_LIBS}
+  numa
   )
 rdma_man_pages(
   man/ib2roce.1
