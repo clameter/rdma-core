@@ -919,6 +919,8 @@ static void init_buf(void)
 		abort();
 	}
 
+	numa_run_on_node(i2r[INFINIBAND].context ? i2r[INFINIBAND].numa_node : i2r[ROCE].numa_node);
+
 	flags = MAP_PRIVATE | MAP_ANONYMOUS;
 	if (huge)
 		flags |= MAP_HUGETLB;
@@ -933,6 +935,8 @@ static void init_buf(void)
 				nr_buffers * (BUFFER_SIZE / 1024), nr_buffers, errname());
 		abort();
 	}
+
+	numa_run_on_node(-1);
 
 	/*
 	 * Free in reverse so that we have a linked list
@@ -1759,11 +1763,10 @@ static bool setup_channel(struct rdma_channel *c)
 	struct ibv_qp_init_attr_ex init_qp_attr_ex;
 
 	c->mr = i->mr;
+	c->pd = i->pd;
 
 	if (!c->core)
 		c->comp_events = i->comp_events;
-
-	c->pd = i->pd;
 
 	c->cq = ibv_create_cq(i->context, c->nr_cq, c, c->comp_events, 0);
 	if (!c->cq) {
@@ -5084,7 +5087,6 @@ int main(int argc, char **argv)
 		exec_opt(op, optarg);
 	}
 
-	init_buf();
 
 	if (debug || !bridging)
 		openlog("ib2roce", LOG_PERROR, LOG_USER);
@@ -5120,6 +5122,8 @@ int main(int argc, char **argv)
 
 	if (beacon)
 		beacon_setup(beacon_arg);
+
+	init_buf();
 
 	register_poll_events();
 	post_receive_buffers();
