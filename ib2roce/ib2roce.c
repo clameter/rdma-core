@@ -1596,7 +1596,7 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 	 * otherwise ibv_create_cq will fail.
 	 * Only needed if the rdma cm channel is not served by polling.
 	 */
-	if (c->core) {
+	if (!c->core) {
 		c->comp_events = ibv_create_comp_channel(c->id->verbs);
 		if (!c->comp_events) {
 			logg(LOG_CRIT, "ibv_create_comp_channel failed for %s : %s.\n",
@@ -1796,7 +1796,7 @@ static bool setup_raw(struct rdma_channel *c)
 
 #ifdef HAVE_MSTFLINT
 	if (c->i == i2r + INFINIBAND) {
-		if (set_ib_sniffer(ibv_get_device_name(i->context->device), c->i->port, c->qp)) {
+		if (set_ib_sniffer(ibv_get_device_name(c->i->context->device), c->i->port, c->qp)) {
 
 			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
 			ibv_destroy_qp(c->qp);
