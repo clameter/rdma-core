@@ -1057,11 +1057,30 @@ struct core_info {
 	unsigned nr_channels;
 	struct ibv_cq *cq[MAX_CQS_PER_CORE];	/* The CQs to monitor */
 	enum core_state state;
-	unsigned processor;			/* Affinity to which proc */
+	int numa_node;
 	pthread_t thread;			/* Thread */
 	pthread_attr_t attr;
 	struct rdma_channel channel[MAX_CQS_PER_CORE];
 } core_infos[MAX_CORE];
+
+static void show_core_config(void)
+{
+	unsigned i;
+
+	for(i = 0; i < cores; i++) {
+		char b[200];
+		unsigned n = 0;
+		unsigned j;
+		struct core_info *ci = core_infos + i;
+
+		for (j = 0; j < ci->nr_channels; j++) {
+			n += sprintf(b + n, "%s ", ci->channel[j].text);
+		}
+		logg(LOG_NOTICE, "Core %d: NUMA=%d %s", i, ci->numa_node, b);
+
+	}
+}
+
 
 static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type)
 {
@@ -4977,6 +4996,9 @@ int main(int argc, char **argv)
 
 	setup_interface(INFINIBAND);
 	setup_interface(ROCE);
+
+	if (cores)
+		show_core_config();
 
 	if (background)
 		status_fd = open("ib2roce-status", O_CREAT | O_RDWR | O_TRUNC,  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
