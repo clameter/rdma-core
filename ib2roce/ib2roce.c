@@ -3868,8 +3868,10 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 			st(c, packets_received);
 
 			if (c != buf->c) {
-				logg(LOG_CRIT, "RDMA Channel mismatch CQ channel/buffer.\n");
-				abort();
+				logg(LOG_CRIT, "%s: RDMA Channel mismatch CQE is from %s.\n", c->text, buf->c->text);
+				st(c, packets_invalid);
+				free(buf);
+				continue;
 			}
 
 			buf->cur = buf->raw;
