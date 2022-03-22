@@ -1943,18 +1943,19 @@ static void setup_interface(enum interfaces in)
 		i->ud = new_rdma_channel(i, channel_ud);
 		i->qp1 = new_rdma_channel(i, channel_qp1);
 
-		if (i == i2r + INFINIBAND) {
-			i->raw = new_rdma_channel(i, channel_ibraw);
-			/* Sadly fallback is not working here */
-		} else {
-			if (packet_socket)
-				i->raw = new_rdma_channel(i, channel_packet);
-			else
-				i->raw = new_rdma_channel(i, channel_raw);
+		if (raw) {
+			if (i == i2r + INFINIBAND) {
+				i->raw = new_rdma_channel(i, channel_ibraw);
+				/* Sadly fallback is not working here */
+			} else {
+				if (packet_socket)
+					i->raw = new_rdma_channel(i, channel_packet);
+				else
+					i->raw = new_rdma_channel(i, channel_raw);
+			}
 		}
 	}
 
-	/* Affinity can change back */
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u NUMA=%d.\n",
 		i->text,
 		ibv_get_device_name(i->context->device),
