@@ -135,27 +135,47 @@ static void logg(int prio, const char *fmt, ...)
 
 static pthread_mutex_t mutex;		/* Generic serialization mutex */
 
+enum locking_state { state_unlocked, state_locked, state_single_threaded};
+
+enum locking_state lockstate = state_single_threaded;
+
 static void lock(void)
 {
-	if (pthread_mutex_lock(&mutex))
-		logg(LOG_ERR, "Mutex lock failed: %s\n", errname());
-}
+	if (lockstate == state_single_threaded)
+		return;
 
+ 	if (pthread_mutex_lock(&mutex))
+ 		logg(LOG_ERR, "Mutex lock failed: %s\n", errname());
+
+	lockstate = state_locked;
+}
+ 
 static void unlock(void)
 {
-	if (pthread_mutex_unlock(&mutex))
-		logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
-}
+	if (lockstate == state_single_threaded)
+		return;
 
+ 	if (pthread_mutex_unlock(&mutex))
+ 		logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
+
+	lockstate = state_unlocked;
+}
+ 
 #if 0
 static bool trylock(void)
 {
-	if (pthread_mutex_trylock(&mutex)) {
-		if (errno != EBUSY)
-			logg(LOG_ERR, "Mutex trylock failed: %s\n", errname());
-		return false;
-	}
-	return true;
+	if (lockstate == state_single_threaded)
+		goto out;
+
+ 	if (pthread_mutex_trylock(&mutex)) {
+ 		if (errno != EBUSY)
+ 			logg(LOG_ERR, "Mutex trylock failed: %s\n", errname());
+ 		return false;
+ 	}
+
+	lockstate = state_locked;
+out:
+ 	return true;
 }
 #endif
 
@@ -1163,6 +1183,8 @@ static void start_cores(void)
 	struct i2r_interface *i;
 	int j;
 
+	lockstate = state_unlocked;
+
 	for(j = 0; j < cores; j++) {
 		struct core_info *ci = core_infos + j;
 
@@ -1196,6 +1218,7 @@ static void stop_cores(void)
 			abort();
 		}
 	}
+	lockstate = state_single_threaded;
 }
  
 static char hexbyte(unsigned x)
