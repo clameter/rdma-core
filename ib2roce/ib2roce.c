@@ -1184,6 +1184,7 @@ err:
 }
 
 static void process_cqes(struct rdma_channel *c, struct ibv_wc *w, unsigned cqs);
+static void arm_channels(struct core_info *core);
 
 /*
  * Polling function for each core enabling low latency operations.
@@ -1216,6 +1217,7 @@ static void *busyloop(void *private)
 	 * Initialize relevant data structures for this thread. These must be allocated
 	 * from the thread to ensure that they are thread local
 	 */
+	arm_channels(core);
 
 	core->state = core_running;
 
@@ -1440,12 +1442,16 @@ static void post_receive(struct rdma_channel *c)
 	}
 }
 
-static void post_receive_buffers(struct i2r_interface *i)
+static void post_receive_buffers(void)
 {
-	post_receive(i->multicast);
-	post_receive(i->raw);
-	post_receive(i->qp1);
-	post_receive(i->ud);
+	struct i2r_interface *i;
+
+	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
+		post_receive(i->multicast);
+		post_receive(i->raw);
+		post_receive(i->qp1);
+		post_receive(i->ud);
+	}
 }
 
 
@@ -4575,32 +4581,32 @@ static void setup_timed_events(void)
 	add_event(t + 100, check_joins);
 }
 
-static void arm_channels(void)
+static void arm_channels(struct core_info *core)
 {
 	struct i2r_interface *i;
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++)
 	   if (i->context) {
-		/* Receive Buffers */
-		post_receive_buffers(i);
+
 		/* And request notifications if something happens */
-		if (i->multicast) {
+		if (i->multicast && core == i->multicast->core) {
 			ibv_req_notify_cq(i->multicast->cq, 0);
 		}
 
-		if (i->raw && (i->raw->type == channel_raw || i->raw->type == channel_ibraw)) {
+		if (i->raw && core == i->raw->core &&
+			       (i->raw->type == channel_raw || i->raw->type == channel_ibraw)) {
 			start_channel(i->raw);
 			ibv_req_notify_cq(i->raw->cq, 0);
 
 			setup_flow(i->raw);
 		}
 
-		if (i->ud) {
+		if (i->ud && core == i->ud->core) {
 			start_channel(i->ud);
 			ibv_req_notify_cq(i->ud->cq, 0);
 		}
 
-		if (i->qp1) {
+		if (i->qp1 && core == i->qp1->core) {
 			start_channel(i->qp1);
 			ibv_req_notify_cq(i->qp1->cq, 0);
 		}
@@ -4616,7 +4622,7 @@ static int event_loop(void)
 	int waitms;
 	unsigned long t;
 
-	arm_channels();
+	arm_channels(NULL);
 	setup_timed_events();
 loop:
 	timeout = 10000;
@@ -5116,6 +5122,7 @@ int main(int argc, char **argv)
 		beacon_setup(beacon_arg);
 
 	register_poll_events();
+	post_receive_buffers();
 
 	start_cores();
 
