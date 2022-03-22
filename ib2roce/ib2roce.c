@@ -103,11 +103,13 @@ static bool update_requested = false;	/* Received SIGUSR1. Dump all MC data deta
 static bool beacon = false;		/* Announce our presence (and possibly coordinate between multiple instances in the future */
 static bool bridging = true;		/* Allow briding */
 static bool unicast = false;		/* Bridge unicast packets */
+static bool raw = false;		/* Use raw channels */
 static bool flow_steering = false;	/* Use flow steering to filter packets */
 static int log_packets = 0;		/* Show details on discarded packets */
 static bool testing = false;		/* Run some tests on startup */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
+static int drop_packets = 0;		/* Packet dropper */
 
 /* Timestamp in milliseconds */
 static unsigned long timestamp(void)
@@ -4742,6 +4744,95 @@ static void pid_close(void)
 	close(pid_fd);
 }
 
+/* Table of options that can be set via -e option[=value] */
+struct enable_option {
+	const char *id;
+	bool *bool_flag;
+	int *int_flag;
+	const char *def_value;
+	const char *description;
+} enable_table[] = {
+{ 	"raw", 	&raw, NULL, "on", "Enable the use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{	"flow", &flow_steering, NULL, "on", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{	"drop", NULL, &drop_packets, "100",  "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
+{	"unicast", &unicast, NULL, "on", "Enable processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{	"packetsocket", &packet_socket, NULL, "on", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
+{	"loopback-prevention", &loopback_blocking, NULL, "off", "Disable loopback prevention by the NIC" },
+{	NULL, NULL, NULL, NULL, NULL }
+};
+
+static void enable(char *option)
+{
+	char *name;
+	const char *value = NULL;
+	char *r;
+	int i;
+	struct enable_option *eo;
+
+	if (!option || !option[0]) {
+		printf("List of available options that can be enabled\n");
+		printf("Var\tType\tDefault\tDefAction\tDescription\n");
+		printf("----------------------------------------------------\n");
+		for(i = 0; enable_table[i].id; i++) {
+			char state[10];
+
+			eo = enable_table + i;
+
+			if (eo->bool_flag) {
+				if (*eo->bool_flag)
+					strcpy(state, "on");
+				else
+					strcpy(state, "off");
+			} else
+				snprintf(state, 10, "%d", *eo->int_flag);
+
+			printf("%s\t%s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->def_value, eo->description);
+		}
+		exit(1);
+	}
+
+	r = index(option, '=');
+	if (!r) {
+		name = option; 
+	} else {
+		*r = 0;
+		name = option;
+		value = r + 1;
+	}
+
+	for(i = 0; enable_table[i].id; i++) {
+		if (strcasecmp(name, enable_table[i].id) == 0)
+			goto got_it;
+	}
+	fprintf(stderr, "Unknown option %s\n", name);
+	exit(1);
+
+got_it:
+	eo = enable_table + i;
+	if (!value)
+		value = eo->def_value;
+
+	if (eo->bool_flag) {
+		if (strcasecmp(value, "on") == 0 ||
+			strcasecmp(value, "enable") == 0 ||
+			strcasecmp(value, "1") == 0)
+				*eo->bool_flag = true;
+		else
+		if (strcasecmp(value, "off") == 0 ||
+			strcasecmp(value, "disable") == 0 ||
+			strcasecmp(value, "0") == 0)
+				*eo->bool_flag = false;
+		else {
+			fprintf(stderr, "Unknown bool value %s for option %s\n", value, name);
+			exit(1);
+		}
+	} else
+	if (eo->int_flag)
+		*eo->int_flag = atoi(value);
+	else
+		abort();
+}
+
 struct option opts[] = {
 	{ "device", required_argument, NULL, 'd' },
 	{ "roce", required_argument, NULL, 'r' },
@@ -4752,13 +4843,12 @@ struct option opts[] = {
 	{ "debug", no_argument, NULL, 'x' },
 	{ "nobridge", no_argument, NULL, 'n' },
 	{ "port", required_argument, NULL, 'p' },
-	{ "flow", no_argument, NULL, 'f' },
 	{ "verbose", no_argument, NULL, 'v' },
 	{ "test", no_argument, NULL, 't' },
-	{ "unicast", no_argument, NULL, 'u' },
 	{ "config", required_argument, NULL, 'c' },
 	{ "buffers", required_argument, NULL, 'z' },
 	{ "cores", required_argument, NULL, 'k' },
+	{ "enable", optional_argument, NULL, 'e' },
 	{ NULL, 0, NULL, 0 }
 };
 
@@ -4839,8 +4929,7 @@ static void exec_opt(int op, char *optarg)
 			ib_name = optarg;
 			break;
 
-		case 'f':
-			flow_steering = true;
+		case 'e' : enable(optarg);
 			break;
 
 		case 'h':
@@ -4909,20 +4998,12 @@ static void exec_opt(int op, char *optarg)
 			testing = true;
 			break;
 
-		case 'u':
-			unicast = true;
-			break;
-
 		case 'v':
 			log_packets++;
 			break;
 
 		case 'x':
 			debug = true;
-			break;
-
-		case 'y':
-			packet_socket = true;
 			break;
 
 		case 'z':
@@ -4965,9 +5046,14 @@ int main(int argc, char **argv)
 
 	sidr_state_init();
 
-	while ((op = getopt_long(argc, argv, "ab::c:d:fhi:k:l::m:no:p:i:tuvxyz:",
-					opts, NULL)) != -1)
+	while ((op = getopt_long(argc, argv, "ab::c:d:e::fhi:k:l::m:no:p:i:tuvxyz:",
+					opts, NULL)) != -1) {
+		if (!optarg && argv[optind] && argv[optind][0] != '-') {
+			optarg = argv[optind];
+			optind++;
+		}
 		exec_opt(op, optarg);
+	}
 
 	init_buf();
 
