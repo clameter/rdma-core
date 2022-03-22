@@ -14,6 +14,7 @@ target_link_libraries(ib2roce LINK_PRIVATE
   ibverbs
   ibumad
   rdmacm
+  numa
   ${NL_LIBRARIES}
   ${SYSTEMD_LIBRARIES}
   ${CMAKE_THREAD_LIBS_INIT}
