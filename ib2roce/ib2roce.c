@@ -1200,40 +1200,45 @@ static void *busyloop(void *private)
 	struct core_info *core = private;
 	int cqs;
 	int i;
+	unsigned node;
+	unsigned cpu;
 	struct ibv_wc wc[max_wc_cqs];
 
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 	numa_run_on_node(core->numa_node);
 
 	core->state = core_init;
+
+	getcpu(&cpu, &node);
+	logg(LOG_NOTICE, "Busyloop started (core %ld) on CPU %d NUMA=%d\n", core - core_infos, cpu, node);
+
 	/*
 	 * Initialize relevant data structures for this thread. These must be allocated
 	 * from the thread to ensure that they are thread local
 	 */
 
 	core->state = core_running;
-loop:
-	cpu_relax();
-	/* Scan CQs */
-	for(i = 0; i < core->nr_channels; i++) {
-		cqs = ibv_poll_cq(core->cq[i], max_wc_cqs, wc);
-		if (cqs)
-			goto process_cq;
-	}
-	goto loop;
 
-process_cq:
-	c = core->channel + i;
+	do {
+		cpu_relax();
+		/* Scan CQs */
+		for(i = 0; i < core->nr_channels; i++) {
+			cqs = ibv_poll_cq(core->cq[i], max_wc_cqs, wc);
+			if (cqs) {
+				c = core->channel + i;
 
-	if (cqs < 0) {
-		logg(LOG_WARNING, "Busyloop: CQ polling failed with: %s on %s\n",
-			errname(), c->text);
-		core->state = core_err;
-		goto loop;;
-	}
+				if (cqs > 0)
+					process_cqes(c, wc, cqs);
+				else {
+					logg(LOG_WARNING, "Busyloop: CQ polling failed with: %s on %s\n",
+						errname(), c->text);
+					core->state = core_err;
+					continue;
+				}
+			}
+		}
 
-	process_cqes(c, wc, cqs);
-	goto loop;
+	} while (!terminated);
 
 	return NULL;
 }
