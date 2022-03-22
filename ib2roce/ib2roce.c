@@ -952,8 +952,8 @@ struct channel_info {
 
 } channel_infos[nr_channel_types] = {
 	{ "multicast",	0, 0,	true,	10,	20,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
-	{ "ud",		2, 1,	true,	100,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
-	{ "qp1",	1, 1,	false, 	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
+	{ "ud",		1, 1,	true,	100,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
+	{ "qp1",	2, 1,	false, 	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
 	{ "raw",	3, 1,	false,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
 	{ "ibraw",	3, 1,	false,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
 	{ "packet",	-1, -1,	false,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
@@ -1000,21 +1000,21 @@ enum core_state { core_off, core_init, core_running, core_err, nr_core_states };
 static short core_lookup(struct i2r_interface *i,  enum channel_type type)
 {
 	enum interfaces in = i - i2r;
-	short wanted_core = channel_infos[type].core;
+	short core = channel_infos[type].core;
 	short avail_cores = cores / 2; 	/* Half for IB and half for ROCE  */
 
 	if (!cores)
 		goto nocore;
 
-	if (wanted_core == NO_CORE)
+	if (core == NO_CORE)
 		goto nocore;
 	
-	if (wanted_core <= avail_cores)
-		return in * avail_cores + wanted_core;
+	if (core < avail_cores)
+		return in * avail_cores + core;
 
-	wanted_core = channel_infos[type].alt_core;
-	if (wanted_core <= cores)
-		return in * avail_cores + wanted_core;
+	core = channel_infos[type].alt_core;
+	if (core < avail_cores)
+		return in * avail_cores + core;
 
 	/* If nothing worked put it onto th4 first core */
 	return in * avail_cores;
@@ -1054,17 +1054,17 @@ retry:
 
 		channel_nr = coi->nr_channels;
 		c = coi->channel + channel_nr;
+		memset(c, 0, sizeof(struct rdma_channel));
 		coi->nr_channels++;
 		c->core = coi;
 
 	} else
 		c = calloc(1, sizeof(struct rdma_channel));
 
-	c->i = i;
-
-
 	if (type == channel_err)
 		goto err;
+
+	c->i = i;
 	c->type = type;
 	c->receive = ci->receive;
 
