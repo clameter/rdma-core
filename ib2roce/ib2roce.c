@@ -147,6 +147,7 @@ static void unlock(void)
 		logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
 }
 
+#if 0
 static bool trylock(void)
 {
 	if (pthread_mutex_trylock(&mutex)) {
@@ -156,7 +157,7 @@ static bool trylock(void)
 	}
 	return true;
 }
-
+#endif
 
 const struct in_addr ip_none = { .s_addr = 0 };
 
@@ -2595,6 +2596,7 @@ static struct forward *find_forward(struct endpoint *source, struct endpoint *de
 	return f;
 }
 
+#if 0
 /*
  * Remove a forward and indicate if something was there before.
  *
@@ -2622,6 +2624,7 @@ static bool remove_forward(struct endpoint *source, uint32_t source_qp)
 	} else
 		return false;
 }
+#endif
 
 /*
  * Remove all forwards of an endpoint and indicate how many
@@ -2641,6 +2644,7 @@ static unsigned int remove_forwards(struct endpoint *source)
 	return n;
 }
 
+#if 0
 /*
  * Update the forwarder if the source point changes
  */
@@ -2657,6 +2661,7 @@ static struct forward *update_forward(struct endpoint *source, uint32_t old_sour
 	f->source_qp = new_source_qp;
 	return f;
 }
+#endif
 
 static inline void map_ipv4_addr_to_ipv6(__be32 ipv4, struct in6_addr *ipv6)
 {
