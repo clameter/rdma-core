@@ -137,45 +137,55 @@ static void logg(int prio, const char *fmt, ...)
 
 static pthread_mutex_t mutex;		/* Generic serialization mutex */
 
-enum locking_state { state_unlocked, state_locked, state_single_threaded};
+/* Is the lock taken */
+bool locked = false;
 
-enum locking_state lockstate = state_single_threaded;
+/* Are we running concurrent threads ? */
+bool multithreaded = false;
 
 static void lock(void)
 {
-	if (lockstate == state_single_threaded)
-		return;
+	if (locked)
+		abort();
 
- 	if (pthread_mutex_lock(&mutex))
- 		logg(LOG_ERR, "Mutex lock failed: %s\n", errname());
+	if (multithreaded) {
+ 		if (pthread_mutex_lock(&mutex))
+ 			logg(LOG_ERR, "Mutex lock failed: %s\n", errname());
+	}
 
-	lockstate = state_locked;
+	locked = true;
 }
  
 static void unlock(void)
 {
-	if (lockstate == state_single_threaded)
-		return;
+	if (!locked)
+		abort();
 
- 	if (pthread_mutex_unlock(&mutex))
- 		logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
+	if (multithreaded) {
+ 		if (pthread_mutex_unlock(&mutex))
+ 			logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
 
-	lockstate = state_unlocked;
+	}
+
+	locked = false;
 }
  
 #if 0
 static bool trylock(void)
 {
-	if (lockstate == state_single_threaded)
-		goto out;
+	if (multithreaded) {
+ 		if (pthread_mutex_trylock(&mutex)) {
+ 			if (errno != EBUSY)
+ 				logg(LOG_ERR, "Mutex trylock failed: %s\n", errname());
+ 			return false;
+ 		}
+	} else {
+		if (locked)
+			abort();
+	}
 
- 	if (pthread_mutex_trylock(&mutex)) {
- 		if (errno != EBUSY)
- 			logg(LOG_ERR, "Mutex trylock failed: %s\n", errname());
- 		return false;
- 	}
+	locked = true;
 
-	lockstate = state_locked;
 out:
  	return true;
 }
@@ -1223,10 +1233,13 @@ static void start_cores(void)
 {
 	int j;
 
-	lockstate = state_unlocked;
+	multithreaded = true;
 
 	for(j = 0; j < cores; j++) {
 		struct core_info *ci = core_infos + j;
+
+		if (!ci->nr_channels)
+			continue;
 
 		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + j)) {
 			logg(LOG_CRIT, "Pthread create failed: %s\n", errname());
@@ -1249,7 +1262,8 @@ static void stop_cores(void)
 			abort();
 		}
 	}
-	lockstate = state_single_threaded;
+
+	multithreaded = false;
 }
  
 static char hexbyte(unsigned x)
