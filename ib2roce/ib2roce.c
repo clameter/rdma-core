@@ -1205,7 +1205,6 @@ static void *busyloop(void *private)
 	struct core_info *core = private;
 	int cqs;
 	int i;
-	unsigned node;
 	unsigned cpu;
 	struct ibv_wc wc[max_wc_cqs];
 
@@ -1214,8 +1213,8 @@ static void *busyloop(void *private)
 
 	core->state = core_init;
 
-	getcpu(&cpu, &node);
-	logg(LOG_NOTICE, "Busyloop started (core %ld) on CPU %d NUMA=%d\n", core - core_infos, cpu, node);
+	cpu = sched_getcpu();
+	logg(LOG_NOTICE, "Busyloop started (core %ld) on CPU %d NUMA=%d\n", core - core_infos, cpu, core->numa_node);
 
 	/*
 	 * Initialize relevant data structures for this thread. These must be allocated
