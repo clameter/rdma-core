@@ -823,7 +823,7 @@ static int leave_mc(enum interfaces i)
  * Manage freelist using simple single linked list with the pointer
  * to the next free element at the beginning of the free buffer
  */
-static unsigned nr_buffers = 100000;
+static int nr_buffers = 100000;
 static bool huge = false;
 
 #define BUFFER_SIZE 8192
@@ -4812,6 +4812,7 @@ struct enable_option {
 	const char *def_value;
 	const char *description;
 } enable_table[] = {
+{	"buffers", NULL, &nr_buffers, "1000000", "Number of 8k buffers allocated for packet processing" },
 {	"bridging", &bridging, NULL, "off", "Disable the forwarding of packets between interfaces" },
 {	"drop", NULL, &drop_packets, "100",  "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
 {	"flow", &flow_steering, NULL, "on", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
@@ -4834,7 +4835,7 @@ static void enable(char *option)
 	if (!option || !option[0]) {
 		printf("List of available options that can be enabled\n");
 		printf("Var\t\tType\tDefault\tDefAction\tDescription\n");
-		printf("----------------------------------------------------\n");
+		printf("----------------------------------------------------------------\n");
 		for(i = 0; enable_table[i].id; i++) {
 			char state[10];
 
@@ -4907,9 +4908,9 @@ struct option opts[] = {
 	{ "verbose", no_argument, NULL, 'v' },
 	{ "test", no_argument, NULL, 't' },
 	{ "config", required_argument, NULL, 'c' },
-	{ "buffers", required_argument, NULL, 'z' },
 	{ "cores", required_argument, NULL, 'k' },
 	{ "enable", optional_argument, NULL, 'e' },
+	{ "help", no_argument, NULL, 'h' },
 	{ NULL, 0, NULL, 0 }
 };
 
@@ -5054,27 +5055,25 @@ static void exec_opt(int op, char *optarg)
 			debug = true;
 			break;
 
-		case 'z':
-			nr_buffers = atoi(optarg);
-			break;
-
 		default:
-			printf("ib2roce " VERSION " Mar 8,2022 (C) 2022 Christoph Lameter <cl@linux.com>\n");
+			printf("ib2roce " VERSION " Mar 23,2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
-			printf("-b|--beacon <multicast address>		Send beacon every second\n");
+			printf("-b|--beacon <multicast address>		Send beacon every second. Off by default\n");
 			printf("-c|--config <file>			Read config from file\n");
-                       	printf("-d|--device <if[:portnumber][/<netdev>]	Infiniband interface\n");
+                       	printf("-d|--device <if[:portnumber][/<netdev>]	Infiniband device. Uses the first available if not specified\n");
+			printf("-e|--enable <option>[=<value>]		Set up additional options and features.\n");
+			printf("-e|--enable				List additional options with a description\n");
+			printf("-h|--help				Show these instructions\n");
 			printf("-i|--inbound <multicast address>	Incoming multicast only (ib traffic in, roce traffic out)\n");
 			printf("-k|--cores <nr>				Spin on the given # of cores\n");
 			printf("-l|--mgid				List availabe MGID formats for Infiniband\n");
 			printf("-l|--mgid <format>			Set default MGID format\n");
-			printf("-m|--multicast <multicast address>[:port][/mgidformat] (bidirectional)\n");
+			printf("-m|--multicast <multicast address>[:port][/mgidformat] Enable multicast forwarding\n");
 			printf("-o|--outbound <multicast address>	Outgoing multicast only / sendonly /(ib trafic out, roce traffic in)\n");
-			printf("-p|--port >number>			Set default port number\n");
-			printf("-r|--roce <if[:portnumber]>		ROCE interface\n");
-			printf("-v|--log-packets			Show detailed information about discarded packets\n");
+			printf("-p|--port <number>			Set default port number to use if none is specified\n");
+			printf("-r|--roce <if[:portnumber]>		ROCE device. Uses the first available if not specified.\n");
+			printf("-v|--log-packets			Show more detailed logs. Can be specified multiple times\n");
 			printf("-x|--debug				Do not daemonize, enter debug mode\n");
-			printf("-z|--buffers <nr>			How many packet buffers of 8k size to allocate[1mio]\n");
 			exit(1);
 	}
 }
@@ -5088,7 +5087,7 @@ int main(int argc, char **argv)
 
 	sidr_state_init();
 
-	while ((op = getopt_long(argc, argv, "b::c:d:e::i:k:l::m:o:p:i:tvxz:",
+	while ((op = getopt_long(argc, argv, "b::c:d:e::hi:k:l::m:o:p:i:tvxz:",
 					opts, NULL)) != -1) {
 		if (!optarg && argv[optind] && argv[optind][0] != '-') {
 			optarg = argv[optind];
