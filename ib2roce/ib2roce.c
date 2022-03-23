@@ -1540,13 +1540,24 @@ static void get_if_info(struct i2r_interface *i)
 	if (!i->ifindex && i - i2r == INFINIBAND) {
 
 		if (!i->if_name[0]) {
-
-			logg(LOG_WARNING, "Assuming ib0 is the IP device name for %s\n",
-			     ibv_get_device_name(i->context->device));
-			strcpy(i->if_name, "ib0");
-		}
-
-		memcpy(ifr.ifr_name, i->if_name, IFNAMSIZ);
+			strcpy(ifr.ifr_name, "ib0");
+			if (ioctl(fh, SIOCGIFINDEX, &ifr) == 0)
+				logg(LOG_WARNING, "Assuming ib0 is the IP device name for %s\n",
+				     ibv_get_device_name(i->context->device));
+			else {
+				strcpy(ifr.ifr_name, "ib1");
+				if (ioctl(fh, SIOCGIFINDEX, &ifr) == 0)
+					logg(LOG_WARNING, "Assuming ib1 is the IP device name for %s\n",
+						ibv_get_device_name(i->context->device));
+				else {
+					logg(LOG_CRIT, "Cannot determine device name for %s\n",
+						ibv_get_device_name(i->context->device));
+					abort();
+				}
+			}
+			strcpy(i->if_name, ifr.ifr_name);
+		} else
+			memcpy(ifr.ifr_name, i->if_name, IFNAMSIZ);
 
 		/* Find if_index */
 		reason = "ioctl SIOCGIFINDEX";
