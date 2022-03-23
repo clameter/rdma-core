@@ -1156,7 +1156,7 @@ retry:
 		if (coi) {
 			coi->cq[channel_nr] = c->cq;
 
-			if (channel_nr == 1) {
+			if (channel_nr == 0) {
 				coi->numa_node = c->i->numa_node;
 			} else {
 				if (coi->numa_node != c->i->numa_node) {
