@@ -110,6 +110,7 @@ static bool testing = false;		/* Run some tests on startup */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
+static int rate = 0;			/* Limit sending rate */
 
 /* Timestamp in milliseconds */
 static unsigned long timestamp(void)
@@ -2891,6 +2892,9 @@ redo:
 		return NULL;
 	}
 
+	if (rate)
+		at->static_rate = rate;
+
 	ah = ibv_create_ah(i->pd, at);
 	if (!ah) {
 		logg(LOG_ERR, "at_to_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
@@ -4822,6 +4826,7 @@ struct enable_option {
 {	"packetsocket", &packet_socket, NULL, "on", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
 { 	"raw", 	&raw, NULL, "on", "Enable the use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
 {	"unicast", &unicast, NULL, "on", "Enable processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{	"rate", NULL, &rate, "2", "Make RDMA limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
 {	NULL, NULL, NULL, NULL, NULL }
 };
 
