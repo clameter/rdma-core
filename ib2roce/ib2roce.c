@@ -323,6 +323,7 @@ static struct i2r_interface {
 	unsigned maclen;
 	const char *text;
 	char if_name[IFNAMSIZ];
+	const char *rdma_name;
 	uint8_t if_mac[ETH_ALEN];
 	struct sockaddr_in if_addr;
 	struct sockaddr_in if_netmask;
@@ -442,6 +443,7 @@ success:
 	i2r[i].port = port;
 	i2r[i].port_attr = *a;
 	i2r[i].device_attr = *d;
+	i2r[i].rdma_name = rdmadev;
 	return 1;
 }
 
@@ -452,6 +454,7 @@ static int find_rdma_devices(void)
 	int i;
 	struct ibv_device **list;
 
+	i2r[ROCE].rdma_name = i2r[INFINIBAND].rdma_name = "<disabled>";
 	list = ibv_get_device_list(&nr);
 
 	if (nr <= 0) {
@@ -461,6 +464,7 @@ static int find_rdma_devices(void)
 
 	for (i = 0; i < nr; i++) {
 		struct ibv_device *d = list[i];
+		const char *name = ibv_get_device_name(d);
 		struct ibv_context *c;
 		struct ibv_device_attr dattr;
 		int found = 0;
@@ -474,12 +478,12 @@ static int find_rdma_devices(void)
 
 		c = ibv_open_device(d);
 		if (!c) {
-			logg(LOG_CRIT, "Cannot open device %s\n", ibv_get_device_name(d));
+			logg(LOG_CRIT, "Cannot open device %s\n", name);
 			return 1;
 		}
 
 		if (ibv_query_device(c, &dattr)) {
-			logg(LOG_CRIT, "Cannot query device %s\n", ibv_get_device_name(d));
+			logg(LOG_CRIT, "Cannot query device %s\n", name);
 			return 1;
 		}
 
@@ -487,7 +491,7 @@ static int find_rdma_devices(void)
 			struct ibv_port_attr attr;
 
 			if (ibv_query_port(c, port, &attr)) {
-				logg(LOG_CRIT, "Cannot query port %s:%d\n", ibv_get_device_name(d), port);
+				logg(LOG_CRIT, "Cannot query port %s:%d\n", name, port);
 				return 1;
 			}
 
@@ -1548,15 +1552,15 @@ static void get_if_info(struct i2r_interface *i)
 			strcpy(ifr.ifr_name, "ib0");
 			if (ioctl(fh, SIOCGIFINDEX, &ifr) == 0)
 				logg(LOG_WARNING, "Assuming ib0 is the IP device name for %s\n",
-				     ibv_get_device_name(i->context->device));
+				     i->rdma_name);
 			else {
 				strcpy(ifr.ifr_name, "ib1");
 				if (ioctl(fh, SIOCGIFINDEX, &ifr) == 0)
 					logg(LOG_WARNING, "Assuming ib1 is the IP device name for %s\n",
-						ibv_get_device_name(i->context->device));
+						i->rdma_name);
 				else {
 					logg(LOG_CRIT, "Cannot determine device name for %s\n",
-						ibv_get_device_name(i->context->device));
+						i->rdma_name);
 					abort();
 				}
 			}
@@ -1605,7 +1609,7 @@ static void get_if_info(struct i2r_interface *i)
 
 err:
 	logg(LOG_CRIT, "Cannot determine IP interface setup for %s %s : %s\n",
-		     ibv_get_device_name(i->context->device), reason, errname());
+		     i->rdma_name, reason, errname());
 
 	abort();
 }
@@ -1756,7 +1760,6 @@ bool setup_multicast(struct rdma_channel *c)
 		return false;
 	}
 
-	register_callback(handle_rdma_event, i->rdma_events->fd, i);
 	register_callback(handle_async_event, i->context->async_fd, i);
 
 	ret = rdma_bind_addr(c->id, c->bindaddr);
@@ -1880,7 +1883,7 @@ static bool setup_raw(struct rdma_channel *c)
 
 #ifdef HAVE_MSTFLINT
 	if (c->i == i2r + INFINIBAND) {
-		if (set_ib_sniffer(ibv_get_device_name(c->i->context->device), c->i->port, c->qp)) {
+		if (set_ib_sniffer(c->i->rdma_name, c->i->port, c->qp)) {
 
 			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
 			ibv_destroy_qp(c->qp);
@@ -1968,6 +1971,7 @@ static void setup_interface(enum interfaces in)
 			i->text, errname());
 		abort();
 	}
+	register_callback(handle_rdma_event, i->rdma_events->fd, i);
 
 	i->pd = ibv_alloc_pd(i->context);
 	if (!i->pd) {
@@ -2016,7 +2020,7 @@ static void setup_interface(enum interfaces in)
 
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u NUMA=%d.\n",
 		i->text,
-		ibv_get_device_name(i->context->device),
+		i->rdma_name,
 		i->if_name, i->ifindex,
 		i->port,
 		inet_ntop(AF_INET6, e->gid.raw, buf, INET6_ADDRSTRLEN),i->gid_index,
@@ -5107,14 +5111,10 @@ int main(int argc, char **argv)
 	if (ret && !testing)
 		return ret;
 
-	syslog (LOG_NOTICE, "Infiniband device = %s:%d, ROCE device = %s:%d. Multicast Groups=%d MGIDs=%s Buffers=%u\n",
-			i2r[INFINIBAND].context ? ibv_get_device_name(i2r[INFINIBAND].context->device) : "<disabled>",
-			i2r[INFINIBAND].port,
-			i2r[ROCE].context ? ibv_get_device_name(i2r[ROCE].context->device) : "<disabled>",
-			i2r[ROCE].port,
-			nr_mc,
-			mgid_mode->id,
-			nr_buffers);
+	syslog (LOG_NOTICE, "%s device = %s:%d, %s device = %s:%d. Multicast Groups=%d MGIDs=%s Buffers=%u\n",
+			interfaces_text[INFINIBAND], i2r[INFINIBAND].rdma_name, i2r[INFINIBAND].port,
+			interfaces_text[ROCE], i2r[ROCE].rdma_name, i2r[ROCE].port,
+			nr_mc, mgid_mode->id, nr_buffers);
 
 	init_buf();	/* Setup interface registers memmory */
 
