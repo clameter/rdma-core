@@ -377,6 +377,10 @@ static void add_event(unsigned long time_in_ms, void (*callback));
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 static void register_callback(void (*callback)(void *), int fd, void *private);
 static void handle_receive_packet(void *private);
+static void handle_comp_event(void *private);
+static void handle_rdma_event(void *private);
+static void handle_async_event(void *private);
+
 
 static inline struct rdma_cm_id *id(enum interfaces i)
 {
@@ -1680,6 +1684,7 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 				c->text, errname());
 			abort();
 		}
+		register_callback(handle_comp_event, c->comp_events->fd, c->comp_events);
 	} else
 		c->comp_events = NULL;
 
@@ -1750,6 +1755,9 @@ bool setup_multicast(struct rdma_channel *c)
 			c->text, errname());
 		return false;
 	}
+
+	register_callback(handle_rdma_event, i->rdma_events->fd, i);
+	register_callback(handle_async_event, i->context->async_fd, i);
 
 	ret = rdma_bind_addr(c->id, c->bindaddr);
 	if (ret) {
@@ -1973,6 +1981,7 @@ static void setup_interface(enum interfaces in)
 			i->text, errname());
 		abort();
 	}
+	register_callback(handle_comp_event, i->comp_events->fd, i->comp_events);
 
 	i->mr = ibv_reg_mr(i->pd, buffers, nr_buffers * sizeof(struct buf), IBV_ACCESS_LOCAL_WRITE);
 	if (!i->mr) {
@@ -4566,25 +4575,6 @@ static void register_callback(void (*callback)(void *), int fd, void *private)
 	poll_items++;
 }
 
-static void register_poll_events(void)
-{
-	struct i2r_interface *i;
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-	   if (i->context) {
-
-		register_callback(handle_rdma_event, i->rdma_events->fd, i);
-		if (i->multicast->comp_events)
-			register_callback(handle_comp_event, i->multicast->comp_events->fd, i->multicast->comp_events);
-		register_callback(handle_async_event, i->context->async_fd, i);
-
-		if (i->raw || i->ud)	/* They share the interface comp_events notifier */
-			register_callback(handle_comp_event, i->comp_events->fd, i->comp_events);
-
-	}
-
-}
-
 static void setup_timed_events(void)
 {
 	unsigned long t;
@@ -5141,7 +5131,6 @@ int main(int argc, char **argv)
 		beacon_setup(beacon_arg);
 
 
-	register_poll_events();
 	post_receive_buffers();
 
 	start_cores();
