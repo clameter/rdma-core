@@ -848,6 +848,7 @@ struct buf {
 		struct {
 			struct buf *next;	/* Next free buffer */
 			bool free;
+			unsigned refcount;	/* Refcount */
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
 			struct endpoint *source_ep;
@@ -892,17 +893,44 @@ static struct buf *buffers;
 
 static struct buf *nextbuffer;	/* Pointer to next available RDMA buffer */
 
-static void free_buffer(struct buf *buf)
+static void __free_buffer(struct buf *buf)
 {
 #ifdef DEBUG
 	memset(buf->raw, 0, DATA_SIZE);
 #endif
-	lock();
-
 	buf->free = true;
 	buf->next = nextbuffer;
 	nextbuffer = buf;
+}
 
+static void free_buffer(struct buf *buf)
+{
+	lock();
+	__free_buffer(buf);
+	unlock();
+}
+
+static void get_buf(struct buf *buf)
+{
+	lock();
+	if (!buf->refcount)
+		abort();
+	buf->refcount++;
+	unlock();
+}
+
+static void put_buf(struct buf *buf)
+{
+	unsigned count;
+
+	lock();
+	count = --buf->refcount;
+	if (count) {
+		unlock();
+		return;
+	}
+
+	__free_buffer(buf);
 	unlock();
 }
 
@@ -922,6 +950,7 @@ static void init_buf(void)
 {
 	int i;
 	unsigned flags;
+	unsigned long x = nr_buffers;
 
 	if (sizeof(struct buf) != BUFFER_SIZE) {
 		logg(LOG_CRIT, "struct buf is not 8k as required\n");
@@ -934,14 +963,16 @@ static void init_buf(void)
 	if (huge)
 		flags |= MAP_HUGETLB;
 
-	if (nr_buffers * BUFFER_SIZE > 1000000000)
-		logg(LOG_WARNING, "Allocate %u MByte of memory for %u buffers\n",
-				nr_buffers * BUFFER_SIZE / 1024 / 1024, nr_buffers);
+	x *= BUFFER_SIZE;
 
-	buffers = mmap(0, nr_buffers * BUFFER_SIZE, PROT_READ|PROT_WRITE, flags, -1, 0);
+	if (x > 1000000000)
+		logg(LOG_WARNING, "Allocate %lu MByte of memory for %u buffers\n",
+				x / 1024 / 1024, nr_buffers);
+
+	buffers = mmap(0, x, PROT_READ|PROT_WRITE, flags, -1, 0);
 	if (!buffers) {
-		logg(LOG_CRIT, "Cannot allocate %d KB of memory required for %d buffers. Error %s\n",
-				nr_buffers * (BUFFER_SIZE / 1024), nr_buffers, errname());
+		logg(LOG_CRIT, "Cannot allocate %lu KB of memory required for %d buffers. Error %s\n",
+				x / 1024, nr_buffers, errname());
 		abort();
 	}
 
@@ -2397,6 +2428,8 @@ err:
  * fetch has to be done by the RDMA subsystem and no completion
  * event has to be handled.
  *
+ * No MR is being used so this works for any QP.
+ *
  * Space in the WR is limited, so it only works for very small packets.
  */
 static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct ah_info *ai, bool imm_used, unsigned imm)
@@ -2440,8 +2473,7 @@ static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct 
 }
 
 /*
- * Send data to target using native RDMA structs. This one does not support RDMACM since
- * it uses the shared i->mr and not the c->mr required by rdma cm..
+ * Send data to target using native RDMA structs relying on state in struct buf.
  */
 static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, uint32_t remote_qpn, uint32_t qkey)
 {
@@ -2467,15 +2499,16 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 	wr.wr.ud.remote_qkey = qkey;
 
 	sge.length = buf->end - buf->cur;
-	sge.lkey = c->i->mr->lkey;
+	sge.lkey = c->mr->lkey;
 	sge.addr = (uint64_t)buf->cur;
 
 	if (len <= MAX_INLINE_DATA) {
 		wr.send_flags = IBV_SEND_INLINE;
 		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
-		free_buffer(buf);
-	} else
+	} else {
+		get_buf(buf);
 		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
+	}
 
 	if (ret) {
 		errno = ret;
@@ -2529,10 +2562,12 @@ static int send_to(struct rdma_channel *c,
 	if (ret) {
 		errno = - ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s\n", errname(), c->text);
-	} else
+	} else {
+		get_buf(buf);
 		if (log_packets > 1)
 			logg(LOG_NOTICE, "RDMA Send to QPN=%x QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
+	}
 
 	return ret;
 }
@@ -2545,8 +2580,6 @@ static int send_buf(struct buf *buf, struct rdma_unicast *ra)
 
 	if (len < MAX_INLINE_DATA) {
 		ret = send_inline(ra->c, buf->cur, len, &ra->ai, buf->imm_valid, buf->imm);
-		if (ret == 0)
-			free_buffer(buf);
 	} else
 		ret = send_to(ra->c, buf->cur, len, &ra->ai, buf->imm_valid, buf->imm, buf);
 
@@ -3154,27 +3187,25 @@ static void receive_multicast(struct buf *buf)
 
 	if (m->beacon) {
 		beacon_received(buf);
-		goto free_out;
+		return;
 	}
 
 	if (!bridging)
-		goto free_out;
+		return;
 
 	if (drop_packets && (c->stats[packets_received] % drop_packets) == drop_packets - 1)
-		goto free_out;
+		return;
 
 	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, m->ai + (in ^ 1), false, 0, buf);
 
 	if (ret)
-		goto free_out;
+		return;
 
 	st(c, packets_bridged);
 	return;
 
 invalid_packet:
 	st(c, packets_invalid);
-free_out:
-	free_buffer(buf);
 }
 
 /*
@@ -3197,7 +3228,6 @@ static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
 	logg(LOG_WARNING, "Multicast packet on Unicast QP %s:%s\n", c->text, payload_dump(buf->cur));
 
 	st(c, packets_invalid);
-	free_buffer(buf);
 }
 
 /* Figure out what to do with the packet we got */
@@ -3214,7 +3244,6 @@ static void receive_main(struct buf *buf)
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
 
 	st(c, packets_invalid);
-	free_buffer(buf);
 }
 
 /*
@@ -3515,7 +3544,6 @@ no_cma:
 		unlock();
 
 		free(ss);
-		free_buffer(buf);
 	}
 
 
@@ -3593,8 +3621,6 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 
 	if (bridging)
 		send_mad(ss->source, buf, mad_pos);
-	else
-		free_buffer(buf);
 
 	free(ss);
 	return NULL;
@@ -3708,7 +3734,7 @@ static void receive_raw(struct buf *buf)
 			reason = process_arp(i, buf, lids);
 
 			if (!reason)
-				goto packet_done;
+				return;
 
 			goto discard;
 
@@ -3804,7 +3830,7 @@ static void receive_raw(struct buf *buf)
 		if (reason)
 			goto discard;
 
-		goto packet_done;
+		return;
 	}
 
 	mad_pos = buf->cur;
@@ -3847,8 +3873,6 @@ discard:
 			buf->w->byte_len, len, buf->cur - buf->raw);
 
 	st(c, packets_invalid);
-packet_done:
-	free_buffer(buf);
 }
 
 /* Unicast packet reception */
@@ -3921,7 +3945,6 @@ static void receive_ud(struct buf *buf)
 discard:
 	logg(LOG_NOTICE, "receive_ud:Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
 	st(c, packets_invalid);
-	free_buffer(buf);
 }
 
 /*
@@ -3977,7 +4000,6 @@ discard:
 			buf->c->text, reason, w->byte_len, buf->cur - buf->raw);
 
 	st(buf->c, packets_invalid);
-	free_buffer(buf);
 }
 
 static void reset_flags(struct buf *buf)
@@ -4039,13 +4061,15 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 
 			buf->ip_csum_ok = (w->wc_flags & IBV_WC_IP_CSUM_OK) != 0;
 
+			buf->refcount = 1;
 			c->receive(buf);
+			put_buf(buf);
 
 		} else {
 			if (w->status == IBV_WC_SUCCESS && w->opcode == IBV_WC_SEND) {
 				/* Completion entry */
 				st(c, packets_sent);
-				free_buffer(buf);
+				put_buf(buf);
 			} else
 				logg(LOG_NOTICE, "Strange CQ Entry %d/%d: Status:%x Opcode:%x Len:%u QP=%x SRC_QP=%x Flags=%x\n",
 					j, cqs, w->status, w->opcode, w->byte_len, w->qp_num, w->src_qp, w->wc_flags);
@@ -4129,7 +4153,9 @@ static void handle_receive_packet(void *private)
 	buf->ip_csum_ok = true;
 	/* Reset scan to the beginning of the raw packet */
 	buf->cur = buf->raw;
+	buf->refcount = 1;
 	c->receive(buf);
+	put_buf(buf);
 }
 
 
@@ -4317,7 +4343,6 @@ static void beacon_received(struct buf *buf)
 
 	logg(LOG_NOTICE, "Received Beacon on %s Port %d Version %s IB=%s, ROCE=%s MC groups=%u. Latency %ld ns\n",
 		beacon_mc->text, ntohs(b->port), b->version, ib, inet_ntoa(b->roce), b->nr_mc, diff.tv_sec * 1000000000 + diff.tv_nsec);
-	free_buffer(buf);
 }
 
 /* A mini router follows */
@@ -4808,23 +4833,24 @@ struct enable_option {
 	const char *id;
 	bool *bool_flag;
 	int *int_flag;
-	const char *def_value;
+	const char *on_value;
+	const char *off_value;
 	const char *description;
 } enable_table[] = {
-{	"buffers", NULL, &nr_buffers, "1000000", "Number of 8k buffers allocated for packet processing" },
-{	"bridging", &bridging, NULL, "off", "Disable the forwarding of packets between interfaces" },
-{	"drop", NULL, &drop_packets, "100",  "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
-{	"flow", &flow_steering, NULL, "on", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
-{	"huge", &huge, NULL, "on", "Enable the use of Huge memory for the packet pool" }, 
-{	"loopbackprev", &loopback_blocking, NULL, "off", "Disable loopback prevention by the NIC" },
-{	"packetsocket", &packet_socket, NULL, "on", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
-{ 	"raw", 	&raw, NULL, "on", "Enable the use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
-{	"unicast", &unicast, NULL, "on", "Enable processing of unicast packets with QP1 handling of SIDR REQ/REP" },
-{	"rate", NULL, &rate, "2", "Make RDMA limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
-{	NULL, NULL, NULL, NULL, NULL }
+{	"buffers", NULL, &nr_buffers, "1000000", "10000","Number of 8k buffers allocated for packet processing" },
+{	"bridging", &bridging, NULL, "on", "off", "Forwarding of packets between interfaces" },
+{	"drop", NULL, &drop_packets, "100", "0", "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
+{	"flow", &flow_steering, NULL, "on", "off", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{	"huge", &huge, NULL, "on", "off", "Enable the use of Huge memory for the packet pool" }, 
+{	"loopbackprev", &loopback_blocking, NULL, "on", "off", "Multicast loopback prevention of the NIC" },
+{	"packetsocket", &packet_socket, NULL, "on", "off", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
+{	"rate", NULL, &rate, "2", "0", "Make RDMA limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
+{ 	"raw", 	&raw, NULL, "on", "off", "Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{	"unicast", &unicast, NULL, "on", "off", "Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{	NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
-static void enable(char *option)
+static void enable(char *option, bool enable)
 {
 	char *name;
 	const char *value = NULL;
@@ -4834,7 +4860,7 @@ static void enable(char *option)
 
 	if (!option || !option[0]) {
 		printf("List of available options that can be enabled\n");
-		printf("Var\t\tType\tDefault\tDefAction\tDescription\n");
+		printf("Var\t\tType\tDefault\tDescription\n");
 		printf("----------------------------------------------------------------\n");
 		for(i = 0; enable_table[i].id; i++) {
 			char state[10];
@@ -4849,7 +4875,7 @@ static void enable(char *option)
 			} else
 				snprintf(state, 10, "%d", *eo->int_flag);
 
-			printf("%-14s\t%s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->def_value, eo->description);
+			printf("%-14s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->description);
 		}
 		exit(1);
 	}
@@ -4872,8 +4898,12 @@ static void enable(char *option)
 
 got_it:
 	eo = enable_table + i;
-	if (!value)
-		value = eo->def_value;
+	if (!value) {
+		if (enable) 
+			value = eo->on_value;
+		else
+			value = eo->off_value;
+	}
 
 	if (eo->bool_flag) {
 		if (strcasecmp(value, "on") == 0 ||
@@ -4910,6 +4940,7 @@ struct option opts[] = {
 	{ "config", required_argument, NULL, 'c' },
 	{ "cores", required_argument, NULL, 'k' },
 	{ "enable", optional_argument, NULL, 'e' },
+	{ "disable", required_argument, NULL, 'y' },
 	{ "help", no_argument, NULL, 'h' },
 	{ NULL, 0, NULL, 0 }
 };
@@ -4987,7 +5018,7 @@ static void exec_opt(int op, char *optarg)
 			ib_name = optarg;
 			break;
 
-		case 'e' : enable(optarg);
+		case 'e' : enable(optarg, true);
 			break;
 
 		case 'i':
@@ -5055,6 +5086,10 @@ static void exec_opt(int op, char *optarg)
 			debug = true;
 			break;
 
+		case 'y':
+			enable(optarg, false);
+			break;
+
 		default:
 			printf("ib2roce " VERSION " Mar 23,2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
@@ -5074,6 +5109,7 @@ static void exec_opt(int op, char *optarg)
 			printf("-r|--roce <if[:portnumber]>		ROCE device. Uses the first available if not specified.\n");
 			printf("-v|--log-packets			Show more detailed logs. Can be specified multiple times\n");
 			printf("-x|--debug				Do not daemonize, enter debug mode\n");
+			printf("-y|--disable <option>			Disable feature\n");
 			exit(1);
 	}
 }
