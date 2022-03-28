@@ -848,6 +848,7 @@ struct buf {
 		struct {
 			struct buf *next;	/* Next free buffer */
 			bool free;
+			unsigned refcount;	/* Refcount */
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
 			struct endpoint *source_ep;
@@ -892,17 +893,44 @@ static struct buf *buffers;
 
 static struct buf *nextbuffer;	/* Pointer to next available RDMA buffer */
 
-static void free_buffer(struct buf *buf)
+static void __free_buffer(struct buf *buf)
 {
 #ifdef DEBUG
 	memset(buf->raw, 0, DATA_SIZE);
 #endif
-	lock();
-
 	buf->free = true;
 	buf->next = nextbuffer;
 	nextbuffer = buf;
+}
 
+static void free_buffer(struct buf *buf)
+{
+	lock();
+	__free_buffer(buf);
+	unlock();
+}
+
+static void get_buf(struct buf *buf)
+{
+	lock();
+	if (!buf->refcount)
+		abort();
+	buf->refcount++;
+	unlock();
+}
+
+static void put_buf(struct buf *buf)
+{
+	unsigned count;
+
+	lock();
+	count = --buf->refcount;
+	if (count) {
+		unlock();
+		return;
+	}
+
+	__free_buffer(buf);
 	unlock();
 }
 
@@ -2400,6 +2428,8 @@ err:
  * fetch has to be done by the RDMA subsystem and no completion
  * event has to be handled.
  *
+ * No MR is being used so this works for any QP.
+ *
  * Space in the WR is limited, so it only works for very small packets.
  */
 static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct ah_info *ai, bool imm_used, unsigned imm)
@@ -2475,9 +2505,10 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 	if (len <= MAX_INLINE_DATA) {
 		wr.send_flags = IBV_SEND_INLINE;
 		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
-		free_buffer(buf);
-	} else
+	} else {
+		get_buf(buf);
 		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
+	}
 
 	if (ret) {
 		errno = ret;
@@ -2531,10 +2562,12 @@ static int send_to(struct rdma_channel *c,
 	if (ret) {
 		errno = - ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s\n", errname(), c->text);
-	} else
+	} else {
+		get_buf(buf);
 		if (log_packets > 1)
 			logg(LOG_NOTICE, "RDMA Send to QPN=%x QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
+	}
 
 	return ret;
 }
@@ -2547,8 +2580,6 @@ static int send_buf(struct buf *buf, struct rdma_unicast *ra)
 
 	if (len < MAX_INLINE_DATA) {
 		ret = send_inline(ra->c, buf->cur, len, &ra->ai, buf->imm_valid, buf->imm);
-		if (ret == 0)
-			free_buffer(buf);
 	} else
 		ret = send_to(ra->c, buf->cur, len, &ra->ai, buf->imm_valid, buf->imm, buf);
 
@@ -3156,27 +3187,25 @@ static void receive_multicast(struct buf *buf)
 
 	if (m->beacon) {
 		beacon_received(buf);
-		goto free_out;
+		return;
 	}
 
 	if (!bridging)
-		goto free_out;
+		return;
 
 	if (drop_packets && (c->stats[packets_received] % drop_packets) == drop_packets - 1)
-		goto free_out;
+		return;
 
 	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, m->ai + (in ^ 1), false, 0, buf);
 
 	if (ret)
-		goto free_out;
+		return;
 
 	st(c, packets_bridged);
 	return;
 
 invalid_packet:
 	st(c, packets_invalid);
-free_out:
-	free_buffer(buf);
 }
 
 /*
@@ -3199,7 +3228,6 @@ static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
 	logg(LOG_WARNING, "Multicast packet on Unicast QP %s:%s\n", c->text, payload_dump(buf->cur));
 
 	st(c, packets_invalid);
-	free_buffer(buf);
 }
 
 /* Figure out what to do with the packet we got */
@@ -3216,7 +3244,6 @@ static void receive_main(struct buf *buf)
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
 
 	st(c, packets_invalid);
-	free_buffer(buf);
 }
 
 /*
@@ -3517,7 +3544,6 @@ no_cma:
 		unlock();
 
 		free(ss);
-		free_buffer(buf);
 	}
 
 
@@ -3595,8 +3621,6 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 
 	if (bridging)
 		send_mad(ss->source, buf, mad_pos);
-	else
-		free_buffer(buf);
 
 	free(ss);
 	return NULL;
@@ -3710,7 +3734,7 @@ static void receive_raw(struct buf *buf)
 			reason = process_arp(i, buf, lids);
 
 			if (!reason)
-				goto packet_done;
+				return;
 
 			goto discard;
 
@@ -3806,7 +3830,7 @@ static void receive_raw(struct buf *buf)
 		if (reason)
 			goto discard;
 
-		goto packet_done;
+		return;
 	}
 
 	mad_pos = buf->cur;
@@ -3849,8 +3873,6 @@ discard:
 			buf->w->byte_len, len, buf->cur - buf->raw);
 
 	st(c, packets_invalid);
-packet_done:
-	free_buffer(buf);
 }
 
 /* Unicast packet reception */
@@ -3923,7 +3945,6 @@ static void receive_ud(struct buf *buf)
 discard:
 	logg(LOG_NOTICE, "receive_ud:Discard %s %s LEN=%ld\n", c->text, reason, buf->end - buf->cur);
 	st(c, packets_invalid);
-	free_buffer(buf);
 }
 
 /*
@@ -3979,7 +4000,6 @@ discard:
 			buf->c->text, reason, w->byte_len, buf->cur - buf->raw);
 
 	st(buf->c, packets_invalid);
-	free_buffer(buf);
 }
 
 static void reset_flags(struct buf *buf)
@@ -4041,13 +4061,15 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 
 			buf->ip_csum_ok = (w->wc_flags & IBV_WC_IP_CSUM_OK) != 0;
 
+			buf->refcount = 1;
 			c->receive(buf);
+			put_buf(buf);
 
 		} else {
 			if (w->status == IBV_WC_SUCCESS && w->opcode == IBV_WC_SEND) {
 				/* Completion entry */
 				st(c, packets_sent);
-				free_buffer(buf);
+				put_buf(buf);
 			} else
 				logg(LOG_NOTICE, "Strange CQ Entry %d/%d: Status:%x Opcode:%x Len:%u QP=%x SRC_QP=%x Flags=%x\n",
 					j, cqs, w->status, w->opcode, w->byte_len, w->qp_num, w->src_qp, w->wc_flags);
@@ -4131,7 +4153,9 @@ static void handle_receive_packet(void *private)
 	buf->ip_csum_ok = true;
 	/* Reset scan to the beginning of the raw packet */
 	buf->cur = buf->raw;
+	buf->refcount = 1;
 	c->receive(buf);
+	put_buf(buf);
 }
 
 
@@ -4319,7 +4343,6 @@ static void beacon_received(struct buf *buf)
 
 	logg(LOG_NOTICE, "Received Beacon on %s Port %d Version %s IB=%s, ROCE=%s MC groups=%u. Latency %ld ns\n",
 		beacon_mc->text, ntohs(b->port), b->version, ib, inet_ntoa(b->roce), b->nr_mc, diff.tv_sec * 1000000000 + diff.tv_nsec);
-	free_buffer(buf);
 }
 
 /* A mini router follows */
