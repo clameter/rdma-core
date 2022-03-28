@@ -922,6 +922,7 @@ static void init_buf(void)
 {
 	int i;
 	unsigned flags;
+	unsigned long x = nr_buffers;
 
 	if (sizeof(struct buf) != BUFFER_SIZE) {
 		logg(LOG_CRIT, "struct buf is not 8k as required\n");
@@ -934,14 +935,16 @@ static void init_buf(void)
 	if (huge)
 		flags |= MAP_HUGETLB;
 
-	if (nr_buffers * BUFFER_SIZE > 1000000000)
-		logg(LOG_WARNING, "Allocate %u MByte of memory for %u buffers\n",
-				nr_buffers * BUFFER_SIZE / 1024 / 1024, nr_buffers);
+	x *= BUFFER_SIZE;
 
-	buffers = mmap(0, nr_buffers * BUFFER_SIZE, PROT_READ|PROT_WRITE, flags, -1, 0);
+	if (x > 1000000000)
+		logg(LOG_WARNING, "Allocate %lu MByte of memory for %u buffers\n",
+				x / 1024 / 1024, nr_buffers);
+
+	buffers = mmap(0, x, PROT_READ|PROT_WRITE, flags, -1, 0);
 	if (!buffers) {
-		logg(LOG_CRIT, "Cannot allocate %d KB of memory required for %d buffers. Error %s\n",
-				nr_buffers * (BUFFER_SIZE / 1024), nr_buffers, errname());
+		logg(LOG_CRIT, "Cannot allocate %lu KB of memory required for %d buffers. Error %s\n",
+				x / 1024, nr_buffers, errname());
 		abort();
 	}
 
