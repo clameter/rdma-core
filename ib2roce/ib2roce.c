@@ -4810,23 +4810,24 @@ struct enable_option {
 	const char *id;
 	bool *bool_flag;
 	int *int_flag;
-	const char *def_value;
+	const char *on_value;
+	const char *off_value;
 	const char *description;
 } enable_table[] = {
-{	"buffers", NULL, &nr_buffers, "1000000", "Number of 8k buffers allocated for packet processing" },
-{	"bridging", &bridging, NULL, "off", "Disable the forwarding of packets between interfaces" },
-{	"drop", NULL, &drop_packets, "100",  "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
-{	"flow", &flow_steering, NULL, "on", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
-{	"huge", &huge, NULL, "on", "Enable the use of Huge memory for the packet pool" }, 
-{	"loopbackprev", &loopback_blocking, NULL, "off", "Disable loopback prevention by the NIC" },
-{	"packetsocket", &packet_socket, NULL, "on", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
-{ 	"raw", 	&raw, NULL, "on", "Enable the use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
-{	"unicast", &unicast, NULL, "on", "Enable processing of unicast packets with QP1 handling of SIDR REQ/REP" },
-{	"rate", NULL, &rate, "2", "Make RDMA limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
-{	NULL, NULL, NULL, NULL, NULL }
+{	"buffers", NULL, &nr_buffers, "1000000", "10000","Number of 8k buffers allocated for packet processing" },
+{	"bridging", &bridging, NULL, "on", "off", "Forwarding of packets between interfaces" },
+{	"drop", NULL, &drop_packets, "100", "0", "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
+{	"flow", &flow_steering, NULL, "on", "off", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{	"huge", &huge, NULL, "on", "off", "Enable the use of Huge memory for the packet pool" }, 
+{	"loopbackprev", &loopback_blocking, NULL, "on", "off", "Multicast loopback prevention of the NIC" },
+{	"packetsocket", &packet_socket, NULL, "on", "off", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
+{	"rate", NULL, &rate, "2", "0", "Make RDMA limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
+{ 	"raw", 	&raw, NULL, "on", "off", "Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{	"unicast", &unicast, NULL, "on", "off", "Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{	NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
-static void enable(char *option)
+static void enable(char *option, bool enable)
 {
 	char *name;
 	const char *value = NULL;
@@ -4836,7 +4837,7 @@ static void enable(char *option)
 
 	if (!option || !option[0]) {
 		printf("List of available options that can be enabled\n");
-		printf("Var\t\tType\tDefault\tDefAction\tDescription\n");
+		printf("Var\t\tType\tDefault\tDescription\n");
 		printf("----------------------------------------------------------------\n");
 		for(i = 0; enable_table[i].id; i++) {
 			char state[10];
@@ -4851,7 +4852,7 @@ static void enable(char *option)
 			} else
 				snprintf(state, 10, "%d", *eo->int_flag);
 
-			printf("%-14s\t%s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->def_value, eo->description);
+			printf("%-14s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->description);
 		}
 		exit(1);
 	}
@@ -4874,8 +4875,12 @@ static void enable(char *option)
 
 got_it:
 	eo = enable_table + i;
-	if (!value)
-		value = eo->def_value;
+	if (!value) {
+		if (enable) 
+			value = eo->on_value;
+		else
+			value = eo->off_value;
+	}
 
 	if (eo->bool_flag) {
 		if (strcasecmp(value, "on") == 0 ||
@@ -4912,6 +4917,7 @@ struct option opts[] = {
 	{ "config", required_argument, NULL, 'c' },
 	{ "cores", required_argument, NULL, 'k' },
 	{ "enable", optional_argument, NULL, 'e' },
+	{ "disable", required_argument, NULL, 'y' },
 	{ "help", no_argument, NULL, 'h' },
 	{ NULL, 0, NULL, 0 }
 };
@@ -4989,7 +4995,7 @@ static void exec_opt(int op, char *optarg)
 			ib_name = optarg;
 			break;
 
-		case 'e' : enable(optarg);
+		case 'e' : enable(optarg, true);
 			break;
 
 		case 'i':
@@ -5057,6 +5063,10 @@ static void exec_opt(int op, char *optarg)
 			debug = true;
 			break;
 
+		case 'y':
+			enable(optarg, false);
+			break;
+
 		default:
 			printf("ib2roce " VERSION " Mar 23,2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
@@ -5076,6 +5086,7 @@ static void exec_opt(int op, char *optarg)
 			printf("-r|--roce <if[:portnumber]>		ROCE device. Uses the first available if not specified.\n");
 			printf("-v|--log-packets			Show more detailed logs. Can be specified multiple times\n");
 			printf("-x|--debug				Do not daemonize, enter debug mode\n");
+			printf("-y|--disable <option>			Disable feature\n");
 			exit(1);
 	}
 }
