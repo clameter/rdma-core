@@ -2443,8 +2443,7 @@ static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct 
 }
 
 /*
- * Send data to target using native RDMA structs. This one does not support RDMACM since
- * it uses the shared i->mr and not the c->mr required by rdma cm..
+ * Send data to target using native RDMA structs relying on state in struct buf.
  */
 static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, uint32_t remote_qpn, uint32_t qkey)
 {
@@ -2470,7 +2469,7 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 	wr.wr.ud.remote_qkey = qkey;
 
 	sge.length = buf->end - buf->cur;
-	sge.lkey = c->i->mr->lkey;
+	sge.lkey = c->mr->lkey;
 	sge.addr = (uint64_t)buf->cur;
 
 	if (len <= MAX_INLINE_DATA) {
