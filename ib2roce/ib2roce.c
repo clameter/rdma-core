@@ -1953,7 +1953,8 @@ static void setup_interface(enum interfaces in)
 	if (i->iges <= 0) {
 		logg(LOG_CRIT, "Error %s. Failed to obtain GID table for %s\n",
 			errname(), i->text);
-		abort();
+		i->context = NULL;
+		return;
 	}
 
 	/* Find the correct gid entry */
@@ -1971,9 +1972,10 @@ static void setup_interface(enum interfaces in)
 	}
 
 	if (e >= i->ige + i->iges) {
-		logg(LOG_CRIT, "Failed to find GIDs in GID table for %s\n",
+		logg(LOG_CRIT, "Failed to find a suitable entry GID table for %s\n",
 			i->text);
-		abort();
+		i->context = NULL;
+		return;
 	}
 
 	/* Copy our connection info from GID table */
@@ -5147,7 +5149,7 @@ int main(int argc, char **argv)
 	if (ret && !testing)
 		return ret;
 
-	syslog (LOG_NOTICE, "%s device = %s:%d, %s device = %s:%d. Multicast Groups=%d MGIDs=%s Buffers=%u\n",
+	logg (LOG_NOTICE, "%s device = %s:%d, %s device = %s:%d. Multicast Groups=%d MGIDs=%s Buffers=%u\n",
 			interfaces_text[INFINIBAND], i2r[INFINIBAND].rdma_name, i2r[INFINIBAND].port,
 			interfaces_text[ROCE], i2r[ROCE].rdma_name, i2r[ROCE].port,
 			nr_mc, mgid_mode->id, nr_buffers);
@@ -5156,6 +5158,11 @@ int main(int argc, char **argv)
 
 	setup_interface(INFINIBAND);
 	setup_interface(ROCE);
+
+	if (!i2r[INFINIBAND].context && !i2r[ROCE].context) {
+		logg(LOG_CRIT, "No working RDMA devices present.\n");
+		exit(2);
+	}
 
 	if (cores)
 		show_core_config();
