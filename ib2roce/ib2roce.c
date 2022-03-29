@@ -910,12 +910,18 @@ static void free_buffer(struct buf *buf)
 	unlock();
 }
 
-static void get_buf(struct buf *buf)
+
+static void __get_buf(struct buf *buf)
 {
-	lock();
 	if (!buf->refcount)
 		abort();
 	buf->refcount++;
+}
+
+static void get_buf(struct buf *buf)
+{
+	lock();
+	__get_buf(buf);
 	unlock();
 }
 
