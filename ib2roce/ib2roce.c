@@ -2946,7 +2946,7 @@ redo:
 	ah = ibv_create_ah(i->pd, at);
 	if (!ah) {
 		logg(LOG_ERR, "at_to_ep: Failed to create Endpoint on %s: %s. IP=%s\n",
-				i->text, errname(), inet_ntoa(ep->addr));
+				i->text, errname(), inet_ntoa(addr));
 		return NULL;
 	}
 
