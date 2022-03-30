@@ -253,6 +253,15 @@ struct buf;
 
 typedef void receive_callback(struct buf *);
 
+
+/*
+ * Channel data stucture,
+ *
+ * Channels may be associated with a core on which a busyloop runs.
+ *
+ * Therefore changes to variables may only be made from code
+ * running on that core if multithreading is active.
+ */
 struct rdma_channel {
 	struct i2r_interface *i;	/* The network interface of this channel */
 	struct core_info *core;		/* Core the channel is on or NULL if comp_events is used */
@@ -308,6 +317,7 @@ struct endpoint {
 };
 
 static struct i2r_interface {
+	/* Not changed when multithreading */
 	struct ibv_context *context;		/* Not for RDMA CM use */
 	struct rdma_event_channel *rdma_events;
 	struct rdma_channel *multicast;
@@ -335,11 +345,22 @@ static struct i2r_interface {
 	struct ibv_port_attr port_attr;
 	int iges;
 	struct ibv_gid_entry ige[MAX_GID];
+
+	/* The following may be updated in a multithreaded environment
+	 * from the multicast thread running for each interface.
+ 	 *
+         * Serialization is required but we generally are a bit loose
+	 * by allowing read access without locks.
+         */
 	struct hash *ru_hash;
 	struct fifo resolve_queue;		/* List of send buffers with unresolved addresses */
 	struct hash *ep;			/* Hash of all endpoints reachable here */
 	struct hash *ip_to_ep;			/* Hash based on IP address */
+
+	/* PGM information:  Only updated from the multicast channel core */
 	unsigned nr_tsi;
+	struct hash *pgm_tsi_hash;
+	struct hash *pgm_record_hash;
 } i2r[NR_INTERFACES];
 
 /*
@@ -566,9 +587,14 @@ enum mc_status { MC_OFF, MC_JOINING, MC_JOINED, MC_ERROR, NR_MC_STATUS };
 const char *mc_text[NR_MC_STATUS] = { "Inactive", "Joining", "Joined", "Error" };
 
 /* A multicast group.
+ *
  * ah_info points to multicast address and QP number in use
  * for the stream. There are no "ports" unless they are
  * embedded in the GID (like done by CLLM).
+ *
+ * Multicast groups are setup before we enter multithreaded mode
+ * However, the state of joins etc may change in multithreaded
+ * mode. Access to that status information requires some care.
  */
 static struct mc {
 	struct in_addr addr;
@@ -2847,13 +2873,14 @@ struct pgm_record {
 	unsigned len;			/* Length of the message */
 };
 
-struct hash *pgm_tsi_hash;
-struct hash *pgm_record_hash;
-
 static void init_pgm_streams(void)
 {
-	pgm_tsi_hash = hash_create(0, sizeof(struct pgm_tsi));
-	pgm_record_hash = hash_create(0, sizeof(struct pgm_tsi) + sizeof(uint32_t));
+	struct i2r_interface *i;
+
+	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
+		i->pgm_tsi_hash = hash_create(0, sizeof(struct pgm_tsi));
+		i->pgm_record_hash = hash_create(0, sizeof(struct pgm_tsi) + sizeof(uint32_t));
+	}
 }
 
 static void format_tsi(char *b, struct pgm_tsi *tsi)
@@ -2867,6 +2894,7 @@ static void format_tsi(char *b, struct pgm_tsi *tsi)
 
 static bool add_record(struct buf *buf, struct pgm_tsi *tsi, uint32_t sqn, void *start, unsigned len)
 {
+	struct i2r_interface *i = buf->c->i;
 	struct pgm_record *r = calloc(1, sizeof(struct pgm_record));
 	struct pgm_record *q;
 
@@ -2877,22 +2905,22 @@ static bool add_record(struct buf *buf, struct pgm_tsi *tsi, uint32_t sqn, void 
 	r->len = len;
 
 	lock();
-	if ((q = hash_find(pgm_record_hash, &r))) {
+	if ((q = hash_find(i->pgm_record_hash, &r))) {
 		unlock();
 		return false;
 	} else {
 		__get_buf(buf);
-		hash_add(pgm_record_hash, r);
+		hash_add(i->pgm_record_hash, r);
 		unlock();
 		return true;
 	}
 }
 
-static struct pgm_record *find_record(struct pgm_tsi *tsi, uint32_t sqn)
+static struct pgm_record *find_record(struct i2r_interface *i, struct pgm_tsi *tsi, uint32_t sqn)
 {
 	struct pgm_record f = { .tsi = *tsi, .sqn = sqn };
 
-	return hash_find(pgm_record_hash, &f);
+	return hash_find(i->pgm_record_hash, &f);
 }
 
 /* Forwarded packet if ib2roce behaves like a DLR */
@@ -2943,7 +2971,7 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 	tsi.dport = ntohs(header.pgm.pgm_dport);
 	format_tsi(text, &tsi);
 
-	s = hash_find(pgm_tsi_hash, &tsi);
+	s = hash_find(i->pgm_tsi_hash, &tsi);
 
 	switch (header.pgm.pgm_type) {
 		case PGM_SPM:		/* Multicast downstream */
@@ -2980,13 +3008,13 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 			if (!s) {
 				lock();
-				s = hash_find(pgm_tsi_hash, &tsi);
+				s = hash_find(i->pgm_tsi_hash, &tsi);
 				if (!s) {
 					s = calloc(1, sizeof(struct pgm_stream));
 					s->tsi = tsi;
 					s->i = i;
 					strcpy(s->text, text);
-					hash_add(pgm_tsi_hash, s);
+					hash_add(i->pgm_tsi_hash, s);
 
 					/* First message on new stream */
 					s->last_seq = sqn - 1;
@@ -3019,7 +3047,7 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 				break;
 			}
 
-			if (sqn < s->last && find_record(&tsi, sqn)) {
+			if (sqn < s->last && find_record(i, &tsi, sqn)) {
 				st(c, pgm_dup);
 				ret = false;
 				logg(LOG_NOTICE, "%s: Repeated data in Window SQN=%d\n", s->text, sqn);
@@ -3053,7 +3081,7 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 				} else {
 					/* We just filled up in a missing piece check how long our consistent history goes now */
 					while (s->last_seq < s->last) {
-						struct pgm_record *r = find_record(&tsi, s->last_seq + 1);
+						struct pgm_record *r = find_record(i, &tsi, s->last_seq + 1);
 
 						if (r) {
 							logg(LOG_NOTICE, "Found earlier record %d\n", s->last_seq + 1);
@@ -3180,7 +3208,7 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 					logg(LOG_NOTICE, "%s: End of Stream TSI %s\n", i->text, text);
 					if (s) {
 						/* Remove all records */
-						hash_del(pgm_tsi_hash, &tsi);
+						hash_del(i->pgm_tsi_hash, &tsi);
 						free(s);
 						i->nr_tsi--;
 						s = NULL;
