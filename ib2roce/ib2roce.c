@@ -2565,12 +2565,13 @@ static int send_to(struct rdma_channel *c,
 	sge.lkey = c->mr->lkey;
 	sge.addr = (uint64_t)addr;
 
+	get_buf(buf);	/* Refcount to keep the buffer for the write queue */
 	ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
 	if (ret) {
 		errno = - ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s\n", errname(), c->text);
+		put_buf(buf);
 	} else {
-		get_buf(buf);
 		if (log_packets > 1)
 			logg(LOG_NOTICE, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
