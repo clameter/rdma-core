@@ -1676,7 +1676,7 @@ static void start_channel(struct rdma_channel *c)
 			logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTS state. %s\n", c->text, errname());
 
 	}
-	logg(LOG_NOTICE, "QP %s moved to state %s: QPN=0x%x\n",
+	logg(LOG_NOTICE, "QP %s moved to state %s: QPN=%d\n",
 		 c->text,  (c->type == channel_ud || c->type == channel_qp1)? "RTS/RTR" : "RTR", c->qp->qp_num);
 }
 
@@ -2259,10 +2259,8 @@ static void handle_rdma_event(void *private)
 				if (!bridging || m->status[in ^ 1] == MC_JOINED)
 					active_mc++;
 
-				logg(LOG_NOTICE, "Joined %s QP=%x QKEY=%x MLID 0x%x sl %u on %s\n",
+				logg(LOG_NOTICE, "Joined %s MLID 0x%x sl %u on %s\n",
 					inet_ntop(AF_INET6, param->ah_attr.grh.dgid.raw, buf, 40),
-					param->qp_num,
-					param->qkey,
 					param->ah_attr.dlid,
 					param->ah_attr.sl,
 					i->text);
@@ -2474,7 +2472,7 @@ static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct 
 		logg(LOG_WARNING, "Failed to post inline send: %s on %s\n", errname(), c->text);
 	} else
 		if (log_packets > 1)
-			logg(LOG_NOTICE, "Inline Send to QPN=%x QKEY=%x %d bytes\n",
+			logg(LOG_NOTICE, "Inline Send to QPN=%d QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
 
 	return ret;
@@ -2524,7 +2522,7 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 		stop_channel(c);
 	} else
 		if (log_packets > 1)
-			logg(LOG_NOTICE, "RDMA Send to QPN=%x QKEY=%x %d bytes\n",
+			logg(LOG_NOTICE, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
 
 	return ret;
@@ -2573,7 +2571,7 @@ static int send_to(struct rdma_channel *c,
 	} else {
 		get_buf(buf);
 		if (log_packets > 1)
-			logg(LOG_NOTICE, "RDMA Send to QPN=%x QKEY=%x %d bytes\n",
+			logg(LOG_NOTICE, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
 	}
 
@@ -3584,7 +3582,7 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 	uint32_t sr_qkey = ntohl(sr->q_key);
 
 	
-	logg(LOG_NOTICE, "SIDR_REP: %s method=%s status=%s attr_id=%s attr_mod=%x ServiceId=%lx ReqId=%x Q_KEY=%x QPN=0x%x Status=%x\n",
+	logg(LOG_NOTICE, "SIDR_REP: %s method=%s status=%s attr_id=%s attr_mod=%x ServiceId=%lx ReqId=%x Q_KEY=%x QPN=%d Status=%x\n",
 		buf->c->text, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
 		umad_common_mad_status_str(buf->umad.status),
 		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
@@ -3846,7 +3844,7 @@ static void receive_raw(struct buf *buf)
 	/* Start MAD payload */
 	PULL(buf, buf->umad);
 
-	logg(LOG_NOTICE, "QP1 packet %s from %s LID %x LRH_LEN=%u WC_LEN=%u SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
+	logg(LOG_NOTICE, "RAW: QP1 packet %s from %s LID %x LRH_LEN=%u WC_LEN=%u SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
 		inet_ntoa(buf->source_ep->addr), buf->source_ep->lid, len, w->byte_len,
 		 w->src_qp, __bth_qpn(&bth),
  		umad_method_str(buf->umad.mgmt_class, buf->umad.method),
