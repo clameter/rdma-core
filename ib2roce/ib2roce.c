@@ -146,13 +146,13 @@ bool multithreaded = false;
 
 static void lock(void)
 {
-	if (locked)
-		abort();
-
 	if (multithreaded) {
  		if (pthread_mutex_lock(&mutex))
  			logg(LOG_ERR, "Mutex lock failed: %s\n", errname());
 	}
+
+	if (locked)
+		abort();
 
 	locked = true;
 }
@@ -162,13 +162,12 @@ static void unlock(void)
 	if (!locked)
 		abort();
 
+	locked = false;
 	if (multithreaded) {
  		if (pthread_mutex_unlock(&mutex))
  			logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
 
 	}
-
-	locked = false;
 }
  
 #if 0
