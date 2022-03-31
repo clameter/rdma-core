@@ -1034,6 +1034,7 @@ static struct buf *alloc_buffer(struct rdma_channel *c)
 		nextbuffer = buf->next;
 		buf->free = false;
 		buf->c = c;
+		buf->refcount = 1;
 	}
 	unlock();
 
@@ -4545,7 +4546,6 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 
 			buf->ip_csum_ok = (w->wc_flags & IBV_WC_IP_CSUM_OK) != 0;
 
-			buf->refcount = 1;
 			c->receive(buf);
 			put_buf(buf);
 
@@ -4637,7 +4637,6 @@ static void handle_receive_packet(void *private)
 	buf->ip_csum_ok = true;
 	/* Reset scan to the beginning of the raw packet */
 	buf->cur = buf->raw;
-	buf->refcount = 1;
 	c->receive(buf);
 	put_buf(buf);
 }
