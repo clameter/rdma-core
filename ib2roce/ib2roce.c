@@ -601,6 +601,7 @@ static struct mc {
 	enum mc_status status[2];
 	bool sendonly[2];
 	bool beacon;
+	uint16_t port;
 	struct ah_info ai[2];
 	struct sockaddr *sa[2];
 	struct mgid_signature *mgid_mode;
@@ -716,6 +717,7 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 static void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 {
 	m->sa[ROCE] = (struct sockaddr  *)si;
+	m->port = si->sin_port;
 	m->sa[INFINIBAND] = m->sa[ROCE];
 
 	if (m->mgid_mode->signature) {
@@ -4777,18 +4779,29 @@ static void status_write(void)
 	add_event(timestamp() + 60000, status_write);
 }
 
+#define BEACON_MCS 500
+
+struct beacon_mc {
+	struct in_addr addr;
+	uint16_t port;
+};
+
 /*
  * Beacon processing
  */
 struct beacon_info {
 	unsigned long signature;
 	char version[10];
-	struct in_addr destination;
-	struct in_addr infiniband;
-	struct in_addr roce;
-	unsigned port;
-	unsigned nr_mc;
+	bool infiniband;
+	uint16_t beacon_port;
+	struct in_addr beacon_mc;
 	struct timespec t;
+	unsigned gateway_qp;
+	struct in_addr bridge_addr;		/* Where is the local bridge */
+	struct in_addr to_addr;			/* To which address is it bridging */
+	unsigned nr_mc;				/* Active Multicast */
+	unsigned nr_tsi;			/* Active TSIs */
+	struct beacon_mc mc[500];
 };
 
 struct mc *beacon_mc;		/* == NULL if unicast */
@@ -4808,10 +4821,33 @@ static void timespec_diff(struct timespec *start, struct timespec *stop,
     return;
 }
 
+static void prep_beacon_struct(struct i2r_interface *i, struct beacon_info *b)
+{
+	enum interfaces in = i - i2r;
+	struct mc *m;
+
+	b->signature = BEACON_SIGNATURE;
+	memcpy(b->version, VERSION, 10);
+	b->infiniband = in == INFINIBAND;
+	b->beacon_port = beacon_sin->sin_port;
+	b->beacon_mc = beacon_sin->sin_addr;
+	b->bridge_addr = i2r[in].if_addr.sin_addr;
+	b->to_addr = i2r[in^1].if_addr.sin_addr;
+	b->nr_mc = nr_mc;
+	b->nr_tsi = i2r[INFINIBAND].nr_tsi;
+	if (b->nr_tsi < i2r[ROCE].nr_tsi)
+		b->nr_tsi = i2r[ROCE].nr_tsi;
+
+	for(m = mcs; m < mcs + nr_mc; m++) {
+		b->mc[m - mcs].addr = m->addr;
+		b->mc[m - mcs].port = m->port;
+	}
+}
+
 static void beacon_received(struct buf *buf)
 {
 	struct beacon_info *b = (struct beacon_info *)buf->cur;
-	char ib[40];
+	char bridge[40];
 	struct timespec diff;
 	struct timespec now;
 
@@ -4821,11 +4857,13 @@ static void beacon_received(struct buf *buf)
 	}
 
 	clock_gettime(CLOCK_REALTIME, &now);
-	strcpy(ib, inet_ntoa(b->infiniband));
+	strcpy(bridge, inet_ntoa(b->bridge_addr));
 	timespec_diff(&b->t, &now, &diff);
 
-	logg(LOG_NOTICE, "Received Beacon on %s Port %d Version %s IB=%s, ROCE=%s MC groups=%u. Latency %ld ns\n",
-		beacon_mc->text, ntohs(b->port), b->version, ib, inet_ntoa(b->roce), b->nr_mc, diff.tv_sec * 1000000000 + diff.tv_nsec);
+	logg(LOG_NOTICE, "Received Beacon on %s Version %s Bridge=%s(%s), BridgeTo=%s MC groups=%u, TSIs=%d. Latency %ld ns GatewayQP=%u\n",
+		beacon_mc->text, b->version, bridge, b->infiniband ? "Infiniband" : "ROCE",
+		inet_ntoa(b->to_addr), b->nr_mc, b->nr_tsi,
+		diff.tv_sec * 1000000000 + diff.tv_nsec, b->gateway_qp);
 }
 
 /* A mini router follows */
@@ -4882,20 +4920,14 @@ static void beacon_send(void)
 	struct beacon_info b;
 	struct buf *buf;
 
-	b.signature = BEACON_SIGNATURE;
-	memcpy(b.version, VERSION, 10);
-	b.destination = beacon_sin->sin_addr;
-	b.port = beacon_sin->sin_port;
-	b.infiniband = i2r[INFINIBAND].if_addr.sin_addr;
-	b.roce = i2r[ROCE].if_addr.sin_addr;
-	b.nr_mc = nr_mc;
-	clock_gettime(CLOCK_REALTIME, &b.t);
-
 	if (beacon_mc) {
 		int in;
 
 		for(in = 0; in < NR_INTERFACES; in++) {
 			struct i2r_interface *i = i2r + in;
+			prep_beacon_struct(i, &b);
+			clock_gettime(CLOCK_REALTIME, &b.t);
+
 
 			if (i->context && beacon_mc->status[in] == MC_JOINED) {
 				if (sizeof(b) > MAX_INLINE_DATA) {
