@@ -111,6 +111,8 @@ static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket inst
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
 static int rate = 0;			/* Limit sending rate */
+static int swrate = 0;			/* Software delay per message */
+
 
 /* Timestamp in milliseconds */
 static unsigned long timestamp(void)
@@ -240,7 +242,7 @@ static const char *stats_text[nr_stats] = {
 	"LeaveRequests"
 };
 
-unsigned max_wc_cqs = 1000;
+int max_wc_cqs = 1000;
 
 static int cq_high = 0;	/* Largest batch of CQs encountered */
 
@@ -5365,18 +5367,20 @@ struct enable_option {
 	const char *off_value;
 	const char *description;
 } enable_table[] = {
-{	"buffers", NULL, &nr_buffers, "1000000", "10000","Number of 8k buffers allocated for packet processing" },
-{	"bridging", &bridging, NULL, "on", "off", "Forwarding of packets between interfaces" },
-{	"drop", NULL, &drop_packets, "100", "0", "Drop multicast packets. The value is the number of multicast packets to send before dropping" },
-{	"flow", &flow_steering, NULL, "on", "off", "Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
-{	"huge", &huge, NULL, "on", "off", "Enable the use of Huge memory for the packet pool" }, 
-{	"loopbackprev", &loopback_blocking, NULL, "on", "off", "Multicast loopback prevention of the NIC" },
-{	"packetsocket", &packet_socket, NULL, "on", "off", "Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
-{	"pgm",NULL,(int *)&pgm_mode, "on", "off", "PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
-{	"rate", NULL, &rate, "2", "0", "Make RDMA limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
-{ 	"raw", 	&raw, NULL, "on", "off", "Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
-{	"unicast", &unicast, NULL, "on", "off", "Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
-{	NULL, NULL, NULL, NULL, NULL, NULL }
+{ "buffers",		NULL, &nr_buffers,	"1000000", "10000",	"Number of 8k buffers allocated for packet processing" },
+{ "bridging",		&bridging, NULL,	"on", "off",	"Forwarding of packets between interfaces" },
+{ "drop",		NULL,	&drop_packets,	"100", "0",	"Drop multicast packets. The value is the number of multicast packets to send before dropping" },
+{ "flow",		&flow_steering, NULL,	"on", "off",	"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{ "huge",		&huge,	NULL,		"on", "off",	"Enable the use of Huge memory for the packet pool" }, 
+{ "packetspp",		NULL,	&max_wc_cqs,	"1000", "10",	"Packets per Poll: The number of packets to receive per Poll of the RDMA stack" },
+{ "loopbackprev",	&loopback_blocking, NULL, "on", "off",	"Multicast loopback prevention of the NIC" },
+{ "packetsocket",	&packet_socket, NULL,	"on", "off",	"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
+{ "pgm",		NULL,	(int *)&pgm_mode, "on", "off",	"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
+{ "hwrate",		NULL,	&rate,		"2", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
+{ "swrate",		NULL, &swrate,		"1000", "0",	"Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "raw",		&raw,	NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{ "unicast",		&unicast, NULL,		"on", "off",	"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{ NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
 static void enable(char *option, bool enable)
