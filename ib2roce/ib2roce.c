@@ -4577,16 +4577,24 @@ static void handle_comp_event(void *private)
 	int cqs;
 	struct ibv_wc wc[max_wc_cqs];
 
-	ibv_get_cq_event(events, &cq, (void **)&c);
+	if (ibv_get_cq_event(events, &cq, (void **)&c)) {
+		logg(LOG_ERR, "ibv_get_cq_event failed with %s\n", errname());
+		return;
+	}
 
 	ibv_ack_cq_events(cq, 1);
 	if (ibv_req_notify_cq(cq, 0)) {
-		logg(LOG_CRIT, "ibv_req_notify_cq: Failed\n");
+		logg(LOG_ERR, "ibv_req_notify_cq: Failed\n");
 		abort();
 	}
 
+	if (!c || c->cq != cq) {
+		logg(LOG_ERR, "Invalid channel in handle_comp_event() %p\n", c);
+		return;
+	}
+
 	/* Retrieve completion events and process incoming data */
-	cqs = ibv_poll_cq(cq, 100, wc);
+	cqs = ibv_poll_cq(cq, max_wc_cqs, wc);
 	if (cqs < 0) {
 		logg(LOG_WARNING, "CQ polling failed with: %s on %s\n",
 			errname(), c->text);
@@ -5084,7 +5092,7 @@ static void logging(void)
 			i->multicast->stats[packets_received],
 			i->multicast->stats[packets_sent]);
 
-		if (pgm_mode != pgm_none && i->multicast->stats[pgm_spm])
+		if (pgm_mode != pgm_none && (i->multicast->stats[pgm_spm] || i->multicast->stats[pgm_odata]))
 			n+= sprintf(counts + n, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
 				i->nr_tsi,
 				i->multicast->stats[pgm_spm],
