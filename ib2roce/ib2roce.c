@@ -3668,8 +3668,10 @@ static void receive_multicast(struct buf *buf)
 	}
 
 	if (pgm_mode != pgm_none) {
+		uint8_t *saved = buf->cur;
 		if (!pgm_process(c, m, buf))
 			return;
+		buf->cur = saved;
 	}
 
 	if (!bridging)
