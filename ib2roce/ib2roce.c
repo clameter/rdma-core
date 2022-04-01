@@ -138,7 +138,7 @@ static void logg(int prio, const char *fmt, ...)
 		vprintf(fmt, valist);
 }
 
-static pthread_mutex_t mutex;		/* Generic serialization mutex */
+static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;		/* Generic serialization mutex */
 
 /* Is the lock taken */
 bool locked = false;
@@ -627,8 +627,10 @@ static int hash_add_mc(struct mc *m)
 {
 	lock();
 
-	if (hash_find(mc_hash, &m->addr))
+	if (hash_find(mc_hash, &m->addr)) {
+		unlock();
 		return -EEXIST;
+	}
 
 	hash_add(mc_hash, m);
 
@@ -4134,8 +4136,10 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 
 	lock();
 
-	if (find_forward(ss->source, (buf->c->i == i2r + INFINIBAND) ? NULL : ss->dest, ss->source_qp))
+	if (find_forward(ss->source, (buf->c->i == i2r + INFINIBAND) ? NULL : ss->dest, ss->source_qp)) {
+		unlock();
 		return "Ignoring SIDR REQ since one is already pending";
+	}
 
 	add_forward(ss->source, ss->source_qp, ss->dest, sr_qpn, sr_qkey);
 
