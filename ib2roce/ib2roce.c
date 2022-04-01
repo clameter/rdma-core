@@ -1038,7 +1038,6 @@ static struct buf *alloc_buffer(struct rdma_channel *c)
 		buf->c = c;
 		buf->refcount = 1;
 	}
-	buf->c = c;
 	unlock();
 
 #ifdef DEBUG
