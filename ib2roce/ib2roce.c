@@ -1230,7 +1230,12 @@ retry:
 	} else {
 		c->nr_cq = ci->nr_cq;
 		c->nr_receive = ci->nr_receive;
-	}	
+	}
+
+	if (c->nr_cq > i->device_attr.max_cqe) {
+		logg(LOG_WARNING, "CQs reduced from %d to %d because of %s limitations.\n", c->nr_cq, i->device_attr.max_cqe, i->text);
+		c->nr_cq = i->device_attr.max_cqe;
+	}
 
 	if (ci->setup(c)) {
 		/* Channel setup ok */
