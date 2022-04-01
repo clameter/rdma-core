@@ -275,6 +275,7 @@ struct rdma_channel {
 	struct ibv_pd *pd;
 	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
+	unsigned int active_send_buffers;
 	unsigned int nr_cq;
 	unsigned int nr_receive;
 	unsigned stats[nr_stats];
@@ -2548,12 +2549,13 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
 	} else {
 		get_buf(buf);
+		c->active_send_buffers++;
 		ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
 	}
 
 	if (ret) {
 		errno = ret;
-		logg(LOG_WARNING, "Failed to post send: %s on %s\n", errname(), c->text);
+		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
 		stop_channel(c);
 	} else
 		if (log_packets > 1)
@@ -2600,10 +2602,11 @@ static int send_to(struct rdma_channel *c,
 	sge.addr = (uint64_t)addr;
 
 	get_buf(buf);	/* Refcount to keep the buffer for the write queue */
+	c->active_send_buffers++;
 	ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
 	if (ret) {
-		errno = - ret;
-		logg(LOG_WARNING, "Failed to post send: %s on %s\n", errname(), c->text);
+		errno = ret;
+		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
 		put_buf(buf);
 	} else {
 		if (log_packets > 1)
@@ -4555,6 +4558,7 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 
 		} else {
 			if (w->status == IBV_WC_SUCCESS && w->opcode == IBV_WC_SEND) {
+				c->active_send_buffers--;
 				/* Completion entry */
 				st(c, packets_sent);
 				put_buf(buf);
