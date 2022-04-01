@@ -925,24 +925,59 @@ static struct buf *buffers;
 
 static struct buf *nextbuffer;	/* Pointer to next available RDMA buffer */
 
-static void __free_buffer(struct buf *buf)
+static bool buf_cmpxchg(struct buf **x, struct buf *y, struct buf *z)
+{
+	if (multithreaded) {
+		return atomic_compare_exchange_weak(x, &y, z);
+
+	} else {
+		if (*x == y) {
+			*x = z;
+			return true;
+		}
+		return false;
+	}
+}
+
+static struct buf *alloc_buffer(struct rdma_channel *c)
+{
+	struct buf *buf, *next;
+
+	do {
+		buf = nextbuffer;
+		if (!buf)
+			return NULL;
+
+		next = buf->next;
+	} while (!buf_cmpxchg(&nextbuffer, buf, next));
+
+	buf->free = false;
+	buf->c = c;
+	buf->refcount = 1;
+
+#ifdef DEBUG
+	buf->next = NULL;
+
+	for(uint8_t *q = buf->raw; q < buf->raw + DATA_SIZE; q++)
+		if (*q)
+			abort();
+#endif
+	return buf;
+}
+ 
+static void free_buffer(struct buf *buf)
 {
 #ifdef DEBUG
 	memset(buf->raw, 0, DATA_SIZE);
 #endif
 	buf->free = true;
-	buf->next = nextbuffer;
-	nextbuffer = buf;
+
+	do {
+		buf->next = nextbuffer;
+
+	} while (!buf_cmpxchg(&nextbuffer, buf->next, buf));
 }
-
-static void free_buffer(struct buf *buf)
-{
-	lock();
-	__free_buffer(buf);
-	unlock();
-}
-
-
+ 
 static void __get_buf(struct buf *buf)
 {
 	if (!buf->refcount)
@@ -1039,31 +1074,6 @@ static void init_buf(void)
 	 */
 	for (i = nr_buffers; i > 0; i--)
 		free_buffer(&buffers[i-1]);
-}
-
-static struct buf *alloc_buffer(struct rdma_channel *c)
-{
-	struct buf *buf;
-
-	lock();
-	buf = nextbuffer;
-
-	if (buf) {
-		nextbuffer = buf->next;
-		buf->free = false;
-		buf->c = c;
-		buf->refcount = 1;
-	}
-	unlock();
-
-#ifdef DEBUG
-	buf->next = NULL;
-
-	for(uint8_t *q = buf->raw; q < buf->raw + DATA_SIZE; q++)
-		if (*q)
-			abort();
-#endif
-	return buf;
 }
 
 typedef bool setup_callback(struct rdma_channel *c);
