@@ -2873,6 +2873,7 @@ struct pgm_stream {
 	unsigned lead;			/* Sender lead */
 
 	unsigned last;			/* Highest SQN received */
+	unsigned rlast;			/* Last Repair data */
 	unsigned last_seq;		/* Last in sequence */
 	unsigned oldest;		/* The oldest message available locally */
 	struct nak *nak;
@@ -3063,6 +3064,7 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 				break;
 			}
 
+
 			if (sqn < s->last && find_record(i, &tsi, sqn)) {
 				st(c, pgm_dup);
 				ret = false;
@@ -3077,8 +3079,19 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 			if (sqn > s->lead)
 				s->lead = sqn;
 
-			if (pgm_mode <= pgm_passthrough)
+			if (pgm_mode <= pgm_passthrough) {
+
+				if (header.pgm.pgm_type == PGM_ODATA) {
+					if (sqn != s->last +1)
+						logg(LOG_NOTICE, "%s: Sequence error SQN %d->SQN %d diff %d\n", s->text, s->last, sqn, sqn-s->last);
+					s->last = sqn;
+				} else { /* RDATA */
+					if (sqn != s->rlast + 1)
+						logg(LOG_NOTICE, "%s: RDATA starting at SQN %d. Earlier RDATA segment ended at SQN %d\n", s->text, sqn, s->rlast);
+					s->rlast = sqn;
+				}
 				break;
+			}
 
 			/* This is either the next data or missing data */
 
