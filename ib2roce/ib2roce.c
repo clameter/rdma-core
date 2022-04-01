@@ -50,7 +50,7 @@
 #include <ctype.h>
 #include <pthread.h>
 #include <numa.h>
-
+#include <stdatomic.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netdb.h>
@@ -950,28 +950,44 @@ static void __get_buf(struct buf *buf)
 	buf->refcount++;
 }
 
+static void __put_buf(struct buf *buf)
+{
+ 	buf->refcount--;
+ 	if (buf->refcount) {
+ 		return;
+ 	}
+ 
+	free_buffer(buf);
+}
+ 
 static void get_buf(struct buf *buf)
 {
-	lock();
-	__get_buf(buf);
-	unlock();
-}
+	unsigned x;
 
+	if (multithreaded) {
+		x = atomic_fetch_add(&buf->refcount, 1);
+		if (!x)
+			/* Incrementing the refcount from 0 ??? */
+ 			abort();
+	} else
+		__get_buf(buf);
+}
+ 
 static void put_buf(struct buf *buf)
 {
-	unsigned count;
+	unsigned x;
 
-	lock();
-	count = --buf->refcount;
-	if (count) {
-		unlock();
-		return;
-	}
+	if (multithreaded) {
+		x = atomic_fetch_sub(&buf->refcount, 1);
+		if (x > 1)
+ 			return;
 
-	__free_buffer(buf);
-	unlock();
+		free_buffer(buf);
+	} else
+		__put_buf(buf);
+
 }
-
+ 
 /* Remove all buffers related to a channel */
 static void clear_channel_bufs(struct rdma_channel *c)
 {
