@@ -930,9 +930,6 @@ static void __free_buffer(struct buf *buf)
 #ifdef DEBUG
 	memset(buf->raw, 0, DATA_SIZE);
 #endif
-	if (buf->free)
-		abort();
-
 	buf->free = true;
 	buf->next = nextbuffer;
 	nextbuffer = buf;
@@ -962,9 +959,11 @@ static void get_buf(struct buf *buf)
 
 static void put_buf(struct buf *buf)
 {
+	unsigned count;
+
 	lock();
-	buf->refcount--;
-	if (buf->refcount) {
+	count = --buf->refcount;
+	if (count) {
 		unlock();
 		return;
 	}
@@ -1034,13 +1033,12 @@ static struct buf *alloc_buffer(struct rdma_channel *c)
 	buf = nextbuffer;
 
 	if (buf) {
-		if (!buf->free)
-			abort();
 		nextbuffer = buf->next;
 		buf->free = false;
 		buf->c = c;
 		buf->refcount = 1;
 	}
+	buf->c = c;
 	unlock();
 
 #ifdef DEBUG
