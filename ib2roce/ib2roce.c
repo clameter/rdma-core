@@ -3082,10 +3082,6 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 					if (sqn != s->last +1)
 						logg(LOG_NOTICE, "%s: Sequence error SQN %d->SQN %d diff %d\n", s->text, s->last, sqn, sqn-s->last);
 					s->last = sqn;
-				} else { /* RDATA */
-					if (sqn != s->rlast + 1)
-						logg(LOG_NOTICE, "%s: RDATA starting at SQN %d. Earlier RDATA segment ended at SQN %d\n", s->text, sqn, s->rlast);
-					s->rlast = sqn;
 				}
 				break;
 			}
