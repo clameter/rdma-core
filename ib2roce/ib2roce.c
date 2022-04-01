@@ -3685,7 +3685,7 @@ static void receive_multicast(struct buf *buf)
 	if (drop_packets && (c->stats[packets_received] % drop_packets) == drop_packets - 1)
 		return;
 
-	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, m->ai + (in ^ 1), false, 0, buf);
+	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, m->ai + (in ^ 1), buf->imm_valid, buf->imm, buf);
 
 	if (ret)
 		return;
