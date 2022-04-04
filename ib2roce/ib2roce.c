@@ -1254,10 +1254,15 @@ retry:
 		c->nr_receive = ci->nr_receive;
 	}
 
-	if (c->nr_cq > i->device_attr.max_cqe) {
-		logg(LOG_WARNING, "CQs reduced from %d to %d because of %s limitations.\n", c->nr_cq, i->device_attr.max_cqe, i->text);
-		c->nr_cq = i->device_attr.max_cqe;
+	/*
+	 * For some reason there are limits on the size of the CQ that does not match the
+	 * values in device_attr.
+	 */
+	if (c->nr_cq > 10000) {
+		c->nr_cq = 10000;
 	}
+	if (c->nr_receive > 10000)
+		c->nr_receive = 10000;
 
 	if (ci->setup(c)) {
 		/* Channel setup ok */
