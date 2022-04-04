@@ -4875,32 +4875,31 @@ static int channel_stats(char *b, struct rdma_channel *c, const char *interface,
 	return n;
 }
 
-
-static void status_write(void *private)
+static unsigned show_interfaces(char *b)
 {
-	static char b[10000];
 	struct i2r_interface *i;
+	int n = 0;
+
+
+	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
+
+		if (i->multicast)
+			n += channel_stats(b + n, i->multicast, i->text, "Multicast");
+		if (i->ud)
+			n += channel_stats(b + n, i->ud, i->text, "UD");
+		if (i->raw)
+			n += channel_stats(b + n, i->raw, i->text, "Raw");
+
+	}
+	return n;
+}
+
+static unsigned show_multicast(char *b)
+{
 	int n = 0;
 	int free = 0;
 	struct buf *buf;
-	int fd = status_fd;
 	struct mc *m;
-
-	if (update_requested) {
-
-		char name[40];
-		time_t t = time(NULL);
-		struct tm *tm;
-
-		tm = localtime(&t);
-
-		snprintf(name, 40, "ib2roce-%d%02d%02dT%02d%02d%02d",
-				tm->tm_year + 1900, tm->tm_mon +1, tm->tm_mday,
-				tm->tm_hour, tm->tm_min, tm->tm_sec);
-		fd = open(name, O_CREAT | O_RDWR,  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-
-	} else
-		lseek(fd, SEEK_SET, 0);
 
 	for(buf = buffers; buf < buffers + nr_buffers; buf++)
 		if (buf->free)
@@ -4920,17 +4919,14 @@ static void status_write(void *private)
 			mc_text[m->interface[ROCE].status],
 			m->interface[ROCE].sendonly ? "Sendonly" : "",
 			m->interface[ROCE].pending);
+	return n;
+}
 
-	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
-
-		if (i->multicast)
-			n += channel_stats(b + n, i->multicast, i->text, "Multicast");
-		if (i->ud)
-			n += channel_stats(b + n, i->ud, i->text, "UD");
-		if (i->raw)
-			n += channel_stats(b + n, i->raw, i->text, "Raw");
-
-	}
+static unsigned show_endpoints(char *b)
+{
+	struct i2r_interface *i;
+	int n = 0;
+	struct buf *buf;
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++)
 		if (i->context && i->ep) {
@@ -4964,7 +4960,35 @@ static void status_write(void *private)
 			offset += 20;
 		}
 	}
+	return n;
+}
 
+static void status_write(void *private)
+{
+	static char b[10000];
+	int n = 0;
+	int fd = status_fd;
+
+	if (update_requested) {
+
+		char name[40];
+		time_t t = time(NULL);
+		struct tm *tm;
+
+		tm = localtime(&t);
+
+		snprintf(name, 40, "ib2roce-%d%02d%02dT%02d%02d%02d",
+				tm->tm_year + 1900, tm->tm_mon +1, tm->tm_mday,
+				tm->tm_hour, tm->tm_min, tm->tm_sec);
+		fd = open(name, O_CREAT | O_RDWR,  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+
+	} else
+		lseek(fd, SEEK_SET, 0);
+
+	n+= show_multicast(n + b);
+	n+= show_interfaces(n + b);
+	n+= show_endpoints(n+b);
+	
 	n += sprintf(n + b, "\n\n\n\n\n\n\n\n");
 	write(fd, b, n);
 
