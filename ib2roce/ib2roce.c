@@ -4867,7 +4867,7 @@ struct beacon_info {
 	bool infiniband;
 	uint16_t beacon_port;
 	struct in_addr beacon_mc;
-	struct timespec t;
+	uint64_t t;
 	unsigned gateway_qp;
 	struct in_addr bridge_addr;		/* Where is the local bridge */
 	struct in_addr to_addr;			/* To which address is it bridging */
@@ -4878,20 +4878,6 @@ struct beacon_info {
 
 struct mc *beacon_mc;		/* == NULL if unicast */
 struct sockaddr_in *beacon_sin;
-
-static void timespec_diff(struct timespec *start, struct timespec *stop,
-                   struct timespec *result)
-{
-    if ((stop->tv_nsec - start->tv_nsec) < 0) {
-        result->tv_sec = stop->tv_sec - start->tv_sec - 1;
-        result->tv_nsec = stop->tv_nsec - start->tv_nsec + 1000000000;
-    } else {
-        result->tv_sec = stop->tv_sec - start->tv_sec;
-        result->tv_nsec = stop->tv_nsec - start->tv_nsec;
-    }
-
-    return;
-}
 
 static void prep_beacon_struct(struct i2r_interface *i, struct beacon_info *b)
 {
@@ -4920,22 +4906,20 @@ static void beacon_received(struct buf *buf)
 {
 	struct beacon_info *b = (struct beacon_info *)buf->cur;
 	char bridge[40];
-	struct timespec diff;
-	struct timespec now;
+	uint64_t diff;
 
 	if (b->signature != BEACON_SIGNATURE) {
 		logg(LOG_ERR, "Received non beacon traffic on beacon MC group %s\n", beacon_mc->text);
 		return;
 	}
 
-	clock_gettime(CLOCK_REALTIME, &now);
+	now = timestamp();
 	strcpy(bridge, inet_ntoa(b->bridge_addr));
-	timespec_diff(&b->t, &now, &diff);
+	diff = b->t - now;
 
 	logg(LOG_NOTICE, "Received Beacon on %s Version %s Bridge=%s(%s), BridgeTo=%s MC groups=%u, TSIs=%d. Latency %ld ns GatewayQP=%u\n",
 		beacon_mc->text, b->version, bridge, b->infiniband ? "Infiniband" : "ROCE",
-		inet_ntoa(b->to_addr), b->nr_mc, b->nr_tsi,
-		diff.tv_sec * 1000000000 + diff.tv_nsec, b->gateway_qp);
+		inet_ntoa(b->to_addr), b->nr_mc, b->nr_tsi, diff, b->gateway_qp);
 }
 
 /* A mini router follows */
@@ -4998,7 +4982,7 @@ static void beacon_send(void *private)
 		for(in = 0; in < NR_INTERFACES; in++) {
 			struct i2r_interface *i = i2r + in;
 			prep_beacon_struct(i, &b);
-			clock_gettime(CLOCK_REALTIME, &b.t);
+			b.t = now = timestamp();
 
 
 			if (i->context && beacon_mc->status[in] == MC_JOINED) {
@@ -5020,6 +5004,7 @@ static void beacon_send(void *private)
 			return;
 		}
 		buf = alloc_buffer(i->multicast);
+		prep_beacon_struct(i, &b);
 		memcpy(buf->raw, &b, sizeof(b));
 
 		reset_flags(buf);
