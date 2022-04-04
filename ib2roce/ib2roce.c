@@ -5646,7 +5646,7 @@ static void enable(char *option, bool enable)
 
 			printf("%-14s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->description);
 		}
-		exit(1);
+		return;
 	}
 
 	r = index(option, '=');
@@ -5663,7 +5663,7 @@ static void enable(char *option, bool enable)
 			goto got_it;
 	}
 	fprintf(stderr, "Unknown option %s\n", name);
-	exit(1);
+	return;
 
 got_it:
 	eo = enable_table + i;
@@ -5686,7 +5686,7 @@ got_it:
 				*eo->bool_flag = false;
 		else {
 			fprintf(stderr, "Unknown bool value %s for option %s\n", value, name);
-			exit(1);
+			return;
 		}
 	} else
 	if (eo->int_flag)
