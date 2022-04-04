@@ -238,8 +238,8 @@ enum stats { packets_received, packets_sent, packets_bridged, packets_invalid,
 
 static const char *stats_text[nr_stats] = {
 	"PacketsReceived", "PacketsSent", "PacketsBridged", "PacketsInvalid",
-	"JoinRequests", "JoinFailures", "JoinSuccess",
-	"LeaveRequests"
+	"JoinRequests", "JoinFailures", "JoinSuccess", "LeaveRequests",
+	"pgmdup", "pgm_odata", "pgm_rdata", "pgm_spm", "pgm_nak"
 };
 
 enum channel_type { channel_rdmacm, channel_ud, channel_qp1,
