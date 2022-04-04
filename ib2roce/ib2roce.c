@@ -112,7 +112,10 @@ static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket inst
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
 static int rate = 0;			/* Limit sending rate */
-static int swrate = 0;			/* Software delay per message */
+static int rrate = 0;			/* Software delay per message for ROCE */
+static int irate = 0;			/* Software delay per message for Infiniband */
+static int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
+static int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 
 #define ONE_SECOND (1000000000UL)
 #define ONE_MILLISECOND (ONE_SECOND/1000UL)
@@ -366,6 +369,7 @@ static struct i2r_interface {
 	struct fifo resolve_queue;		/* List of send buffers with unresolved addresses */
 	struct hash *ep;			/* Hash of all endpoints reachable here */
 	struct hash *ip_to_ep;			/* Hash based on IP address */
+	unsigned mc_rate_limited;		/* Number of MC groups where rate limiting is ongoing */
 
 	/* PGM information:  Only updated from the multicast channel core */
 	unsigned nr_tsi;
@@ -612,6 +616,12 @@ struct mc_interface {
 	bool sendonly;
 	struct ah_info ai;
 	struct sockaddr *sa;
+	uint32_t packet_time;		/* How much time must elapse for a packet to be sent 0 = disabled */
+	uint32_t max_burst;		/* How long can a burst last */
+	uint64_t last_sent;		/* Last time a packet was sent */
+	uint64_t last_delayed;		/* Last a delayed packet was scheduled */
+	unsigned pending;		/* How many packets are waiting to be sent */
+	unsigned burst;			/* # of packets encountered with pacing below packet_time */
 };
 
 static struct mc {
@@ -900,6 +910,7 @@ struct buf {
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
 			struct endpoint *source_ep;
+			struct mc_interface *mi;	/* Destination MC interface / Group */
 
 			bool ip_valid;		/* IP header valid */
 			bool grh_valid;		/* Valid GRH header */
@@ -2371,6 +2382,17 @@ static void handle_rdma_event(void *private)
 					param->ah_attr.sl,
 					i->text);
 				st(i->multicast, join_success);
+	
+				if (irate) {
+					m->interface[INFINIBAND].packet_time = ONE_SECOND / irate;
+					m->interface[INFINIBAND].max_burst = max_iburst;
+				}
+
+				if (rrate) {
+					m->interface[ROCE].packet_time = ONE_SECOND / rrate;
+					m->interface[ROCE].max_burst = max_rburst;
+				}
+
 			}
 			break;
 
@@ -2671,7 +2693,6 @@ static int send_to(struct rdma_channel *c,
 	sge.lkey = c->mr->lkey;
 	sge.addr = (uint64_t)addr;
 
-	get_buf(buf);	/* Refcount to keep the buffer for the write queue */
 	c->active_send_buffers++;
 	ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
 	if (ret) {
@@ -3649,6 +3670,33 @@ static void learn_source_address(struct buf *buf)
 	buf->source_ep = buf_to_ep(buf, addr);
 }
 
+/* Delayed packet send due to traffic shaping */
+static void delayed_send(void *private)
+{
+	struct buf *buf = private;
+	struct rdma_channel *c = buf->c;
+	struct mc_interface *mi = buf->mi;
+	int ret;
+
+	mi->pending--;
+	if (!mi->pending) {
+		/*
+		 * The last pending packet so we are off rate limiting.
+		 * leaving mi->burst set so that we will immediately go back to
+		 * rate limiting should the next packet be paced below mininum again.
+		 */
+		c->i->mc_rate_limited--;
+		mi->burst = 0;
+		mi->last_sent = timestamp();
+		logg(LOG_NOTICE, "%s: End of enforcing sending rate\n", c->i->text);
+	}
+
+	ret = send_to(c, buf->cur, buf->end - buf->cur, &mi->ai, buf->imm_valid, buf->imm, buf);
+	if (!ret)
+		st(c, packets_bridged);
+	buf->mi = NULL;
+}
+
 /*
  * We have an GRH header so the packet has been processed by the RDMA
  * Subsystem and we can take care of it using the RDMA calls
@@ -3768,12 +3816,55 @@ static void receive_multicast(struct buf *buf)
 	if (drop_packets && (c->stats[packets_received] % drop_packets) == drop_packets - 1)
 		return;
 
-	if (!m->interface[in ^1].ai.ah)	/* Bad hack: After a join it may take awhile for the ah pointer to propagate so sleep 10usec*/
-		usleep(10);
+	struct mc_interface *mi = m->interface  + (in ^ 1);
+	struct rdma_channel *ch_out = i2r[in ^ 1].multicast;
 
-	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, &m->interface[in ^ 1].ai, buf->imm_valid, buf->imm, buf);
+	if (mi->packet_time) {
+		uint64_t t;
 
-	if (ret)
+		if (mi->pending) {
+			/* Packet must be sent after the last delayed one */
+			mi->last_delayed += mi->packet_time;
+delayed_packet:
+			mi->pending++;
+			get_buf(buf);	/* Dont free this buffer */
+			buf->c = ch_out;
+			buf->w = NULL;
+			buf->mi = mi;
+			add_event(mi->last_delayed, delayed_send, buf, "Delayed Send");
+			return;
+		}
+
+	       	/* No pending I/O */
+		t = timestamp();
+
+		if (t < mi->last_sent + mi->packet_time) {
+
+			/* Packet spacing too tight */
+			mi->burst++;
+			if (mi->burst > mi->max_burst) {
+				logg(LOG_NOTICE, "%s: Burst too long. Rate limiting on %s\n", c->i->text, m->text);
+
+				/* Burst going on too long. Packet must be delayed */
+				c->i->mc_rate_limited++;
+				mi->last_delayed = mi->last_sent + mi->packet_time;
+				goto delayed_packet;
+			}
+
+		} else
+			/* End of Burst */
+			mi->burst = 0;
+
+		/* Packet will be sent now. Record timestamp */
+		mi->last_sent = t;
+	}
+
+	if (!mi->ai.ah)		/* After a join it may take awhile for the ah pointer to propagate */
+ 		usleep(10);
+	get_buf(buf);	/* Packet will not be freed on return from this function */
+ 
+	ret = send_to(ch_out, buf->cur, buf->end - buf->cur, &mi->ai, buf->imm_valid, buf->imm, buf);
+ 	if (ret)
 		return;
 
 	st(c, packets_bridged);
@@ -4820,13 +4911,15 @@ static void status_write(void *private)
 
 	for(m = mcs; m < mcs + nr_mc; m++)
 
-		n += sprintf(n + b, "%s INFINIBAND: %s %s%s ROCE: %s %s\n",
+		n += sprintf(n + b, "%s INFINIBAND: %s %s%s P%d ROCE: %s %s P%d\n",
 			inet_ntoa(m->addr),
 			mc_text[m->interface[INFINIBAND].status],
 			m->interface[INFINIBAND].sendonly ? "Sendonly " : "",
 			m->mgid_mode->id,
+			m->interface[INFINIBAND].pending,
 			mc_text[m->interface[ROCE].status],
-			m->interface[ROCE].sendonly ? "Sendonly" : "");
+			m->interface[ROCE].sendonly ? "Sendonly" : "",
+			m->interface[ROCE].pending);
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
 
@@ -5212,6 +5305,9 @@ static void logging(void *private)
 			i->multicast->stats[packets_received],
 			i->multicast->stats[packets_sent]);
 
+		if (i->mc_rate_limited)
+			n+= sprintf(counts + n, " R%d", i->mc_rate_limited);
+
 		if (pgm_mode != pgm_none && (i->multicast->stats[pgm_spm] || i->multicast->stats[pgm_odata]))
 			n+= sprintf(counts + n, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
 				i->nr_tsi,
@@ -5490,7 +5586,10 @@ struct enable_option {
 { "packetsocket",	&packet_socket, NULL,	"on", "off",	"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
 { "pgm",		NULL,	(int *)&pgm_mode, "on", "off",	"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
 { "hwrate",		NULL,	&rate,		"2", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
-{ "swrate",		NULL, &swrate,		"1000", "0",	"Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "irate",		NULL, &irate,		"1000", "0",	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "rrate",		NULL, &rrate,		"1000", "0",	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "iburst",		NULL, &max_iburst,	"100", "0",	"Infiniband: Exempt the first N packets from swrate (0=off)" },
+{ "rburst",		NULL, &max_rburst,	"100", "0",	"ROCE: Exempt the first N packets from swrate (0=off)" },
 { "raw",		&raw,	NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
 { "unicast",		&unicast, NULL,		"on", "off",	"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
 { NULL, NULL, NULL, NULL, NULL, NULL }
