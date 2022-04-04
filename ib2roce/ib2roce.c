@@ -880,29 +880,24 @@ struct buf {
 			struct buf *next;	/* Next free buffer */
 			bool free;
 			unsigned refcount;	/* Refcount */
+			uint8_t *cur;		/* Current position in the buffer */
+			uint8_t *end;		/* Pointer to the last byte in the packet + 1 */
+
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
 			struct endpoint *source_ep;
 
-			bool ether_valid;	/* Ethernet header valid */
 			bool ip_valid;		/* IP header valid */
-			bool udp_valid;		/* Valid UDP header */
 			bool grh_valid;		/* Valid GRH header */
 			bool imm_valid;		/* unsigned imm is valid */
 			bool ip_csum_ok;	/* Hardware check if IP CSUM was ok */
 
-			uint8_t *cur;		/* Current position in the buffer */
-			uint8_t *end;		/* Pointer to the last byte in the packet + 1 */
 			unsigned imm;		/* Immediate data from the WC */
 
 			/* Structs pulled out of the frame */
-			struct immdt immdt;	/* BTH subheader */
 			struct ibv_grh grh;
 			struct ether_header e;
 			struct iphdr ip;
-			struct udphdr udp;
-			struct pgm_header pgm;	/* RFC3208 header */
-			struct umad_hdr umad;
 		};
 		uint8_t meta[META_SIZE];
 	};
@@ -3567,17 +3562,18 @@ static struct endpoint *buf_to_ep(struct buf *buf, struct in_addr addr)
 			return NULL;
 		}
 		if (buf->grh_valid) {
+			struct pgm_header pgm;
 			void *position = buf->cur;
 
 			memcpy(&at.grh.dgid, buf->grh.sgid.raw, sizeof(union ibv_gid));
 
 			if (!addr.s_addr && !hash_find(i->ep, &at.dlid)) {
 
-				PULL(buf, buf->pgm);
+				PULL(buf, pgm);
 
 				if (w->src_qp != 1) {
 					/* Direct PGM packet inspection without verification if this is really PGM */
-					memcpy(&addr, buf->pgm.pgm_gsi, sizeof(struct in_addr));
+					memcpy(&addr, pgm.pgm_gsi, sizeof(struct in_addr));
 					logg(LOG_NOTICE, "Extracted IP address from PGM header: %s %s\n",
 						c->text, inet_ntoa(addr));
 				}
@@ -4105,7 +4101,7 @@ err:
  * the EP will be properly forwarded and also the other
  * way around.
  */
-static const char * sidr_rep(struct buf *buf, void *mad_pos)
+static const char * sidr_rep(struct buf *buf, void *mad_pos, struct umad_hdr *umad)
 {
 	struct sidr_rep *sr = (void *)buf->cur;
 	struct sidr_state *ss;
@@ -4115,9 +4111,9 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos)
 
 	
 	logg(LOG_NOTICE, "SIDR_REP: %s method=%s status=%s attr_id=%s attr_mod=%x ServiceId=%lx ReqId=%x Q_KEY=%x QPN=%d Status=%x\n",
-		buf->c->text, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-		umad_common_mad_status_str(buf->umad.status),
-		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id), ntohl(buf->umad.attr_mod),
+		buf->c->text, umad_method_str(umad->mgmt_class, umad->method),
+		umad_common_mad_status_str(umad->status),
+		umad_attribute_str(umad->mgmt_class, umad->attr_id), ntohl(umad->attr_mod),
 		be64toh(sr->service_id), ntohl(sr->request_id), sr_qkey, sr_qpn, sr->status);
 
 	if (sr->status)
@@ -4179,6 +4175,8 @@ static void receive_raw(struct buf *buf)
 	struct bth bth = { };
 	struct deth deth;	/* BTH subheader */
 	char header[200] = "";
+	struct udphdr udp;
+	struct umad_hdr umad;
 
 	if (i == i2r + INFINIBAND) {
 		__be16 lrh[4];
@@ -4251,8 +4249,6 @@ static void receive_raw(struct buf *buf)
 			ethertype = ETHERTYPE_IP;
 		}
 
-		buf->ether_valid = true;
-
 		if (memcmp(i->if_mac, buf->e.ether_shost, ETH_ALEN) == 0) {
 
 			reason = "-Loopback";
@@ -4313,10 +4309,9 @@ static void receive_raw(struct buf *buf)
 			if (!buf->ip_csum_ok)
 				logg(LOG_NOTICE, "TCP/UDP CSUM not valid on raw RDMA channel %s\n", c->text);
 
-			PULL(buf, buf->udp);
-			buf->udp_valid = true;
+			PULL(buf, udp);
 
-			if (ntohs(buf->udp.dest) != ROCE_PORT) {
+			if (ntohs(udp.dest) != ROCE_PORT) {
 
 				reason = "Not the ROCE UDP port";
 				goto discard;
@@ -4347,9 +4342,11 @@ static void receive_raw(struct buf *buf)
 	w->src_qp = __deth_sqp(&deth);
 
 	if (__bth_opcode(&bth) == IB_OPCODE_UD_SEND_ONLY_WITH_IMMEDIATE) {
-		PULL(buf, buf->immdt);
+		struct immdt immdt;	/* BTH subheader */
+
+		PULL(buf, immdt);
 		buf->imm_valid = true;
-		buf->imm = buf->immdt.imm;
+		buf->imm = immdt.imm;
 	}
 
 	buf->cur += __bth_pad(&bth);
@@ -4376,29 +4373,29 @@ static void receive_raw(struct buf *buf)
 	mad_pos = buf->cur;
 
 	/* Start MAD payload */
-	PULL(buf, buf->umad);
+	PULL(buf, umad);
 
 	logg(LOG_NOTICE, "RAW: QP1 packet %s from %s LID %x LRH_LEN=%u WC_LEN=%u SQP=%x DQP=%x method=%s status=%s attr_id=%s\n", i->text,
 		inet_ntoa(buf->source_ep->addr), buf->source_ep->lid, len, w->byte_len,
 		 w->src_qp, __bth_qpn(&bth),
- 		umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-		umad_common_mad_status_str(buf->umad.status),
-		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id));
+ 		umad_method_str(umad.mgmt_class, umad.method),
+		umad_common_mad_status_str(umad.status),
+		umad_attribute_str(umad.mgmt_class, umad.attr_id));
 
-	if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
+	if (umad.mgmt_class != UMAD_CLASS_CM) {
 		reason = "-Only CM Class MADs are supported";
 		goto discard;
 	}
 
-	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
+	if (ntohs(umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
 		reason = sidr_req(buf, mad_pos);
 		if (reason)
 			goto discard;
 		return;
 	}
 
-	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REP) {
-		reason = sidr_rep(buf, mad_pos);
+	if (ntohs(umad.attr_id) == UMAD_CM_ATTR_SIDR_REP) {
+		reason = sidr_rep(buf, mad_pos, &umad);
 		if (reason)
 			goto discard;
 		return;
@@ -4496,6 +4493,7 @@ static void receive_qp1(struct buf *buf)
 	const char *reason;
 	struct ibv_wc *w = buf->w;
 	void *mad_pos;
+	struct umad_hdr umad;
 
 	learn_source_address(buf);
 
@@ -4505,28 +4503,28 @@ static void receive_qp1(struct buf *buf)
 
 	mad_pos = buf->cur;
 
-	PULL(buf, buf->umad);
+	PULL(buf, umad);
 
 	logg(LOG_NOTICE, "QP1 packet %s from %s LID %x WC_LEN=%u SQP=%x method=%s status=%s attr_id=%s\n", buf->c->text,
 		inet_ntoa(buf->source_ep->addr), buf->source_ep->lid, w->byte_len,
-		w->src_qp, umad_method_str(buf->umad.mgmt_class, buf->umad.method),
-		umad_common_mad_status_str(buf->umad.status),
-		umad_attribute_str(buf->umad.mgmt_class, buf->umad.attr_id));
+		w->src_qp, umad_method_str(umad.mgmt_class, umad.method),
+		umad_common_mad_status_str(umad.status),
+		umad_attribute_str(umad.mgmt_class, umad.attr_id));
 
-	if (buf->umad.mgmt_class != UMAD_CLASS_CM) {
+	if (umad.mgmt_class != UMAD_CLASS_CM) {
 		reason = "-Only CM Class MADs are supported";
 		goto discard;
 	}
 
-	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
+	if (ntohs(umad.attr_id) == UMAD_CM_ATTR_SIDR_REQ) {
 		reason = sidr_req(buf, mad_pos);
 		if (reason)
 			goto discard;
 		return;
 	}
 
-	if (ntohs(buf->umad.attr_id) == UMAD_CM_ATTR_SIDR_REP) {
-		reason = sidr_rep(buf, mad_pos);
+	if (ntohs(umad.attr_id) == UMAD_CM_ATTR_SIDR_REP) {
+		reason = sidr_rep(buf, mad_pos, &umad);
 		if (reason)
 			goto discard;
 		return;
@@ -4544,7 +4542,7 @@ discard:
 
 static void reset_flags(struct buf *buf)
 {
-	memset(&buf->ether_valid, 0, (void *)&buf->ip_csum_ok - (void *)&buf->ether_valid);
+	memset(&buf->ip_valid, 0, (void *)&buf->ip_csum_ok - (void *)&buf->ip_valid);
 }
 
 static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs)
