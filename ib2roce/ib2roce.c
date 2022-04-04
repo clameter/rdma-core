@@ -5295,14 +5295,13 @@ static void check_joins(void *private)
 	}
 }
 
-static void logging(void *private)
+static void brief_status(void)
 {
 	char buf[100];
 	char buf2[150];
 	char counts[200];
 
 	unsigned n = 0;
-	uint64_t interval = seconds(5);
 	const char *events;
 
 	for(struct timed_event *z = next_event; z; z = z->next)
@@ -5315,7 +5314,6 @@ static void logging(void *private)
 
 	if (n == 0) {
 		events = "No upcoming events";
-		interval = seconds(10);
 	} else {
 		snprintf(buf2, sizeof(buf2), "Events in %s", buf);
 		events = buf2;
@@ -5351,11 +5349,16 @@ static void logging(void *private)
 	}
 
 	logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
-	add_event(timestamp() + interval, logging, NULL, "Brief Status");
 
 	list_endpoints(i2r + INFINIBAND);
 	list_endpoints(i2r + ROCE);
 
+}
+
+static void logging(void *private)
+{
+	brief_status();
+	add_event(timestamp() + seconds(10), logging, NULL, "Brief Status");
 }
 
 /*
@@ -5388,10 +5391,11 @@ static void setup_timed_events(void)
 
 	t = timestamp();
 
-	if (background)
+	if (background) {
 		add_event(t + seconds(30), status_write, NULL, "Write Status File");
+		logging(NULL);
+	}
 
-	add_event(t + ONE_SECOND, logging, NULL, "Brief Status Display");
 	add_event(t + milliseconds(100), check_joins, NULL, "Check Multicast Joins");
 }
 
@@ -5877,10 +5881,386 @@ static void exec_opt(int op, char *optarg)
 			printf("-p|--port <number>			Set default port number to use if none is specified\n");
 			printf("-r|--roce <if[:portnumber]>		ROCE device. Uses the first available if not specified.\n");
 			printf("-v|--log-packets			Show more detailed logs. Can be specified multiple times\n");
-			printf("-x|--debug				Do not daemonize, enter debug mode\n");
+			printf("-x|--debug				Do not daemonize, enter command line mode\n");
 			printf("-y|--disable <option>			Disable feature\n");
 			exit(1);
 	}
+}
+
+static void help(char *parameters);
+
+static void exitcmd(char *parameters)
+{
+	terminate(0);
+}
+
+static const char *inet6_ntoa(void *x)
+{
+	char buf[INET6_ADDRSTRLEN];
+
+	return inet_ntop(AF_INET6, x, buf, INET6_ADDRSTRLEN);
+}
+
+static const char * gid_text[] = { "GID_TYPE_IB", "GID_TYPE_ROCE_V1", "GID_TYPE_ROCE_V2" };
+static const char *port_state_text[] = { "PORT_NOP","PORT_DOWN","PORT_INIT","PORT_ARMED","PORT_ACTIVE","PORT_ACTIVE_DEFER" };
+static const char *mtu_text[] = { "NONE", "256", "512", "1024", "2048", "4096" };
+static const char *link_layer_text[] = { "UNSPECIFIED", "INFINIBAND", "ETHERNET" };
+
+static void interfaces_cmd(char *parameters)
+{
+	int n;
+	char b[5000];
+
+	if (parameters) {
+		for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
+			if (i->context && strncasecmp(i->text, parameters, strlen(parameters)) == 0) {
+				printf("Interface %s\n", i->text);
+				printf("-------------------------------------\n");
+				printf("RDMA device=%s Port=%d MTU=%d\n", i->rdma_name, i->port, i->mtu);
+				printf("NET device=%s IFindex=%d IP=%s ", i->if_name, i->ifindex, inet_ntoa(i->if_addr.sin_addr));
+				printf("Netmask=%s MacLen=%d MAC=%s\n", inet_ntoa(i->if_netmask.sin_addr), i->maclen, hexbytes(i->if_mac, i->maclen, '-'));
+				printf("GID %s GIDIndex=%d GIDtablesize=%d\n", inet6_ntoa(&i->gid), i->gid_index, i->iges);
+				for(struct ibv_gid_entry *g = i->ige; g < i->ige + i->iges; g++) {
+					printf(" gid=%s gid_index=%d port_num=%d gid_type=%s ndev_ifindex=%d\n",
+							inet6_ntoa(&g->gid), g->gid_index, g->port_num, gid_text[g->gid_type], g->ndev_ifindex);
+
+				}
+
+				printf("Device Attributes\n");
+				printf(" Firmware=%s, NodeGUID=%lx Sys_Image_GUID=%lx\n",
+					       i->device_attr.fw_ver,
+					       be64toh(i->device_attr.node_guid),
+					       be64toh(i->device_attr.sys_image_guid));
+				printf(" max_mr_size=%ld page_size_cap=%lx vendor_id=%x vendor_part_id=%x hw_ver=%x",
+					       i->device_attr.max_mr_size,
+					       i->device_attr.page_size_cap,
+					       i->device_attr.vendor_id,
+					       i->device_attr.vendor_part_id,
+					       i->device_attr.hw_ver);
+				printf(" max_qp=%d max_qp_wr=%d device_cap_flags=%x\n",
+					       i->device_attr.max_qp,
+					       i->device_attr.max_qp_wr,
+					       i->device_attr.device_cap_flags);
+				printf(" max_sge=%d max_sge_rd=%d max_cq=%d max_cqe=%d max_mr=%d max_pd=%d max_qp_rd_atom=%d max_ee_rd_atom=%d\n",
+					       i->device_attr.max_sge,
+					       i->device_attr.max_sge_rd,
+					       i->device_attr.max_cq,
+					       i->device_attr.max_cqe,
+					       i->device_attr.max_mr,
+					       i->device_attr.max_pd,
+					       i->device_attr.max_qp_rd_atom,
+					       i->device_attr.max_ee_rd_atom);
+				printf(" max_res_rd_atom=%d atomic_cap=%x max_ee=%d max_rdd=%d max_mw=%d\n",
+					       i->device_attr.max_res_rd_atom,
+					       i->device_attr.atomic_cap,
+					       i->device_attr.max_ee,
+					       i->device_attr.max_rdd,
+					       i->device_attr.max_mw);
+				printf(" max_raw_ipv6_qp=%d max_raw_ethy_qp=%d\n",
+					       i->device_attr.max_raw_ipv6_qp,
+					       i->device_attr.max_raw_ethy_qp);
+				printf(" max_mcast_grp=%d max_mcast_qp_attach=%d max_total_mcast_qp_attach=%d\n",
+					       i->device_attr.max_mcast_grp,
+					       i->device_attr.max_mcast_qp_attach,
+					       i->device_attr.max_total_mcast_qp_attach);
+				printf(" max_ah=%d max_fmr=%d max_map_per_fmr=%d max_srq=%d max_srq_wr=%d max_srq_sge=%d\n",
+						i->device_attr.max_ah,
+						i->device_attr.max_fmr,
+					       i->device_attr.max_map_per_fmr,
+					       i->device_attr.max_srq,
+					       i->device_attr.max_srq_wr,
+					       i->device_attr.max_srq_sge);
+				printf(" max_pkeys=%d local_ca_ack_delay=%d phys_port_cnt=%d\n",
+					       i->device_attr.max_pkeys,
+					       i->device_attr.local_ca_ack_delay,
+					       i->device_attr.phys_port_cnt);
+
+				printf("Port Attributes\n");
+				printf(" state=%s MTU=%s Active MTU=%s git_dbl_len=%d port_cap_flags=%x max_msg_sz=%d\n",
+					port_state_text[i->port_attr.state],
+					mtu_text[i->port_attr.max_mtu],
+					mtu_text[i->port_attr.active_mtu],
+					i->port_attr.gid_tbl_len,
+					i->port_attr.port_cap_flags,
+					i->port_attr.max_msg_sz);
+				printf(" bad_pkey_cntr=%d qkey_viol_cntr=%d pkey_tbl_len=%d\n",
+					i->port_attr.bad_pkey_cntr,
+					i->port_attr.qkey_viol_cntr,
+					i->port_attr.pkey_tbl_len);
+				printf(" lid=%d sm_lid=%d lmc=%d max_vl_num=%d sm_sl=%d\n",
+					i->port_attr.lid,
+					i->port_attr.sm_lid,
+					i->port_attr.lmc,
+					i->port_attr.max_vl_num,
+					i->port_attr.sm_sl);
+				printf(" subnet_timeout=%d init_type_reply=%d active_width=%d active_speed=%d\n",
+					i->port_attr.subnet_timeout,
+					i->port_attr.init_type_reply,
+					i->port_attr.active_width,
+					i->port_attr.active_speed);
+				printf(" phys_state=%d link_layer=%s flags=%x port_cap_flags2=%x\n",
+					i->port_attr.phys_state,
+					link_layer_text[i->port_attr.link_layer],
+					i->port_attr.flags,
+					i->port_attr.port_cap_flags2);
+				return;
+			}
+
+		printf("Unknown interface \"%s\".\n", parameters);
+		return;
+	}
+
+	n = show_interfaces(b);
+	b[n] = 0;
+	puts(b);
+}
+
+static void endpoints_cmd(char *parameters)
+{
+	int n;
+	char b[5000];
+
+	n = show_endpoints(b);
+	b[n] = 0;
+	puts(b);
+}
+
+static void buffers_cmd(char *parameters)
+{
+	struct buf *buf;
+	int free = 0;
+
+	for(buf = buffers; buf < buffers + nr_buffers; buf++)
+		if (buf->free)
+		       free++;
+
+	printf("Buffers: Active=%u Total=%u\n", nr_buffers-free , nr_buffers);
+	/* Sometime show more details */
+}
+
+
+static void multicast_cmd(char *parameters)
+{
+	struct mc *m;
+
+	printf("Multicast: Active=%u NR=%u Max=%u\n", active_mc, nr_mc, MAX_MC);
+
+	for(m = mcs; m < mcs + nr_mc; m++) {
+
+		for(enum interfaces in = INFINIBAND; in <= ROCE; in++) {
+			printf("%s %s %s %s %s packet_time=%d max_burst=%d last_sent=%lu last_delayed=%lu pending=%u burst=%d\n",
+				interfaces_text[in], inet_ntoa(m->addr),
+			mc_text[m->interface[in].status],
+			m->interface[in].sendonly ? "Sendonly " : "",
+			in == INFINIBAND ? m->mgid_mode->id : "",
+			m->interface[in].packet_time,
+			m->interface[in].max_burst,
+			m->interface[in].last_sent,
+			m->interface[in].last_delayed,
+			m->interface[INFINIBAND].pending,
+			m->interface[in].burst);
+		}
+	}
+}
+
+static void statuscmd(char *parameters) {
+	brief_status();
+}
+
+static void enablecmd(char *parameters) {
+	enable(parameters, true);
+}
+
+static void disablecmd(char *parameters) {
+	enable(parameters, false);
+}
+
+static void core_cmd(char *parameters) {
+	if (!parameters) {
+		if (cores) {
+			unsigned i;
+
+			for(i = 0; i < cores; i++) {
+				unsigned j;
+				struct core_info *ci = core_infos + i;
+
+				printf("Core %d: NUMA=%d", i, ci->numa_node);
+				printf(" Loops=%u Average=%luns, Max=%uns, Min=%uns\n", ci->samples, ((ci->sum_latency / ci->samples) << 8), ci->max_latency, ci->min_latency);
+
+				for (j = 0; j < ci->nr_channels; j++) {
+					struct rdma_channel *c = ci->channel +j;
+
+					printf(" Channel %s(%s) ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%d\n", c->text, channel_infos[c->type].suffix,
+						c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_cq, c->cq_high);
+
+					for(int k = 0; k < nr_stats; k++)
+						if (c->stats[k])
+							printf(" %s=%u", stats_text[k], c->stats[k]);
+
+					printf("\n");
+				}
+			}
+		} else
+			printf("No cores active. ib2roce operates in single threaded mode.\n");
+	} else
+		printf("Dynamic reseetting of the core config not supported.\n");
+}
+
+static void tsi_cmd(char *parameters)
+{
+	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++) {
+		printf("%s: TSIs=%d\n", i->text, i->nr_tsi);
+		/* Retrieve TSI streams */
+		struct pgm_stream *t[10];
+		unsigned nr;
+		unsigned offset = 0;
+
+		while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, 10, (void **)t))) {
+			for(int j = 0; j < nr; j++) {
+				struct pgm_stream *ps = t[j];
+				char buf[60];
+
+				format_tsi(buf, &ps->tsi);
+
+				printf("%s: lead=%d trail=%d last=%d lastRepairData=%d oldest=%d\n",
+					buf, ps->lead, ps->trail, ps->last, ps->rlast, ps->oldest);
+
+			}
+			offset += nr;
+		}
+	}
+}
+
+
+static int log_interval;
+
+static void continous(void *private)
+{
+	printf("\n");
+	brief_status();
+
+	if (log_interval)
+		add_event(timestamp() + log_interval * ONE_SECOND,
+				continous, NULL, "Continous Logging");
+}
+
+static void continous_cmd(char *parameters)
+{
+	int old_interval = log_interval;
+
+	if (!parameters) {
+		printf("Continuous logging interval is %d seconds.\n", log_interval);
+		return;
+	}
+
+	log_interval = atoi(parameters);
+
+	if (!old_interval && log_interval)
+		continous(NULL);
+}
+
+static struct concom {
+	const char *name;
+	bool prompt;
+	int parameters;
+	const char *description;
+	void (*callback)(char *parameters);
+} concoms[] = {
+{ "buffers",	true,	0,	"Print Information about buffer use",		buffers_cmd },
+{ "continuous",	false,	1,	"Print continous status in specified interval",	continous_cmd },
+{ "cores",	true,	1,	"Setup and list core configuration",		core_cmd },
+{ "disable",	true,	1,	"Disable optional features",			disablecmd },
+{ "enable",	true,	1,	"Setup optional features and list them",	enablecmd },
+{ "help",	true,	0,	"Print a list of commands",			help },
+{ "interfaces",	true,	1,	"List statisitcs about Interfaces",		interfaces_cmd },
+{ "endpoints",	true,	0,	"List Endpoints",				endpoints_cmd },
+{ "multicast",	true,	0,	"List Multicast groups and their status",	multicast_cmd },
+{ "quit",	false,	0,	"Terminate ib2roce",				exitcmd },
+{ "status",	true,	0,	"Print a brief status",				statuscmd },
+{ "tsi",	true,	0,	"Show PGM info",				tsi_cmd },
+{ NULL,		false,	0,	NULL,						NULL }
+};
+
+
+static void help(char *parameters)
+{
+	struct concom * cc;
+
+	printf("List of ib2roce console commands:\n");
+	printf("Command		Description\n");
+	printf("----------------------------------------\n");
+
+	for(cc = concoms; cc->name; cc++) {
+		printf("%-16s%s\n", cc->name, cc->description);
+	}
+}
+
+static void prompt(void *private)
+{
+	printf("ib2roce-$ ");
+	fflush(stdout);
+}
+
+static void console_input(void *private)
+{
+	struct concom * cc;
+	char in[80];
+	int ret;
+	char *p;
+	unsigned len;
+
+	ret = read(STDIN_FILENO, in, sizeof(in));
+
+	if (ret == 0) {
+		printf("\n");
+		terminated = true;
+		return;
+	}
+
+	if (ret < 0) {
+		printf("Console Input Error: %s\n", errname());
+		goto out;
+	}
+
+	if (ret < 1 || in[0] == '#' || in[0] == '\n' || in[0] <= ' ')
+		goto out;
+
+	if (in[ret - 1] == '\n')
+		in[ret - 1] = 0;
+
+	for (p = in; *p; p++)
+	{
+		if (*p < ' ') {
+			printf("\nControl Character %d at position %ld\n", *p, p - in);
+			goto out;
+		}
+	}
+
+	p = index(in, ' ');
+	if (p)
+		*p++ = 0;
+
+	len = strlen(in);
+
+	for(cc = concoms; cc->name; cc++) {
+		if (strncasecmp(in, cc->name, len) == 0) {
+
+			if (p && !cc->parameters) {
+				printf("Command does not allow parameters\n");
+				goto out;
+			}
+	
+			cc->callback(p);
+
+			if (!cc->prompt)
+				return;
+
+			goto out;
+		}
+	};
+	printf("Command \"%s\" not found. Try \"help\".\n", in);
+out:
+	prompt(NULL);
 }
 
 
@@ -5937,6 +6317,10 @@ int main(int argc, char **argv)
 
 	if (background)
 		status_fd = open("ib2roce-status", O_CREAT | O_RDWR | O_TRUNC,  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+	else {
+		register_callback(console_input, STDIN_FILENO, NULL);
+		add_event(timestamp() + seconds(2), prompt, NULL, "Console Prompt");
+	}
 
 	if (beacon)
 		beacon_setup(beacon_arg);
