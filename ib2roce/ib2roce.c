@@ -49,6 +49,7 @@
 #include <fcntl.h>
 #include <ctype.h>
 #include <pthread.h>
+#include <threads.h>
 #include <numa.h>
 #include <stdatomic.h>
 #include <arpa/inet.h>
@@ -80,7 +81,7 @@
 #include "ibraw.h"
 #include "cma-hdr.h"
 
-#define VERSION "2022.0323"
+#define VERSION "2022.0331"
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
@@ -113,17 +114,26 @@ static int drop_packets = 0;		/* Packet dropper */
 static int rate = 0;			/* Limit sending rate */
 static int swrate = 0;			/* Software delay per message */
 
+#define ONE_SECOND (1000000000UL)
+#define ONE_MILLISECOND (ONE_SECOND/1000UL)
+#define ONE_MICROSECOND (1000UL)
 
-/* Timestamp in milliseconds */
-static unsigned long timestamp(void)
+/* Timestamp in nanoseconds */
+static uint64_t timestamp(void)
 {
 	struct timespec t;
 
 	clock_gettime(CLOCK_REALTIME, &t);
-	return t.tv_sec * 1000 + (t.tv_nsec + 500000) / 1000000;
+	return t.tv_sec * ONE_SECOND + t.tv_nsec;
 }
 
+/* Conversion of constants to microseconds */
+#define seconds(x) ((x)*ONE_SECOND)
+#define milliseconds(x) ((x)*ONE_MILLISECOND)
+
 #define cpu_relax()	asm volatile("rep; nop")
+
+thread_local uint64_t now;		/* We do not want contention on this one */
 
 __attribute__ ((format (printf, 2, 3)))
 static void logg(int prio, const char *fmt, ...)
@@ -250,7 +260,7 @@ enum channel_type { channel_rdmacm, channel_ud, channel_qp1,
 struct buf;
 
 typedef void receive_callback(struct buf *);
-
+typedef void event_callback(void *);
 
 /*
  * Channel data stucture,
@@ -396,7 +406,8 @@ static inline void st(struct rdma_channel *c, enum stats s)
 }
 
 /* Forwards */
-static void add_event(unsigned long time_in_ms, void (*callback));
+static void add_event(uint64_t  when, event_callback *callback, void *private, const char *text);
+static uint64_t run_events(void);
 static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 static void register_callback(void (*callback)(void *), int fd, void *private);
 static void handle_receive_packet(void *private);
@@ -4743,7 +4754,7 @@ static int channel_stats(char *b, struct rdma_channel *c, const char *interface,
 }
 
 
-static void status_write(void)
+static void status_write(void *private)
 {
 	static char b[10000];
 	struct i2r_interface *i;
@@ -4837,7 +4848,7 @@ static void status_write(void)
 		close(fd);
 		update_requested = false;
 	}
-	add_event(timestamp() + 60000, status_write);
+	add_event(timestamp() + seconds(60), status_write, NULL,  "Status File Write");
 }
 
 #define BEACON_MCS 500
@@ -4976,7 +4987,7 @@ static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockadd
 	}
 }
 
-static void beacon_send(void)
+static void beacon_send(void *private)
 {
 	struct beacon_info b;
 	struct buf *buf;
@@ -5018,7 +5029,7 @@ static void beacon_send(void)
 		send_buf_to(i, buf, beacon_sin);
 
 	}
-	add_event(timestamp() + 10000, beacon_send);
+	add_event(timestamp() + seconds(10), beacon_send, NULL, "Send Beacon");
 }
 
 static void beacon_setup(const char *opt_arg)
@@ -5051,19 +5062,22 @@ static void beacon_setup(const char *opt_arg)
 		} else
 			beacon_mc = m;
 	}
-	add_event(timestamp() + 1000, beacon_send);
+	add_event(timestamp() + ONE_SECOND, beacon_send, NULL, "Send Beacon");
 }
 
-/* Events are timed according to milliseconds in the current epoch */
+/* Events are timed according to nanoseconds in the current epoch */
 struct timed_event {
-	unsigned long time;		/* When should it occur */
-	void (*callback)(void);		/* function to run */
+	uint64_t time;		/* When should it occur */
+	event_callback *callback;	/* function to run */
+	void *private;
 	struct timed_event *next;	/* The following event */
+	const char *text;
 };
 
-static struct timed_event *next_event;
+/* Event queues for each of the threads */
+thread_local static struct timed_event *next_event;
 
-static void add_event(unsigned long time, void (*callback))
+static void add_event(uint64_t time, event_callback *callback, void *private, const char *text)
 {
 	struct timed_event *t;
 	struct timed_event *prior = NULL;
@@ -5072,6 +5086,8 @@ static void add_event(unsigned long time, void (*callback))
 	new_event = calloc(1, sizeof(struct timed_event));
 	new_event->time = time;
 	new_event->callback = callback;
+	new_event->private = private;
+	new_event->text = text;
 
 	for(t = next_event; t && time > t->time; t = t->next)
 		prior = t;
@@ -5084,14 +5100,51 @@ static void add_event(unsigned long time, void (*callback))
 		next_event = new_event;
 }
 
-static void check_joins(void)
+static int64_t time_to_next_event(void)
+{
+	if (next_event)
+		return (long)next_event->time - (long)timestamp();
+	else
+		return 0;
+}
+
+/*
+ * Run the next event if availabe and return the time till the next event
+ * or 0 if there is none
+ */
+static uint64_t run_events(void)
+{
+	now = timestamp();
+	while (next_event) {
+		struct timed_event *te = next_event;
+		uint64_t old_now;
+
+		if (te->time > now + ONE_MICROSECOND)
+			return te->time - now;
+	
+		/* Time is up for an event */
+		next_event = te->next;
+		te->callback(te->private);
+		old_now = now;
+		now = timestamp();
+		if (now - old_now > ONE_MILLISECOND)
+			logg(LOG_ERR, "Callback %s took %ld nanoseconds which is longer than a millisecond\n",
+				te->text, now-old_now);
+
+		free(te);
+	}
+	return 0;
+}
+
+
+static void check_joins(void *private)
 {
 	struct i2r_interface *i;
 
 	/* Maintenance tasks */
 	if (nr_mc > active_mc) {
 		join_processing();
-		add_event(timestamp() + 1000, check_joins);
+		add_event(timestamp() + ONE_SECOND, check_joins, NULL, "Check Multicast Joins");
 	} else {
 		/*
 		 * All active so start listening. This means we no longer
@@ -5109,18 +5162,18 @@ static void check_joins(void)
 	}
 }
 
-static void logging(void)
+static void logging(void *private)
 {
 	char buf[100];
 	char buf2[150];
 	char counts[200];
 
 	unsigned n = 0;
-	unsigned interval = 5000;
+	uint64_t interval = seconds(5);
 	const char *events;
 
 	for(struct timed_event *z = next_event; z; z = z->next)
-		n += sprintf(buf + n, "%ldms,", z->time - timestamp());
+		n += sprintf(buf + n, "%ldms,", (z->time - timestamp()) / ONE_MILLISECOND);
 
 	if (n > 0)
 		buf[n -1] = 0;
@@ -5129,7 +5182,7 @@ static void logging(void)
 
 	if (n == 0) {
 		events = "No upcoming events";
-		interval = 10000;
+		interval = seconds(10);
 	} else {
 		snprintf(buf2, sizeof(buf2), "Events in %s", buf);
 		events = buf2;
@@ -5162,7 +5215,7 @@ static void logging(void)
 	}
 
 	logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
-	add_event(timestamp() + interval, logging);
+	add_event(timestamp() + interval, logging, NULL, "Brief Status");
 
 	list_endpoints(i2r + INFINIBAND);
 	list_endpoints(i2r + ROCE);
@@ -5195,15 +5248,15 @@ static void register_callback(void (*callback)(void *), int fd, void *private)
 
 static void setup_timed_events(void)
 {
-	unsigned long t;
+	uint64_t t;
 
 	t = timestamp();
 
 	if (background)
-		add_event(t + 30000, status_write);
+		add_event(t + seconds(30), status_write, NULL, "Write Status File");
 
-	add_event(t + 1000, logging);
-	add_event(t + 100, check_joins);
+	add_event(t + ONE_SECOND, logging, NULL, "Brief Status Display");
+	add_event(t + milliseconds(100), check_joins, NULL, "Check Multicast Joins");
 }
 
 static void arm_channels(struct core_info *core)
@@ -5242,48 +5295,34 @@ static void arm_channels(struct core_info *core)
 
 static int event_loop(void)
 {
-	unsigned timeout;
+	int64_t timeout;
 	int events = 0;
-	int waitms;
 	unsigned long t;
-
+ 
 	arm_channels(NULL);
 	setup_timed_events();
+
 loop:
-	timeout = 10000;
+	if (terminated)
+		goto out;
 
-	if (next_event) {
-		/* Time till next event */
-		waitms = next_event->time - timestamp();
-
+	timeout = time_to_next_event();
+	if (timeout) {
 		/*
 		 * If we come from processing poll events then
 		 * give priority to more poll event processing
 		 */
-		if ((waitms <= 0 && events == 0) || waitms < -10) {
-			/* Time is up for an event */
-			struct timed_event *te;
+		if ((timeout <= 0 && events == 0) ||
+			       timeout < -(long)milliseconds(10))
 
-			te = next_event;
-			next_event = next_event->next;
-			te->callback();
-			free(te);
-			goto loop;
-		}
-		if (waitms < 1)
-			/* There is a pending event but we are processing
-			 * poll events.
-			 * Make sure we check for more and come back soon
-			 * after processing additional poll actions
-			*/
-			timeout = 3;
-		else
-			/* Maximum timeout is 10 seconds */
-			if (waitms < 10000)
-				timeout = waitms;
+			timeout = run_events();
+
 	}
-
-	events = poll(pfd, poll_items, timeout);
+	
+	if (timeout <= 0 || timeout > (long)seconds(10))
+		timeout = seconds(10);
+ 
+ 	events = poll(pfd, poll_items, (timeout + ONE_MILLISECOND/2) / ONE_MILLISECOND);
 
 	if (terminated)
 		goto out;
@@ -5775,7 +5814,6 @@ int main(int argc, char **argv)
 	if (background)
 		close(status_fd);
 
-	logging();
 	shutdown_roce();
 	shutdown_ib();
 
