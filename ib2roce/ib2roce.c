@@ -3727,6 +3727,9 @@ static void receive_multicast(struct buf *buf)
 	if (drop_packets && (c->stats[packets_received] % drop_packets) == drop_packets - 1)
 		return;
 
+	if (!m->ai[in ^1].ah)	/* Bad hack: After a join it may take awhile for the ah pointer to propagate so sleep 10usec*/
+		usleep(10);
+
 	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, m->ai + (in ^ 1), buf->imm_valid, buf->imm, buf);
 
 	if (ret)
