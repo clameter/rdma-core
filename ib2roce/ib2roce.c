@@ -607,14 +607,18 @@ const char *mc_text[NR_MC_STATUS] = { "Inactive", "Joining", "Joined", "Error" }
  * However, the state of joins etc may change in multithreaded
  * mode. Access to that status information requires some care.
  */
+struct mc_interface {
+	enum mc_status status;
+	bool sendonly;
+	struct ah_info ai;
+	struct sockaddr *sa;
+};
+
 static struct mc {
 	struct in_addr addr;
-	enum mc_status status[2];
-	bool sendonly[2];
+	struct mc_interface interface[2];
 	bool beacon;
 	uint16_t port;
-	struct ah_info ai[2];
-	struct sockaddr *sa[2];
 	struct mgid_signature *mgid_mode;
 	const char *text;
 } mcs[MAX_MC];
@@ -729,9 +733,9 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 /* Setup the addreses for ROCE and INFINIBAND based on a ipaddr:port spec */
 static void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 {
-	m->sa[ROCE] = (struct sockaddr  *)si;
+	m->interface[ROCE].sa = (struct sockaddr  *)si;
 	m->port = si->sin_port;
-	m->sa[INFINIBAND] = m->sa[ROCE];
+	m->interface[INFINIBAND].sa = m->interface[ROCE].sa;
 
 	if (m->mgid_mode->signature) {
 		/*
@@ -769,7 +773,7 @@ static void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 
 		*mgid_ipv4 = htonl(multicast);
 
-		m->sa[INFINIBAND] = (struct sockaddr *)saib;
+		m->interface[INFINIBAND].sa = (struct sockaddr *)saib;
 	}
 }
 
@@ -787,8 +791,8 @@ static int new_mc_addr(char *arg,
 		return 1;
 	}
 
-	m->sendonly[INFINIBAND] = sendonly_infiniband;
-	m->sendonly[ROCE] = sendonly_roce;
+	m->interface[INFINIBAND].sendonly = sendonly_infiniband;
+	m->interface[ROCE].sendonly = sendonly_roce;
 	m->text = strdup(arg);
 
 	si = parse_addr(arg, default_mc_port, &m->mgid_mode, true);
@@ -811,8 +815,7 @@ out:
 }
 
 static int _join_mc(struct in_addr addr, struct sockaddr *sa,
-				unsigned port,enum interfaces i,
-				bool sendonly, void *private)
+	unsigned port, enum interfaces i, bool sendonly, void *private)
 {
 	struct rdma_cm_join_mc_attr_ex mc_attr = {
 		.comp_mask = RDMA_CM_JOIN_MC_ATTR_ADDRESS | RDMA_CM_JOIN_MC_ATTR_JOIN_FLAGS,
@@ -863,7 +866,7 @@ static int leave_mc(enum interfaces i)
 	for (j = 0; j < nr_mc; j++) {
 		struct mc *m = mcs + j;
 
-		ret = _leave_mc(m->addr, m->sa[i], i);
+		ret = _leave_mc(m->addr, m->interface[i].sa, i);
 		if (ret)
 			return 1;
 	}
@@ -2181,24 +2184,26 @@ static void join_processing(void)
 
 	for (i = 0; i < nr_mc; i++) {
 		struct mc *m = mcs + i;
-		unsigned port = ntohs(((struct sockaddr_in *)(m->sa[ROCE]))->sin_port);
+		unsigned port = m->port;
 
-		if (m->status[ROCE] == MC_JOINED && m->status[INFINIBAND] == MC_JOINED)
+		if (m->interface[ROCE].status == MC_JOINED && m->interface[INFINIBAND].status == MC_JOINED)
 			continue;
 
-		for(in = 0; in < 2; in++)
+		for(in = 0; in < 2; in++) {
+			struct mc_interface *mi = m->interface + in;
+
 			if (i2r[in].context) {
-				switch(m->status[in]) {
+				switch(mi->status) {
 
 				case MC_OFF:
-					if (_join_mc(m->addr, m->sa[in], port, in, m->sendonly[in], m) == 0)
-						m->status[in] = MC_JOINING;
+					if (_join_mc(m->addr, mi->sa, port, in, mi->sendonly, m) == 0)
+						m->interface[in].status = MC_JOINING;
 					break;
 
 				case MC_ERROR:
 
-					_leave_mc(m->addr, m->sa[in], in);
-					m->status[in] = MC_OFF;
+					_leave_mc(m->addr, mi->sa, in);
+					mi->status = MC_OFF;
 					logg(LOG_WARNING, "Left Multicast group %s on %s due to MC_ERROR\n",
 						m->text, interfaces_text[in]);
 					break;
@@ -2208,8 +2213,9 @@ static void join_processing(void)
 
 				default:
 					logg(LOG_ERR, "Bad MC status %d MC %s on %s\n",
-					       m->status[in], m->text, interfaces_text[in]);
+					       mi->status, m->text, interfaces_text[in]);
 					break;
+				}
 			}
 		}
 
@@ -2316,7 +2322,7 @@ static void handle_rdma_event(void *private)
 			{
 				struct rdma_ud_param *param = &event->param.ud;
 				struct mc *m = (struct mc *)param->private_data;
-				struct ah_info *a = m->ai + in;
+				struct ah_info *a = &m->interface[in].ai;
 				char buf[40];
 
 				a->remote_qpn = param->qp_num;
@@ -2325,13 +2331,13 @@ static void handle_rdma_event(void *private)
 				if (!a->ah) {
 					logg(LOG_ERR, "Failed to create AH for Multicast group %s on %s \n",
 						m->text, i->text);
-					m->status[in] = MC_ERROR;
+					m->interface[in].status = MC_ERROR;
 					break;
 				}
-				m->status[in] = MC_JOINED;
+				m->interface[in].status = MC_JOINED;
 
 				/* Things actually work if both multicast groups are joined */
-				if (!bridging || m->status[in ^ 1] == MC_JOINED)
+				if (!bridging || m->interface[in^1].status == MC_JOINED)
 					active_mc++;
 
 				logg(LOG_NOTICE, "Joined %s MLID 0x%x sl %u on %s\n",
@@ -2352,10 +2358,10 @@ static void handle_rdma_event(void *private)
 					m->text, i->text);
 
 				/* If already joined then the bridging may no longer work */
-				if (!bridging || (m->status[in] == MC_JOINED && m->status[in ^ 1] == MC_JOINED))
+				if (!bridging || (m->interface[in].status == MC_JOINED && m->interface[in^1].status == MC_JOINED))
 				       active_mc--;
 
-				m->status[in] = MC_ERROR;
+				m->interface[in].status = MC_ERROR;
 				st(i->multicast, join_failure);
 			}
 			break;
@@ -3663,7 +3669,7 @@ static void receive_multicast(struct buf *buf)
 		goto invalid_packet;
 	}
 
-	if (m->sendonly[in]) {
+	if (m->interface[in].sendonly) {
 
 		if (log_packets) {
 			logg(LOG_WARNING, "Discard Packet: Received data from Sendonly MC group %s from %s\n",
@@ -3737,10 +3743,10 @@ static void receive_multicast(struct buf *buf)
 	if (drop_packets && (c->stats[packets_received] % drop_packets) == drop_packets - 1)
 		return;
 
-	if (!m->ai[in ^1].ah)	/* Bad hack: After a join it may take awhile for the ah pointer to propagate so sleep 10usec*/
+	if (!m->interface[in ^1].ai.ah)	/* Bad hack: After a join it may take awhile for the ah pointer to propagate so sleep 10usec*/
 		usleep(10);
 
-	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, m->ai + (in ^ 1), buf->imm_valid, buf->imm, buf);
+	ret = send_to(i2r[in ^ 1].multicast, buf->cur, buf->end - buf->cur, &m->interface[in ^ 1].ai, buf->imm_valid, buf->imm, buf);
 
 	if (ret)
 		return;
@@ -4791,11 +4797,11 @@ static void status_write(void *private)
 
 		n += sprintf(n + b, "%s INFINIBAND: %s %s%s ROCE: %s %s\n",
 			inet_ntoa(m->addr),
-			mc_text[m->status[INFINIBAND]],
-			m->sendonly[INFINIBAND] ? "Sendonly " : "",
+			mc_text[m->interface[INFINIBAND].status],
+			m->interface[INFINIBAND].sendonly ? "Sendonly " : "",
 			m->mgid_mode->id,
-			mc_text[m->status[ROCE]],
-			m->sendonly[ROCE] ? "Sendonly" : "");
+			mc_text[m->interface[ROCE].status],
+			m->interface[ROCE].sendonly ? "Sendonly" : "");
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
 
@@ -4985,13 +4991,13 @@ static void beacon_send(void *private)
 			b.t = now = timestamp();
 
 
-			if (i->context && beacon_mc->status[in] == MC_JOINED) {
+			if (i->context && beacon_mc->interface[in].status == MC_JOINED) {
 				if (sizeof(b) > MAX_INLINE_DATA) {
 					buf = alloc_buffer(i->multicast);
 					memcpy(buf->raw, &b, sizeof(b));
-					send_to(i->multicast, buf, sizeof(b), beacon_mc->ai + in, false, 0, buf);
+					send_to(i->multicast, buf, sizeof(b), &beacon_mc->interface[in].ai, false, 0, buf);
 				} else
-					send_inline(i->multicast, &b, sizeof(b), beacon_mc->ai + in, false, 0);
+					send_inline(i->multicast, &b, sizeof(b), &beacon_mc->interface[in].ai, false, 0);
 			}
 		}
 
