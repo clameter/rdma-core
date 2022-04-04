@@ -242,8 +242,6 @@ static const char *stats_text[nr_stats] = {
 	"LeaveRequests"
 };
 
-static int cq_high = 0;	/* Largest batch of CQs encountered */
-
 enum channel_type { channel_rdmacm, channel_ud, channel_qp1,
 	channel_raw, channel_ibraw,
 	channel_packet, channel_incoming,
@@ -274,6 +272,7 @@ struct rdma_channel {
 	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
 	unsigned int active_send_buffers;
+	unsigned int cq_high;
 	unsigned int nr_cq;
 	unsigned int nr_receive;
 	unsigned stats[nr_stats];
@@ -4546,8 +4545,8 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 {
 	unsigned j;
 
-	if (cqs > cq_high)
-		cq_high = cqs;
+	if (cqs > c->cq_high)
+		c->cq_high = cqs;
 
 	for (j = 0; j < cqs; j++) {
 		struct ibv_wc *w = wc + j;
@@ -4769,8 +4768,8 @@ static void status_write(void)
 		if (buf->free)
 		       free++;
 
-	n+= sprintf(b + n, "Multicast: Active=%u NR=%u Max=%u\nBuffers: Active=%u Total=%u CQ#High=%u\n\n",
-		active_mc, nr_mc, MAX_MC, nr_buffers-free , nr_buffers, cq_high);
+	n+= sprintf(b + n, "Multicast: Active=%u NR=%u Max=%u\nBuffers: Active=%u Total=%u\n\n",
+		active_mc, nr_mc, MAX_MC, nr_buffers-free , nr_buffers);
 
 	for(m = mcs; m < mcs + nr_mc; m++)
 
