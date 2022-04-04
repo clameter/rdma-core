@@ -1553,6 +1553,7 @@ static void post_receive(struct rdma_channel *c)
 		ret = ibv_post_recv(c->qp, &recv_wr, &recv_failure);
 		if (ret) {
 			free_buffer(buf);
+			errno = ret;
 			logg(LOG_WARNING, "ibv_post_recv failed: %s:%s\n", c->text, errname());
 			return;
                 }
