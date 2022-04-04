@@ -1188,6 +1188,11 @@ struct core_info {
 	pthread_t thread;			/* Thread */
 	pthread_attr_t attr;
 	struct rdma_channel channel[MAX_CQS_PER_CORE];
+	/* Statistics */
+	unsigned samples;
+	long sum_latency;
+	unsigned max_latency;
+	unsigned min_latency;
 } core_infos[MAX_CORE];
 
 static void show_core_config(void)
@@ -1347,7 +1352,10 @@ static void *busyloop(void *private)
 
 	core->state = core_running;
 
+	now = timestamp(); 	/* Will be done by run_events in the future */
 	do {
+		uint64_t tdiff;
+	
 		cpu_relax();
 		/* Scan CQs */
 		for(i = 0; i < core->nr_channels; i++) {
@@ -1365,6 +1373,23 @@ static void *busyloop(void *private)
 				}
 			}
 		}
+		tdiff = timestamp() - now;
+
+		if (tdiff > core->max_latency)
+			core->max_latency = tdiff;
+		if (tdiff < core->min_latency || !core->min_latency)
+			core->min_latency = tdiff;
+
+		core->sum_latency += tdiff;
+		if (core->samples > 1000000000) {
+			core->samples = 0;
+			core->sum_latency = tdiff;
+		}
+		core->samples ++;
+		if (tdiff > ONE_MILLISECOND)
+			logg(LOG_ERR, "Busyloop took longer than a millisecond %ld\n", tdiff);
+
+		run_events();
 
 	} while (!terminated);
 
