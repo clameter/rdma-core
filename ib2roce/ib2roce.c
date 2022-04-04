@@ -896,7 +896,6 @@ struct buf {
 
 			/* Structs pulled out of the frame */
 			struct ibv_grh grh;
-			struct ether_header e;
 			struct iphdr ip;
 		};
 		uint8_t meta[META_SIZE];
@@ -4240,16 +4239,17 @@ static void receive_raw(struct buf *buf)
 		char source_str[30];
 		char dest_str[30];
 		struct in_addr source, dest;
+		struct ether_header e;
 
-		pull(buf, &buf->e, sizeof(struct ether_header));
+		PULL(buf, e);
 
-		ethertype = ntohs(buf->e.ether_type);
+		ethertype = ntohs(e.ether_type);
 		if (ethertype < 0x600) {
 			len = ethertype;
 			ethertype = ETHERTYPE_IP;
 		}
 
-		if (memcmp(i->if_mac, buf->e.ether_shost, ETH_ALEN) == 0) {
+		if (memcmp(i->if_mac, e.ether_shost, ETH_ALEN) == 0) {
 
 			reason = "-Loopback";
 			goto discard;
@@ -4301,7 +4301,7 @@ static void receive_raw(struct buf *buf)
 
 			}
 
-			if (buf->e.ether_dhost[0] & 0x1) {
+			if (e.ether_dhost[0] & 0x1) {
 				reason = "-Multicast on RAW channel";
 				goto discard;
 			}
@@ -4663,6 +4663,7 @@ static void handle_receive_packet(void *private)
 	unsigned ethertype;
 	ssize_t len;
 	struct buf *buf = alloc_buffer(c);
+	struct ether_header e;
 
 	len = recv(c->fh, buf->raw, DATA_SIZE, 0);
 
@@ -4683,9 +4684,9 @@ static void handle_receive_packet(void *private)
 	buf->end = buf->raw + w.byte_len;
 	buf->w = &w;
 	reset_flags(buf);
-	PULL(buf, buf->e);
+	PULL(buf, e);
 
-	ethertype = ntohs(buf->e.ether_type);
+	ethertype = ntohs(e.ether_type);
 	if (ethertype < 0x600)
 		ethertype = ETHERTYPE_IP;
 
