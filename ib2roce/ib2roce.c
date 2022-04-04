@@ -242,8 +242,6 @@ static const char *stats_text[nr_stats] = {
 	"LeaveRequests"
 };
 
-int max_wc_cqs = 1000;
-
 static int cq_high = 0;	/* Largest batch of CQs encountered */
 
 enum channel_type { channel_rdmacm, channel_ud, channel_qp1,
@@ -1318,7 +1316,8 @@ static void *busyloop(void *private)
 	int cqs;
 	int i;
 	unsigned cpu;
-	struct ibv_wc wc[max_wc_cqs];
+
+	struct ibv_wc wc[10];
 
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 	numa_run_on_node(core->numa_node);
@@ -1340,7 +1339,7 @@ static void *busyloop(void *private)
 		cpu_relax();
 		/* Scan CQs */
 		for(i = 0; i < core->nr_channels; i++) {
-			cqs = ibv_poll_cq(core->cq[i], max_wc_cqs, wc);
+			cqs = ibv_poll_cq(core->cq[i], 10, wc);
 			if (cqs) {
 				c = core->channel + i;
 
@@ -4623,7 +4622,7 @@ static void handle_comp_event(void *private)
 	struct rdma_channel *c;
 	struct ibv_cq *cq;
 	int cqs;
-	struct ibv_wc wc[max_wc_cqs];
+	struct ibv_wc wc[10];
 
 	if (ibv_get_cq_event(events, &cq, (void **)&c)) {
 		logg(LOG_ERR, "ibv_get_cq_event failed with %s\n", errname());
@@ -4642,7 +4641,7 @@ static void handle_comp_event(void *private)
 	}
 
 	/* Retrieve completion events and process incoming data */
-	cqs = ibv_poll_cq(cq, max_wc_cqs, wc);
+	cqs = ibv_poll_cq(cq, 10, wc);
 	if (cqs < 0) {
 		logg(LOG_WARNING, "CQ polling failed with: %s on %s\n",
 			errname(), c->text);
@@ -5428,7 +5427,6 @@ struct enable_option {
 { "drop",		NULL,	&drop_packets,	"100", "0",	"Drop multicast packets. The value is the number of multicast packets to send before dropping" },
 { "flow",		&flow_steering, NULL,	"on", "off",	"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
 { "huge",		&huge,	NULL,		"on", "off",	"Enable the use of Huge memory for the packet pool" }, 
-{ "packetspp",		NULL,	&max_wc_cqs,	"1000", "10",	"Packets per Poll: The number of packets to receive per Poll of the RDMA stack" },
 { "loopbackprev",	&loopback_blocking, NULL, "on", "off",	"Multicast loopback prevention of the NIC" },
 { "packetsocket",	&packet_socket, NULL,	"on", "off",	"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
 { "pgm",		NULL,	(int *)&pgm_mode, "on", "off",	"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
