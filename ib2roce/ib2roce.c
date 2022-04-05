@@ -300,7 +300,7 @@ struct rdma_channel {
 	struct ibv_qp_attr attr;	/* Only !rdmacm */
 	int fh;				/* Only channel_packet */
 	uint64_t last_snapshot;		/* when was the last snapshot taken */
-	unsigned long last_received, last_sent;
+	unsigned last_received, last_sent;
 	unsigned pps_in, pps_out;	/* Rate in the last interval */
 	unsigned max_pps_in, max_pps_out; /* Max Rate seen */
 };
@@ -5318,7 +5318,7 @@ static void check_joins(void *private)
 static void calculate_pps_channel(struct rdma_channel *c)
 {
 	if (c->last_snapshot) {
-		unsigned tdiff = now - c->last_snapshot;
+		uint64_t tdiff = now - c->last_snapshot;
 
 		c->pps_in =((c->stats[packets_received] - c->last_received) * ONE_SECOND) / tdiff;
 		c->pps_out = ((c->stats[packets_sent] - c->last_sent) * ONE_SECOND) / tdiff;
