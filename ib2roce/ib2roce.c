@@ -116,6 +116,7 @@ static int rrate = 0;			/* Software delay per message for ROCE */
 static int irate = 0;			/* Software delay per message for Infiniband */
 static int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
 static int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
+static int stat_interval = 10;		/* Interval for statistics */
 
 #define ONE_SECOND (1000000000UL)
 #define ONE_MILLISECOND (ONE_SECOND/1000UL)
@@ -297,6 +298,10 @@ struct rdma_channel {
 	struct sockaddr *bindaddr;	/* Only rdmacm */
 	struct ibv_qp_attr attr;	/* Only !rdmacm */
 	int fh;				/* Only channel_packet */
+	uint64_t last_snapshot;		/* when was the last snapshot taken */
+	unsigned long last_received, last_sent;
+	unsigned pps_in, pps_out;	/* Rate in the last interval */
+	unsigned max_pps_in, max_pps_out; /* Max Rate seen */
 };
 
 /*
@@ -4870,7 +4875,7 @@ static int channel_stats(char *b, struct rdma_channel *c, const char *interface,
 	int n = 0;
 	int j;
 
-	n += sprintf(b + n, "\nPacket Statistics for %s(%s):\n", interface, type);
+	n += sprintf(b + n, "\nChannel %s(%s):\n", interface, type);
 
 	for(j =0; j < nr_stats; j++)
 		if (c->stats[j]) {
@@ -5299,6 +5304,40 @@ static void check_joins(void *private)
 	}
 }
 
+static void calculate_pps_channel(struct rdma_channel *c)
+{
+	if (c->last_snapshot) {
+		unsigned tdiff = now - c->last_snapshot;
+
+		c->pps_in =((c->stats[packets_received] - c->last_received) * ONE_SECOND) / tdiff;
+		c->pps_out = ((c->stats[packets_sent] - c->last_sent) * ONE_SECOND) / tdiff;
+
+		if (c->pps_in > c->max_pps_in)
+			c->max_pps_in = c->pps_in;
+
+		if (c->pps_out > c->max_pps_out)
+			c->max_pps_out = c->pps_out;
+
+	}
+	c->last_received = c->stats[packets_received];
+	c->last_sent = c->stats[packets_sent];
+	c->last_snapshot = now;
+}
+
+static void calculate_pps(void *private)
+{
+	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
+	if (i->context)
+	{
+		if (i->multicast)
+			calculate_pps_channel(i->multicast);
+
+		if (i->ud)
+			calculate_pps_channel(i->ud);
+	}
+	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
+}
+
 static void brief_status(void)
 {
 	char buf[100];
@@ -5391,16 +5430,16 @@ static void register_callback(void (*callback)(void *), int fd, void *private)
 
 static void setup_timed_events(void)
 {
-	uint64_t t;
-
-	t = timestamp();
+	now = timestamp();
 
 	if (background) {
-		add_event(t + seconds(30), status_write, NULL, "Write Status File");
+		add_event(now + seconds(30), status_write, NULL, "Write Status File");
 		logging(NULL);
 	}
 
-	add_event(t + milliseconds(100), check_joins, NULL, "Check Multicast Joins");
+	add_event(now + milliseconds(100), check_joins, NULL, "Check Multicast Joins");
+
+	calculate_pps(NULL);
 }
 
 static void arm_channels(struct core_info *core)
@@ -5623,6 +5662,7 @@ struct enable_option {
 { "iburst",		NULL, &max_iburst,	"100", "0",	"Infiniband: Exempt the first N packets from swrate (0=off)" },
 { "rburst",		NULL, &max_rburst,	"100", "0",	"ROCE: Exempt the first N packets from swrate (0=off)" },
 { "raw",		&raw,	NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{ "statint",		NULL, &stat_interval,	"60", "1",	"Sampling interval to calculate pps values" },
 { "unicast",		&unicast, NULL,		"on", "off",	"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
 { NULL, NULL, NULL, NULL, NULL, NULL }
 };
@@ -6042,7 +6082,6 @@ static void buffers_cmd(char *parameters)
 	/* Sometime show more details */
 }
 
-
 static void multicast_cmd(char *parameters)
 {
 	struct mc *m;
@@ -6079,6 +6118,64 @@ static void disablecmd(char *parameters) {
 	enable(parameters, false);
 }
 
+static void channel_stat(struct rdma_channel *c)
+{
+	printf(" Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%d \n", c->text,
+		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_cq, c->cq_high);
+
+	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))
+		printf(" pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n", 
+				c->pps_in, c->pps_out, c->max_pps_in, c->max_pps_out);
+
+	for(int k = 0; k < nr_stats; k++)
+		if (c->stats[k])
+			printf(" %s=%u", stats_text[k], c->stats[k]);
+
+	printf("\n");
+}
+
+
+static void channels_cmd(char *parameters)
+{
+	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
+		if (i->multicast)
+			channel_stat(i->multicast);
+		if (i->ud)
+			channel_stat(i->ud);
+		if (i->raw)
+			channel_stat(i->raw);
+		if (i->qp1)
+			channel_stat(i->qp1);
+	}
+}
+
+static void channel_zap(struct rdma_channel *c)
+{
+	c->last_snapshot = 0;
+	c->max_pps_in = 0;
+	c->max_pps_out = 0;
+
+	for(int k = 0; k < nr_stats; k++)
+		c->stats[k] = 0;
+
+	printf("Ok\n");
+}
+
+
+static void zap_cmd(char *parameters)
+{
+	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
+		if (i->multicast)
+			channel_zap(i->multicast);
+		if (i->ud)
+			channel_zap(i->ud);
+		if (i->raw)
+			channel_zap(i->raw);
+		if (i->qp1)
+			channel_zap(i->qp1);
+	}
+}
+
 static void core_cmd(char *parameters) {
 	if (!parameters) {
 		if (cores) {
@@ -6091,18 +6188,8 @@ static void core_cmd(char *parameters) {
 				printf("Core %d: NUMA=%d", i, ci->numa_node);
 				printf(" Loops=%u Average=%luns, Max=%uns, Min=%uns\n", ci->samples, ((ci->sum_latency / ci->samples) << 8), ci->max_latency, ci->min_latency);
 
-				for (j = 0; j < ci->nr_channels; j++) {
-					struct rdma_channel *c = ci->channel +j;
-
-					printf(" Channel %s(%s) ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%d\n", c->text, channel_infos[c->type].suffix,
-						c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_cq, c->cq_high);
-
-					for(int k = 0; k < nr_stats; k++)
-						if (c->stats[k])
-							printf(" %s=%u", stats_text[k], c->stats[k]);
-
-					printf("\n");
-				}
+				for (j = 0; j < ci->nr_channels; j++)
+					channel_stat(ci->channel + j);
 			}
 		} else
 			printf("No cores active. ib2roce operates in single threaded mode.\n");
@@ -6171,6 +6258,7 @@ static struct concom {
 	void (*callback)(char *parameters);
 } concoms[] = {
 { "buffers",	true,	0,	"Print Information about buffer use",		buffers_cmd },
+{ "channels",	true,	0,	"Print information about communication channels", channels_cmd },
 { "continuous",	false,	1,	"Print continous status in specified interval",	continous_cmd },
 { "cores",	true,	1,	"Setup and list core configuration",		core_cmd },
 { "disable",	true,	1,	"Disable optional features",			disablecmd },
@@ -6182,6 +6270,7 @@ static struct concom {
 { "quit",	false,	0,	"Terminate ib2roce",				exitcmd },
 { "status",	true,	0,	"Print a brief status",				statuscmd },
 { "tsi",	true,	0,	"Show PGM info",				tsi_cmd },
+{ "zap",	true,	0,	"Clear counters",				zap_cmd },
 { NULL,		false,	0,	NULL,						NULL }
 };
 
