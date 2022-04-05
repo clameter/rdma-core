@@ -750,7 +750,7 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 static void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 {
 	m->interface[ROCE].sa = (struct sockaddr  *)si;
-	m->port = si->sin_port;
+	m->port = ntohs(si->sin_port);
 	m->interface[INFINIBAND].sa = m->interface[ROCE].sa;
 
 	if (m->mgid_mode->signature) {
