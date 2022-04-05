@@ -108,6 +108,7 @@ static bool raw = false;		/* Use raw channels */
 static bool flow_steering = false;	/* Use flow steering to filter packets */
 static int log_packets = 0;		/* Show details on discarded packets */
 static bool testing = false;		/* Run some tests on startup */
+static bool latency = true;		/* Perform Latency tests and provide stats */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
@@ -1219,8 +1220,12 @@ static void show_core_config(void)
 		unsigned j;
 		struct core_info *ci = core_infos + i;
 
-		for (j = 0; j < ci->nr_channels; j++) {
-			n += sprintf(b + n, "%s ", ci->channel[j].text);
+		if (ci->nr_channels) {
+			for (j = 0; j < ci->nr_channels; j++) {
+				n += sprintf(b + n, "%s ", ci->channel[j].text);
+			}
+		} else {
+			n += sprintf(b + n, "<not used>");
 		}
 
 		n += sprintf(b +n,"\n");
@@ -1387,21 +1392,23 @@ static void *busyloop(void *private)
 				}
 			}
 		}
-		tdiff = timestamp() - now;
+		if (latency) {
+			tdiff = timestamp() - now;
 
-		if (tdiff > core->max_latency)
-			core->max_latency = tdiff;
-		if (tdiff < core->min_latency || !core->min_latency)
-			core->min_latency = tdiff;
+			if (tdiff > core->max_latency)
+				core->max_latency = tdiff;
+			if (tdiff < core->min_latency || !core->min_latency)
+				core->min_latency = tdiff;
 
-		core->sum_latency += tdiff;
-		if (core->samples > 1000000000) {
-			core->samples = 0;
-			core->sum_latency = tdiff;
+			core->sum_latency += tdiff;
+			if (core->samples > 1000000000) {
+				core->samples = 0;
+				core->sum_latency = tdiff;
+			}
+			core->samples ++;
+			if (tdiff > ONE_MILLISECOND)
+				logg(LOG_ERR, "Busyloop took longer than a millisecond %ld\n", tdiff);
 		}
-		core->samples ++;
-		if (tdiff > ONE_MILLISECOND)
-			logg(LOG_ERR, "Busyloop took longer than a millisecond %ld\n", tdiff);
 
 		run_events();
 
@@ -5268,11 +5275,14 @@ static uint64_t run_events(void)
 		/* Time is up for an event */
 		next_event = te->next;
 		te->callback(te->private);
-		old_now = now;
-		now = timestamp();
-		if (now - old_now > ONE_MILLISECOND)
-			logg(LOG_ERR, "Callback %s took %ld nanoseconds which is longer than a millisecond\n",
-				te->text, now-old_now);
+	
+		if (latency) {
+			old_now = now;
+			now = timestamp();
+			if (now - old_now > ONE_MILLISECOND)
+				logg(LOG_ERR, "Callback %s took %ld nanoseconds which is longer than a millisecond\n",
+					te->text, now-old_now);
+		}
 
 		free(te);
 	}
@@ -5660,6 +5670,7 @@ struct enable_option {
 { "hwrate",		NULL,	&rate,		"2", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
 { "irate",		NULL, &irate,		"1000", "0",	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
 { "rrate",		NULL, &rrate,		"1000", "0",	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "latency",		&latency, NULL,		"on", "off",	"Monitor latency of busyloop and event processing and provide stats" },
 { "iburst",		NULL, &max_iburst,	"100", "0",	"Infiniband: Exempt the first N packets from swrate (0=off)" },
 { "rburst",		NULL, &max_rburst,	"100", "0",	"ROCE: Exempt the first N packets from swrate (0=off)" },
 { "raw",		&raw,	NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
@@ -5678,7 +5689,7 @@ static void enable(char *option, bool enable)
 
 	if (!option || !option[0]) {
 		printf("List of available options that can be enabled\n");
-		printf("Var\t\tType\tDefault\tDescription\n");
+		printf("Var\t\tType\tActive\tDescription\n");
 		printf("----------------------------------------------------------------\n");
 		for(i = 0; enable_table[i].id; i++) {
 			char state[10];
@@ -6188,7 +6199,10 @@ static void core_cmd(char *parameters) {
 				struct core_info *ci = core_infos + i;
 
 				printf("Core %d: NUMA=%d", i, ci->numa_node);
-				printf(" Loops=%u Average=%luns, Max=%uns, Min=%uns\n", ci->samples, ((ci->sum_latency / ci->samples) << 8), ci->max_latency, ci->min_latency);
+				if (latency)
+					printf(" Loops=%u Average=%luns, Max=%uns, Min=%uns\n",
+						ci->samples, ((ci->sum_latency / ci->samples) << 8),
+						ci->max_latency, ci->min_latency);
 
 				for (j = 0; j < ci->nr_channels; j++)
 					channel_stat(ci->channel + j);
@@ -6224,6 +6238,15 @@ static void tsi_cmd(char *parameters)
 	}
 }
 
+static void event_cmd(char *parameters)
+{
+	printf("Scheduled events on the high latency thread\n");
+	printf("-------------------------------------------\n");
+
+	for(struct timed_event *z = next_event; z; z = z->next) {
+		printf("%ldms %s\n", (z->time - timestamp()) / ONE_MILLISECOND, z->text);
+	}
+}
 
 static int log_interval;
 
@@ -6265,6 +6288,7 @@ static struct concom {
 { "cores",	true,	1,	"Setup and list core configuration",		core_cmd },
 { "disable",	true,	1,	"Disable optional features",			disablecmd },
 { "enable",	true,	1,	"Setup optional features and list them",	enablecmd },
+{ "events",	true,	0,	"Show scheduler event queue",			event_cmd },
 { "help",	true,	0,	"Print a list of commands",			help },
 { "interfaces",	true,	1,	"List statisitcs about Interfaces",		interfaces_cmd },
 { "endpoints",	true,	0,	"List Endpoints",				endpoints_cmd },
