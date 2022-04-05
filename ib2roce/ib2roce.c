@@ -4120,8 +4120,10 @@ static const char *sidr_req(struct buf *buf, void *mad_pos)
 	}
 
 	ss->source = buf->source_ep;
-	ss->source_qp = ch->src_addr.ip4.qpn;
+	ss->source_qp = ntohl(ch->src_addr.ip4.sess_qpn);
 	ss->request_id = sr->request_id;
+	/* Setup the reply so that it will come back to our "QP1" and not to the kernel QP1 */
+
 
 no_cma:
 	/* Establish Destination */
@@ -4201,8 +4203,10 @@ no_cma:
 		hash_add(sidrs, ss);
 		unlock();
 
-		/* Source QPN is not valid for target network use the QP number */
-		ch->src_addr.ip4.qpn = ss->source->i->ud->qp->qp_num;
+		/* Source QPN is not valid for target network use the QP number of the UD QP */
+		ch->src_addr.ip4.sess_qpn = htonl(dest_i->ud->qp->qp_num);
+		/* Ensure the SIDR_REP gets back to our QP1 */
+		ch->src_addr.ip4.sidr_qpn = ntohl(dest_i->qp1->qp->qp_num);
 
 		send_mad(ss->dest, buf, mad_pos);
 		
