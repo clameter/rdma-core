@@ -285,7 +285,7 @@ struct rdma_channel {
 	struct ibv_pd *pd;
 	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
-	unsigned int active_send_buffers;
+	unsigned int active_send_buffers;	/* if the sender is on a different core than the receiver then we have a race condition for the buffers */
 	unsigned int cq_high;
 	unsigned int nr_cq;
 	unsigned int nr_receive;
@@ -1110,7 +1110,7 @@ static setup_callback setup_multicast, setup_channel, setup_raw, setup_packet, s
 struct channel_info {
 
 	const char *suffix;
-	short core;		/* On which core relativ to the first core for the interface shall this be placed */
+	short core;
 	short alt_core;	/* If that core is not available what is the other choice */
 	bool fractional;	/* NR is a fraction of all available buffers */
 	uint32_t nr_cq;		/* NR of CQ entries to allocate allocate to this channel */
@@ -1170,9 +1170,7 @@ enum core_state { core_off, core_init, core_running, core_err, nr_core_states };
  */
 static short core_lookup(struct i2r_interface *i,  enum channel_type type)
 {
-	enum interfaces in = i - i2r;
 	short core = channel_infos[type].core;
-	short avail_cores = cores / 2; 	/* Half for IB and half for ROCE  */
 
 	if (!cores)
 		goto nocore;
@@ -1180,15 +1178,15 @@ static short core_lookup(struct i2r_interface *i,  enum channel_type type)
 	if (core == NO_CORE)
 		goto nocore;
 	
-	if (core < avail_cores)
-		return in * avail_cores + core;
+	if (core < cores)
+		return core;
 
 	core = channel_infos[type].alt_core;
-	if (core < avail_cores)
-		return in * avail_cores + core;
+	if (core < cores)
+		return core;
 
-	/* If nothing worked put it onto th4 first core */
-	return in * avail_cores;
+	/* If nothing worked put it onto the first core */
+	return 0;
 
 nocore:
 	return NO_CORE;
@@ -1438,6 +1436,9 @@ static void stop_cores(void)
 
 	for(i = 0; i < cores; i++) {
 		struct core_info *ci = core_infos + i;
+
+		if (!ci->thread)
+			continue;
 
 		pthread_cancel(ci->thread);
 
@@ -6154,11 +6155,11 @@ static void channel_zap(struct rdma_channel *c)
 	c->last_snapshot = 0;
 	c->max_pps_in = 0;
 	c->max_pps_out = 0;
+	c->cq_high = 0;
 
 	for(int k = 0; k < nr_stats; k++)
 		c->stats[k] = 0;
 
-	printf("Ok\n");
 }
 
 
@@ -6174,6 +6175,7 @@ static void zap_cmd(char *parameters)
 		if (i->qp1)
 			channel_zap(i->qp1);
 	}
+	printf("Ok\n");
 }
 
 static void core_cmd(char *parameters) {
