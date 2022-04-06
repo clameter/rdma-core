@@ -6157,6 +6157,17 @@ static void channel_zap(struct rdma_channel *c)
 	for(int k = 0; k < nr_stats; k++)
 		c->stats[k] = 0;
 
+	if (cores) {
+		for(unsigned i = 0; i < cores; i++) {
+			struct core_info *ci = core_infos + i;
+
+			ci->sum_latency = 0;
+			ci->samples = 0;
+			ci->max_latency = 0;
+			ci->min_latency = 0;
+
+		}
+	}
 }
 
 
