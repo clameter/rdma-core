@@ -154,6 +154,13 @@ static void logg(int prio, const char *fmt, ...)
 		vprintf(fmt, valist);
 }
 
+static const char *inet6_ntoa(void *x)
+{
+	char buf[INET6_ADDRSTRLEN];
+
+	return inet_ntop(AF_INET6, x, buf, INET6_ADDRSTRLEN);
+}
+
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;		/* Generic serialization mutex */
 
 /* Is the lock taken */
@@ -2069,7 +2076,6 @@ static void setup_interface(enum interfaces in)
 {
 	struct i2r_interface *i = i2r + in;
 	struct ibv_gid_entry *e;
-	char buf[INET6_ADDRSTRLEN];
 
 	if (in == INFINIBAND)
 		i->maclen = 20;
@@ -2190,7 +2196,7 @@ static void setup_interface(enum interfaces in)
 		i->rdma_name,
 		i->if_name, i->ifindex,
 		i->port,
-		inet_ntop(AF_INET6, e->gid.raw, buf, INET6_ADDRSTRLEN),i->gid_index,
+		inet6_ntoa(e->gid.raw), i->gid_index,
 		inet_ntoa(i->if_addr.sin_addr), default_port,
 		i->multicast ? i->multicast->nr_cq: 0,
 		i->ud ? i->ud->nr_cq : 0,
@@ -2373,7 +2379,6 @@ static void handle_rdma_event(void *private)
 				struct rdma_ud_param *param = &event->param.ud;
 				struct mc *m = (struct mc *)param->private_data;
 				struct ah_info *a = &m->interface[in].ai;
-				char buf[40];
 
 				a->remote_qpn = param->qp_num;
 				a->remote_qkey = param->qkey;
@@ -2391,7 +2396,7 @@ static void handle_rdma_event(void *private)
 					active_mc++;
 
 				logg(LOG_NOTICE, "Joined %s MLID 0x%x sl %u on %s\n",
-					inet_ntop(AF_INET6, param->ah_attr.grh.dgid.raw, buf, 40),
+					inet6_ntoa(param->ah_attr.grh.dgid.raw),
 					param->ah_attr.dlid,
 					param->ah_attr.sl,
 					i->text);
@@ -3720,7 +3725,6 @@ static void receive_multicast(struct buf *buf)
 	struct mc *m;
 	struct rdma_channel *c = buf->c;
 	enum interfaces in = c->i - i2r;
-	char xbuf[INET6_ADDRSTRLEN];
 	struct ib_addr *dgid = (struct ib_addr *)&buf->grh.dgid.raw;
 	struct in_addr dest_addr;
 	int ret;
@@ -3773,7 +3777,7 @@ static void receive_multicast(struct buf *buf)
 		if (mgid[0] != 0xff) {
 			if (log_packets) {
 				logg(LOG_WARNING, "Discard Packet: Not multicast. MGID=%s/%s\n",
-					inet_ntop(AF_INET6, mgid, xbuf, INET6_ADDRSTRLEN), c->text);
+					inet6_ntoa(mgid), c->text);
 				dump_buf_grh(buf);
 			}
 			goto invalid_packet;
@@ -3783,7 +3787,7 @@ static void receive_multicast(struct buf *buf)
 
 			if (log_packets > 3)
 				logg(LOG_WARNING, "Discard Packet: Loopback from this host. MGID=%s/%s\n",
-					inet_ntop(AF_INET6, mgid, xbuf, INET6_ADDRSTRLEN), c->text);
+					inet6_ntoa(mgid), c->text);
 
 			goto invalid_packet;
 		}
@@ -3795,8 +3799,7 @@ static void receive_multicast(struct buf *buf)
 			} else {
 				if (log_packets) {
 					logg(LOG_WARNING, "Discard Packet: MGID multicast signature(%x)  mismatch. MGID=%s\n",
-							signature,
-							inet_ntop(AF_INET6, mgid, xbuf, INET6_ADDRSTRLEN));
+							signature, inet6_ntoa(mgid));
 					dump_buf_grh(buf);
 				}
 				goto invalid_packet;
@@ -4365,7 +4368,6 @@ static void receive_raw(struct buf *buf)
 		}
 
 		if (ib_get_lnh(ih) == 3) {
-			char *xbuf = alloca(40);
 			char *xbuf2 = alloca(40);
 
 			PULL(buf, buf->grh);
@@ -4373,7 +4375,7 @@ static void receive_raw(struct buf *buf)
 
 			snprintf(header + strlen(header), 100-strlen(header), " SGID=%s DGID=%s",
 				inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
-				inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN));
+				inet6_ntoa(&buf->grh.dgid));
 
 			if (buf->source_ep->gid.global.interface_id == 0) /* No GID yet ? */
 				memcpy(&buf->source_ep->gid, &buf->grh.sgid, sizeof(union ibv_gid));
@@ -4949,7 +4951,6 @@ static unsigned show_endpoints(char *b)
 	for(i = i2r; i < i2r + NR_INTERFACES; i++)
 		if (i->context && i->ep) {
 		struct endpoint *e[20];
-		char xbuf[30];
 		unsigned nr;
 		unsigned offset = 0;
 
@@ -4968,7 +4969,7 @@ static unsigned show_endpoints(char *b)
 
 				if (ep->gid.global.interface_id)
 					n += snprintf(b + n, sizeof(buf) - n, " GID=%s",
-						inet_ntop(AF_INET6, &ep->gid, xbuf, INET6_ADDRSTRLEN));
+						inet6_ntoa(&ep->gid));
 
 				for (f = ep->forwards; f; f = f->next) {
 					n += snprintf(b + n, sizeof(buf) - n, " Q%d->%sQ%d",
@@ -5949,13 +5950,6 @@ static void help(char *parameters);
 static void exitcmd(char *parameters)
 {
 	terminate(0);
-}
-
-static const char *inet6_ntoa(void *x)
-{
-	char buf[INET6_ADDRSTRLEN];
-
-	return inet_ntop(AF_INET6, x, buf, INET6_ADDRSTRLEN);
 }
 
 static const char * gid_text[] = { "GID_TYPE_IB", "GID_TYPE_ROCE_V1", "GID_TYPE_ROCE_V2" };
