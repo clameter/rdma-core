@@ -81,7 +81,7 @@
 #include "ibraw.h"
 #include "cma-hdr.h"
 
-#define VERSION "2022.0331"
+#define VERSION "2022.0406"
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
@@ -5641,30 +5641,31 @@ static void pid_close(void)
 /* Table of options that can be set via -e option[=value] */
 struct enable_option {
 	const char *id;
+	bool runtime;		/* Is it changeable at runtime? */
 	bool *bool_flag;
 	int *int_flag;
 	const char *on_value;
 	const char *off_value;
 	const char *description;
 } enable_table[] = {
-{ "buffers",		NULL, &nr_buffers,	"1000000", "10000",	"Number of 8k buffers allocated for packet processing" },
-{ "bridging",		&bridging, NULL,	"on", "off",	"Forwarding of packets between interfaces" },
-{ "drop",		NULL,	&drop_packets,	"100", "0",	"Drop multicast packets. The value is the number of multicast packets to send before dropping" },
-{ "flow",		&flow_steering, NULL,	"on", "off",	"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
-{ "huge",		&huge,	NULL,		"on", "off",	"Enable the use of Huge memory for the packet pool" }, 
-{ "loopbackprev",	&loopback_blocking, NULL, "on", "off",	"Multicast loopback prevention of the NIC" },
-{ "packetsocket",	&packet_socket, NULL,	"on", "off",	"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
-{ "pgm",		NULL,	(int *)&pgm_mode, "on", "off",	"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
-{ "hwrate",		NULL,	&rate,		"2", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
-{ "irate",		NULL, &irate,		"1000", "0",	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
-{ "rrate",		NULL, &rrate,		"1000", "0",	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
-{ "latency",		&latency, NULL,		"on", "off",	"Monitor latency of busyloop and event processing and provide stats" },
-{ "iburst",		NULL, &max_iburst,	"100", "0",	"Infiniband: Exempt the first N packets from swrate (0=off)" },
-{ "rburst",		NULL, &max_rburst,	"100", "0",	"ROCE: Exempt the first N packets from swrate (0=off)" },
-{ "raw",		&raw,	NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
-{ "statint",		NULL, &stat_interval,	"60", "1",	"Sampling interval to calculate pps values" },
-{ "unicast",		&unicast, NULL,		"on", "off",	"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
-{ NULL, NULL, NULL, NULL, NULL, NULL }
+{ "buffers", false,		NULL, &nr_buffers,	"1000000", "10000",	"Number of 8k buffers allocated for packet processing" },
+{ "bridging", false,		&bridging, NULL,	"on", "off",	"Forwarding of packets between interfaces" },
+{ "drop", true,	NULL,		&drop_packets,		"100", "0",	"Drop multicast packets. The value is the number of multicast packets to send before dropping" },
+{ "flow", false,		&flow_steering, NULL,	"on", "off",	"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{ "huge", false,		&huge, NULL,		"on", "off",	"Enable the use of Huge memory for the packet pool" }, 
+{ "loopbackprev", false,	&loopback_blocking, NULL, "on", "off",	"Multicast loopback prevention of the NIC" },
+{ "packetsocket", false,	&packet_socket, NULL,	"on", "off",	"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
+{ "pgm", true,			NULL, (int *)&pgm_mode, "on", "off",	"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
+{ "hwrate", true,		NULL, &rate,		"2", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
+{ "irate", true,		NULL, &irate,		"1000", "0",	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "rrate", true,		NULL, &rrate,		"1000", "0",	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "latency", true,		&latency, NULL,		"on", "off",	"Monitor latency of busyloop and event processing and provide stats" },
+{ "iburst", true,		NULL, &max_iburst,	"100", "0",	"Infiniband: Exempt the first N packets from swrate (0=off)" },
+{ "rburst", true,		NULL, &max_rburst,	"100", "0",	"ROCE: Exempt the first N packets from swrate (0=off)" },
+{ "raw", false,			&raw, NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{ "statint", true,		NULL, &stat_interval,	"60", "1",	"Sampling interval to calculate pps values" },
+{ "unicast", false,		&unicast, NULL,		"on", "off",	"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{ NULL, false, NULL, NULL, NULL, NULL, NULL }
 };
 
 static void enable(char *option, bool enable)
@@ -5710,11 +5711,15 @@ static void enable(char *option, bool enable)
 		if (strcasecmp(name, enable_table[i].id) == 0)
 			goto got_it;
 	}
-	fprintf(stderr, "Unknown option %s\n", name);
+	printf("Unknown option %s\n", name);
 	return;
 
 got_it:
 	eo = enable_table + i;
+	if (!eo->runtime && (i2r[ROCE].context || i2r[INFINIBAND].context)) {
+		printf("Cannot change option \"%s\" at runtime\n", option);
+		return;
+	}
 	if (!value) {
 		if (enable) 
 			value = eo->on_value;
@@ -5908,7 +5913,7 @@ static void exec_opt(int op, char *optarg)
 			break;
 
 		default:
-			printf("ib2roce " VERSION " Mar 23,2022 Christoph Lameter <cl@linux.com>\n");
+			printf("ib2roce " VERSION " Apr 5,2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
 			printf("-b|--beacon <multicast address>		Send beacon every second. Off by default\n");
 			printf("-c|--config <file>			Read config from file\n");
