@@ -302,7 +302,7 @@ struct rdma_channel {
 	enum channel_type type;
 	bool listening;		/* rdmacm Channel is listening for connections */
 	const char *text;
-	struct rdma_unicast *ru;	/* Onlu rdmacm */
+	struct rdma_unicast *ru;	/* Only rdmacm */
 	struct rdma_cm_id *id;		/* Only rdmacm */
 	struct sockaddr *bindaddr;	/* Only rdmacm */
 	struct ibv_qp_attr attr;	/* Only !rdmacm */
@@ -604,9 +604,9 @@ static int find_rdma_devices(void)
 }
 
 /*
- * Multicast Handling
+ * Multicast Handling (follows the limit per QP as stated in device_attr for ConnectX6)
  */
-#define MAX_MC 500
+#define MAX_MC 240
 
 static unsigned nr_mc;
 static unsigned active_mc;	/* MC groups actively briding */
@@ -1148,23 +1148,9 @@ struct channel_info {
  * in high latency mode which is used for management and for all
  * activities not pushed to the polling cores.
  *
- * Cores | Layout
- * 0     | Basic thread does everything using poll system call. High latency
- * 1     | All CQs on one core. qp1, raw channels on the basic thread
- * 2	 | Separation of comp channels according to the Interface
- * 4	 | Separation of comp channels according to the Interface and multicast/unicast
- * 8     | place QP1 and raw channels on separate cores
+ * Cores always contain pairs of QPs on both interfaces. That reduces
+ * lock contention and optimizes the behavior overall.
  *
- * Typical 8 core layout
- * Core  | comp channel
- * 0 	 | Infiniband Multicast
- * 1	 | ROCE Multicast		Fallback to Core #0 if cores < 2
- * 2	 | Infiniband UD channel	Fallback to Core #0 if cores < 4
- * 3	 | ROCE UD channel		Fallback to Core #1 if cores < 4
- * 4	 | Infiniband QP1 channel	Fallback to high latency thread if cores < 8
- * 5	 | ROCE QP1 channel		Fallback to high latency thread if cores < 8
- * 6     | INfiniband RAW channel	Fallback to high latency thread if cores < 8
- * 7 	 | ROCE RaW channel		Fallback to high latency thread if cores < 8
  */
 
 #define MAX_CORE 8
