@@ -123,18 +123,19 @@ static int stat_interval = 10;		/* Interval for statistics */
 #define ONE_MILLISECOND (ONE_SECOND/1000UL)
 #define ONE_MICROSECOND (1000UL)
 
+/* Conversion of constants to microseconds */
+#define seconds(x) ((x)*ONE_SECOND)
+#define milliseconds(x) ((x)*ONE_MILLISECOND)
+
+
 /* Timestamp in nanoseconds */
 static uint64_t timestamp(void)
 {
 	struct timespec t;
 
 	clock_gettime(CLOCK_REALTIME, &t);
-	return t.tv_sec * ONE_SECOND + t.tv_nsec;
+	return seconds(t.tv_sec) + t.tv_nsec;
 }
-
-/* Conversion of constants to microseconds */
-#define seconds(x) ((x)*ONE_SECOND)
-#define milliseconds(x) ((x)*ONE_MILLISECOND)
 
 #define cpu_relax()	asm volatile("rep; nop")
 
@@ -5320,8 +5321,8 @@ static void calculate_pps_channel(struct rdma_channel *c)
 	if (c->last_snapshot) {
 		uint64_t tdiff = now - c->last_snapshot;
 
-		c->pps_in =((c->stats[packets_received] - c->last_received) * ONE_SECOND) / tdiff;
-		c->pps_out = ((c->stats[packets_sent] - c->last_sent) * ONE_SECOND) / tdiff;
+		c->pps_in = seconds(c->stats[packets_received] - c->last_received) / tdiff;
+		c->pps_out = seconds(c->stats[packets_sent] - c->last_sent) / tdiff;
 
 		if (c->pps_in > c->max_pps_in)
 			c->max_pps_in = c->pps_in;
@@ -6256,7 +6257,7 @@ static void continous(void *private)
 	brief_status();
 
 	if (log_interval)
-		add_event(timestamp() + log_interval * ONE_SECOND,
+		add_event(timestamp() + seconds(log_interval),
 				continous, NULL, "Continous Logging");
 }
 
