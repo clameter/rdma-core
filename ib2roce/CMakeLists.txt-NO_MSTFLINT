@@ -6,7 +6,8 @@ rdma_executable(ib2roce
   fifo.c
   hash.c
   errno.c
-  )
+  ring.c
+)
 target_link_libraries(ib2roce LINK_PRIVATE
   ibverbs
   ibumad
