@@ -923,6 +923,8 @@ struct buf {
 
 			struct rdma_channel *c;	/* Which Channels does this buffer belong to */
 			struct ibv_wc *w;	/* Work Completion struct */
+			struct ibv_sge sge;	/* SGE for send */
+			struct ibv_send_wr wr;	/* Write request */
 			struct endpoint *source_ep;
 			struct mc_interface *mi;	/* Destination MC interface / Group */
 
@@ -2671,9 +2673,8 @@ static int send_to(struct rdma_channel *c,
 	bool imm_used, unsigned imm,
 	struct buf *buf)
 {
-	struct ibv_send_wr wr, *bad_send_wr;
-	struct ibv_sge sge;
 	int ret;
+	struct ibv_send_wr *bad_send_wr;
 
 	if (!ai->ah)
 		abort();	/* Send without a route */
@@ -2681,25 +2682,25 @@ static int send_to(struct rdma_channel *c,
 	buf->c = c;	/* Change ownership to sending channel */
 	buf->w = NULL;
 
-	memset(&wr, 0, sizeof(wr));
-	wr.sg_list = &sge;
-	wr.num_sge = 1;
-	wr.opcode = imm_used ? IBV_WR_SEND_WITH_IMM: IBV_WR_SEND;
-	wr.send_flags = IBV_SEND_SIGNALED;
-	wr.wr_id = (uint64_t)buf;
-	wr.imm_data = imm;
+	memset(&buf->wr, 0, sizeof(struct ibv_send_wr));
+	buf->wr.sg_list = &buf->sge;
+	buf->wr.num_sge = 1;
+	buf->wr.opcode = imm_used ? IBV_WR_SEND_WITH_IMM: IBV_WR_SEND;
+	buf->wr.send_flags = IBV_SEND_SIGNALED;
+	buf->wr.wr_id = (uint64_t)buf;
+	buf->wr.imm_data = imm;
 
 	/* Get addr info  */
-	wr.wr.ud.ah = ai->ah;
-	wr.wr.ud.remote_qpn = ai->remote_qpn;
-	wr.wr.ud.remote_qkey = ai->remote_qkey;
+	buf->wr.wr.ud.ah = ai->ah;
+	buf->wr.wr.ud.remote_qpn = ai->remote_qpn;
+	buf->wr.wr.ud.remote_qkey = ai->remote_qkey;
 
-	sge.length = len;
-	sge.lkey = c->mr->lkey;
-	sge.addr = (uint64_t)addr;
+	buf->sge.length = len;
+	buf->sge.lkey = c->mr->lkey;
+	buf->sge.addr = (uint64_t)addr;
 
 	c->active_send_buffers++;
-	ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
+	ret = ibv_post_send(c->qp, &buf->wr, &bad_send_wr);
 	if (ret) {
 		errno = ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
@@ -2707,7 +2708,7 @@ static int send_to(struct rdma_channel *c,
 	} else {
 		if (log_packets > 1)
 			logg(LOG_NOTICE, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
-				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
+				buf->wr.wr.ud.remote_qpn, buf->wr.wr.ud.remote_qkey, len);
 	}
 
 	return ret;
