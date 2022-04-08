@@ -295,11 +295,13 @@ struct rdma_channel {
 	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
 	unsigned int active_send_buffers;	/* if the sender is on a different core than the receiver then we have a race condition for the buffers */
-	unsigned int cq_high;
-	unsigned int nr_cq;
-	unsigned int nr_receive;
+	unsigned int cq_high;		/* Largest number of CQs taken from the queue */
+	unsigned int nr_cq;		/* Number of items for the CQ */
+	unsigned int nr_send;		/* Maximum number of write buffers to use */
+	unsigned int nr_receive;	/* Number of read buffer to post */
 	unsigned stats[nr_stats];
 	enum channel_type type;
+	struct fifo send_queue;	/* Packets that were deferred for write */
 	bool listening;		/* rdmacm Channel is listening for connections */
 	const char *text;
 	struct rdma_unicast *ru;	/* Only rdmacm */
@@ -1123,9 +1125,8 @@ struct channel_info {
 	const char *suffix;
 	short core;
 	short alt_core;	/* If that core is not available what is the other choice */
-	bool fractional;	/* NR is a fraction of all available buffers */
 	uint32_t nr_cq;		/* NR of CQ entries to allocate allocate to this channel */
-	uint32_t nr_receive;	/* NR buffers for receive queue */
+	uint32_t nr_send;	/* NR buffers for receive queue */
 	uint32_t qkey;
 	uint16_t qp_type;
 	setup_callback *setup;
@@ -1133,14 +1134,14 @@ struct channel_info {
 	enum channel_type fallback;
 
 } channel_infos[nr_channel_types] = {
-	{ "multicast",	0, 0,	true,	10,	20,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
-	{ "ud",		1, 1,	true,	100,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
-	{ "qp1",	2, 1,	false, 	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
-	{ "raw",	3, 1,	false,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
-	{ "ibraw",	3, 1,	false,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
-	{ "packet",	-1, -1,	false,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
-	{ "incoming",	-1, -1,	false,	100,	50,	0,		0,			setup_incoming,	receive_main,	channel_err },
-	{ "error",	-1, -1,	false,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
+	{ "multicast",	0, 0,	10000,	1000,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
+	{ "ud",		1, 1,	500,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
+	{ "qp1",	2, 1,	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
+	{ "raw",	3, 1,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
+	{ "ibraw",	3, 1,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
+	{ "packet",	-1, -1,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
+	{ "incoming",	-1, -1,	100,	50,	0,		0,			setup_incoming,	receive_main,	channel_err },
+	{ "error",	-1, -1,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
 };
 
 /*
@@ -1274,30 +1275,15 @@ retry:
 	strcat(p, ci->suffix);
 	c->text = p;
 
-	if (ci->fractional) {
-		c->nr_cq = nr_buffers / ci->nr_cq;
-		c->nr_receive = nr_buffers / ci->nr_receive;
-	} else {
-		c->nr_cq = ci->nr_cq;
-		c->nr_receive = ci->nr_receive;
-	}
-
-	/*
-	 * For some reason there are limits on the size of the CQ that does not match the
-	 * values in device_attr.
-	 */
-	if (c->nr_cq > 10000) {
-		c->nr_cq = 10000;
-	}
-	if (c->nr_receive > 10000)
-		c->nr_receive = 10000;
-
+	c->nr_cq = ci->nr_cq;
+	c->nr_send = ci->nr_send;
+	c->nr_receive = ci->nr_cq - ci->nr_send;
+	fifo_init(&c->send_queue);
+	
 	if (ci->setup(c)) {
 		/* Channel setup ok */
 
 		if (coi) {
-			coi->cq[channel_nr] = c->cq;
-
 			if (channel_nr == 0) {
 				coi->numa_node = c->i->numa_node;
 			} else {
@@ -1862,8 +1848,8 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 	}
 
 	memset(&init_qp_attr_ex, 0, sizeof(init_qp_attr_ex));
-	init_qp_attr_ex.cap.max_send_wr = c->nr_cq;
-	init_qp_attr_ex.cap.max_recv_wr = c->nr_cq;
+	init_qp_attr_ex.cap.max_send_wr = c->nr_send;
+	init_qp_attr_ex.cap.max_recv_wr = c->nr_receive;
 	init_qp_attr_ex.cap.max_send_sge = 1;	/* Highly sensitive settings that can cause -EINVAL if too large (10 f.e.) */
 	init_qp_attr_ex.cap.max_recv_sge = 1;
 	init_qp_attr_ex.cap.max_inline_data = MAX_INLINE_DATA;
@@ -1960,8 +1946,8 @@ static bool setup_channel(struct rdma_channel *c)
 	}
 
 	memset(&init_qp_attr_ex, 0, sizeof(init_qp_attr_ex));
-	init_qp_attr_ex.cap.max_send_wr = c->nr_cq;
-	init_qp_attr_ex.cap.max_recv_wr = c->nr_cq;
+	init_qp_attr_ex.cap.max_send_wr = c->nr_send;
+	init_qp_attr_ex.cap.max_recv_wr = c->nr_receive;
 	init_qp_attr_ex.cap.max_send_sge = 1;	/* Highly sensitive settings that can cause -EINVAL if too large (10 f.e.) */
 	init_qp_attr_ex.cap.max_recv_sge = 1;
 	init_qp_attr_ex.cap.max_inline_data = MAX_INLINE_DATA;
