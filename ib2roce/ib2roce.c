@@ -107,7 +107,6 @@ static bool bridging = true;		/* Allow briding */
 static bool unicast = false;		/* Bridge unicast packets */
 static bool raw = false;		/* Use raw channels */
 static bool flow_steering = false;	/* Use flow steering to filter packets */
-static int log_packets = 0;		/* Show details on discarded packets */
 static bool testing = false;		/* Run some tests on startup */
 static bool latency = true;		/* Perform Latency tests and provide stats */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
@@ -119,6 +118,7 @@ static int irate = 0;			/* Software delay per message for Infiniband */
 static int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
 static int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 static int stat_interval = 10;		/* Interval for statistics */
+static int loglevel = LOG_INFO;		/* LOG level for console output */
 
 #define ONE_SECOND (1000000000UL)
 #define ONE_MILLISECOND (ONE_SECOND/1000UL)
@@ -164,7 +164,7 @@ static void lock(void)
 {
 	if (multithreaded) {
  		if (pthread_mutex_lock(&mutex))
- 			logg(LOG_ERR, "Mutex lock failed: %s\n", errname());
+ 			logg(LOG_CRIT, "Mutex lock failed: %s\n", errname());
 	}
 
 	if (locked)
@@ -181,7 +181,7 @@ static void unlock(void)
 	locked = false;
 	if (multithreaded) {
  		if (pthread_mutex_unlock(&mutex))
- 			logg(LOG_ERR, "Mutex unlock failed: %s\n", errname());
+ 			logg(LOG_CRIT, "Mutex unlock failed: %s\n", errname());
 
 	}
 }
@@ -502,7 +502,7 @@ static int find_rdma_devices(void)
 	list = ibv_get_device_list(&nr);
 
 	if (nr <= 0) {
-		logg(LOG_CRIT, "No RDMA devices present.\n");
+		logg(LOG_EMERG, "No RDMA devices present.\n");
 		return 1;
 	}
 
@@ -522,12 +522,12 @@ static int find_rdma_devices(void)
 
 		c = ibv_open_device(d);
 		if (!c) {
-			logg(LOG_CRIT, "Cannot open device %s\n", name);
+			logg(LOG_EMERG, "Cannot open device %s\n", name);
 			return 1;
 		}
 
 		if (ibv_query_device(c, &dattr)) {
-			logg(LOG_CRIT, "Cannot query device %s\n", name);
+			logg(LOG_EMERG, "Cannot query device %s\n", name);
 			return 1;
 		}
 
@@ -566,7 +566,7 @@ static int find_rdma_devices(void)
 			bridging = false;
 		else {
 			if (roce_name) {
-				logg(LOG_CRIT, "ROCE device %s not found\n", roce_name);
+				logg(LOG_EMERG, "ROCE device %s not found\n", roce_name);
 				return 1;
 			}
 			/* There is no ROCE device so we cannot bridge */
@@ -582,10 +582,10 @@ static int find_rdma_devices(void)
 		else {
 			if (ib_name)
 				/* User specd IB device */
-				logg(LOG_CRIT, "Infiniband device %s not found.\n", ib_name);
+				logg(LOG_EMERG, "Infiniband device %s not found.\n", ib_name);
 			else {
 				if (!bridging) {
-					logg(LOG_CRIT, "No RDMA Devices available.\n");
+					logg(LOG_EMERG, "No RDMA Devices available.\n");
 					return 1;
 				}
 				/* We only have a ROCE device but we cannot bridge */
@@ -845,7 +845,7 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 	ret = rdma_join_multicast_ex(id(i), &mc_attr, private);
 
 	if (ret) {
-		logg(LOG_ERR, "Failed to create join request %s:%d on %s. Error %s\n",
+		logg(LOG_CRIT, "Failed to create join request %s:%d on %s. Error %s\n",
 			inet_ntoa(addr), port,
 			interfaces_text[i],
 			errname());
@@ -865,7 +865,7 @@ static int _leave_mc(struct in_addr addr,struct sockaddr *si, enum interfaces i)
 
 	ret = rdma_leave_multicast(id(i), si);
 	if (ret) {
-		perror("Failure to leave");
+		logg(LOG_ERR, "Failure on rdma_leave_multicast on %s:%s\n", interfaces_text[i], inet_ntoa(addr));
 		return 1;
 	}
 	logg(LOG_NOTICE, "Leaving MC group %s on %s .\n",
@@ -1069,7 +1069,7 @@ static void init_buf(void)
 	unsigned long x = nr_buffers;
 
 	if (sizeof(struct buf) != BUFFER_SIZE) {
-		logg(LOG_CRIT, "struct buf is not 8k as required\n");
+		logg(LOG_EMERG, "struct buf is not 8k as required\n");
 		abort();
 	}
 
@@ -1082,12 +1082,12 @@ static void init_buf(void)
 	x *= BUFFER_SIZE;
 
 	if (x > 1000000000)
-		logg(LOG_WARNING, "Allocate %lu MByte of memory for %u buffers\n",
+		logg(LOG_INFO, "Allocate %lu MByte of memory for %u buffers\n",
 				x / 1024 / 1024, nr_buffers);
 
 	buffers = mmap(0, x, PROT_READ|PROT_WRITE, flags, -1, 0);
 	if (!buffers) {
-		logg(LOG_CRIT, "Cannot allocate %lu KB of memory required for %d buffers. Error %s\n",
+		logg(LOG_EMERG, "Cannot allocate %lu KB of memory required for %d buffers. Error %s\n",
 				x / 1024, nr_buffers, errname());
 		abort();
 	}
@@ -1228,6 +1228,9 @@ __attribute__ ((format (printf, 2, 3)))
 static void logg(int prio, const char *fmt, ...)
 {
 	va_list valist;
+
+	if ((prio & 0x7) > loglevel)
+		return;
 
 	va_start(valist, fmt);
 
@@ -1381,7 +1384,7 @@ static void *busyloop(void *private)
 				if (cqs > 0)
 					process_cqes(c, wc, cqs);
 				else {
-					logg(LOG_WARNING, "Busyloop: CQ polling failed with: %s on %s\n",
+					logg(LOG_ERR, "Busyloop: CQ polling failed with: %s on %s\n",
 						errname(), c->text);
 					current->state = core_err;
 					continue;
@@ -1406,7 +1409,7 @@ static void *busyloop(void *private)
 					current->sum_latency = tdiff;
 				}
 				if (tdiff > ONE_MILLISECOND)
-					logg(LOG_ERR, "Busyloop took longer than a millisecond %ld\n", tdiff);
+					logg(LOG_NOTICE, "Busyloop took longer than a millisecond %ld\n", tdiff);
 			}
 		}
 
@@ -1450,7 +1453,7 @@ static void start_cores(void)
 		get_core_logs(ci);
 
 		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + j)) {
-			logg(LOG_CRIT, "Pthread create failed: %s\n", errname());
+			logg(LOG_EMERG, "Pthread create failed: %s\n", errname());
 			abort();
 		}
 	}
@@ -1582,16 +1585,6 @@ static void dump_buf_grh(struct buf *buf)
 			payload_dump(buf->cur));
 }
 
-static char *pgm_dump(struct pgm_header *p)
-{
-	static char buf[250];
-
-	snprintf(buf, sizeof(buf), "PGM SPORT=%d DPORT=%d PGM-Type=%x Opt=%x Checksum=%x GSI=%s TSDU=%d\n",
-			p->pgm_sport, p->pgm_dport, p->pgm_type, p->pgm_options, p->pgm_checksum,
-			_hexbytes(p->pgm_gsi, 6), p->pgm_tsdu_length);
-	return buf;
-}
-
 /*
  * Handling of RDMA work requests
  */
@@ -1630,7 +1623,7 @@ static void post_receive(struct rdma_channel *c)
 		if (ret) {
 			free_buffer(buf);
 			errno = ret;
-			logg(LOG_WARNING, "ibv_post_recv failed: %s:%s\n", c->text, errname());
+			logg(LOG_ERR, "ibv_post_recv failed: %s:%s\n", c->text, errname());
 			return;
                 }
 		c->active_receive_buffers++;
@@ -2627,10 +2620,9 @@ static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct 
 	ret = ibv_post_send(c->qp, &wr, &bad_send_wr);
 	if (ret) {
 		errno = -ret;
-		logg(LOG_WARNING, "Failed to post inline send: %s on %s\n", errname(), c->text);
+		logg(LOG_ERR, "Failed to post inline send: %s on %s\n", errname(), c->text);
 	} else
-		if (log_packets > 1)
-			logg(LOG_NOTICE, "Inline Send to QPN=%d QKEY=%x %d bytes\n",
+		logg(LOG_INFO, "Inline Send to QPN=%d QKEY=%x %d bytes\n",
 				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
 
 	return ret;
@@ -2680,9 +2672,8 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
 		stop_channel(c);
 	} else
-		if (log_packets > 1)
-			logg(LOG_NOTICE, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
-				wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
+		logg(LOG_DEBUG, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
+			wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
 
 	return ret;
 }
@@ -2805,9 +2796,8 @@ static int send_to(struct rdma_channel *c,
 		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
 		put_buf(buf);
 	} else {
-		if (log_packets > 1)
-			logg(LOG_NOTICE, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
-				buf->wr.wr.ud.remote_qpn, buf->wr.wr.ud.remote_qkey, len);
+		logg(LOG_DEBUG, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
+			buf->wr.wr.ud.remote_qpn, buf->wr.wr.ud.remote_qkey, len);
 	}
 
 	return ret;
@@ -3220,9 +3210,8 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 		case PGM_RDATA:		/* Multicast downstream */
 			PULL(buf, data);
 
-			if (log_packets > 1)
-				logg(LOG_NOTICE, "%s: %cDATA SQN=%d TRAIL=%d\n", text,
-					header.pgm.pgm_type == PGM_RDATA ? 'R' : 'O', ntohl(data.data_sqn), ntohl(data.data_trail));
+			logg(LOG_DEBUG, "%s: %cDATA SQN=%d TRAIL=%d\n", text,
+				header.pgm.pgm_type == PGM_RDATA ? 'R' : 'O', ntohl(data.data_sqn), ntohl(data.data_trail));
 
 			sqn = ntohl(data.data_sqn);
 
@@ -3404,32 +3393,29 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 					break;
 				case PGM_OPT_FRAGMENT:
 					PULL(buf, fragment);
-//					if (log_packets > 1)
-						logg(LOG_NOTICE, "%s: OPT Fragment SQN=%x offset=%d len=%d\n", text,
+					logg(LOG_INFO, "%s: OPT Fragment SQN=%x offset=%d len=%d\n", text,
 							ntohl(fragment.opt_sqn), ntohl(fragment.opt_frag_off), ntohl(fragment.opt_frag_len));
 					break;
 				case PGM_OPT_NAK_LIST:
 					PULL(buf, nak_list);
-//					if (log_packets > 1)
-						logg(LOG_NOTICE, "%s: OPT NAK list #%d\n", text, (opt.opt_length - 1) /4 );
+					logg(LOG_INFO, "%s: OPT NAK list #%d\n", text, (opt.opt_length - 1) /4 );
 
 					break;
 				case PGM_OPT_JOIN:
 					PULL(buf, join);
-					if (log_packets > 1)
-						logg(LOG_NOTICE, "%s: OPT Join MIN SQN=%d\n",
+					logg(LOG_INFO, "%s: OPT Join MIN SQN=%d\n",
 								text, ntohl(join.opt_join_min));
 					break;
 				case PGM_OPT_REDIRECT:
 					PULL(buf, redirect);
 
-					logg(LOG_NOTICE, "%s: OPT Redirect NLA=%s\n", text, inet_ntoa(redirect.opt_nla));
+					logg(LOG_INFO, "%s: OPT Redirect NLA=%s\n", text, inet_ntoa(redirect.opt_nla));
 					break;
 
 				/* Not sure if these options are in use.  They are mostly not necessary (?) */
 				case PGM_OPT_SYN:
 					PULL(buf, syn);
-					logg(LOG_NOTICE, "%s: OPT SYN\n", text);
+					logg(LOG_INFO, "%s: OPT SYN\n", text);
 					break;
 				case PGM_OPT_FIN:
 					PULL(buf, fin);
@@ -3826,7 +3812,6 @@ static void receive_multicast(struct buf *buf)
 	struct ib_addr *dgid = (struct ib_addr *)&buf->grh.dgid.raw;
 	struct in_addr dest_addr;
 	int ret;
-	struct pgm_header pgm;
 
 	learn_source_address(buf);
 
@@ -3844,27 +3829,18 @@ static void receive_multicast(struct buf *buf)
 	dest_addr.s_addr = dgid->sib_addr32[3];
 	m = hash_lookup_mc(dest_addr);
 
-	if (log_packets > 1) {
-		memcpy(&pgm, buf->cur, sizeof(struct pgm_header));
-		logg(LOG_NOTICE, "From %s: MC=%s %s\n", c->text, inet_ntoa(dest_addr), pgm_dump(&pgm));
-	}
+	logg(LOG_DEBUG, "From %s: MC=%s\n", c->text, inet_ntoa(dest_addr));
 
 	if (!m) {
-		if (log_packets) {
-			logg(LOG_WARNING, "Discard Packet: Multicast group %s not found\n",
-				inet_ntoa(dest_addr));
-			dump_buf_grh(buf);
-		}
+		logg(LOG_INFO, "Discard Packet: Multicast group %s not found\n",
+			inet_ntoa(dest_addr));
 		goto invalid_packet;
 	}
 
 	if (m->interface[in].sendonly) {
 
-		if (log_packets) {
-			logg(LOG_WARNING, "Discard Packet: Received data from Sendonly MC group %s from %s\n",
-				m->text, c->text);
-			dump_buf_grh(buf);
-		}
+		logg(LOG_INFO, "Discard Packet: Received data from Sendonly MC group %s from %s\n",
+			m->text, c->text);
 		goto invalid_packet;
 	}
 
@@ -3873,19 +3849,15 @@ static void receive_multicast(struct buf *buf)
 		unsigned short signature = ntohs(*(unsigned short*)(mgid + 2));
 
 		if (mgid[0] != 0xff) {
-			if (log_packets) {
-				logg(LOG_WARNING, "Discard Packet: Not multicast. MGID=%s/%s\n",
+			logg(LOG_INFO, "Discard Packet: Not multicast. MGID=%s/%s\n",
 					inet6_ntoa(mgid), c->text);
-				dump_buf_grh(buf);
-			}
 			goto invalid_packet;
 		}
 
 		if (memcmp(&buf->grh.sgid, &c->i->gid, sizeof(union ibv_gid)) == 0) {
 
-			if (log_packets > 3)
-				logg(LOG_WARNING, "Discard Packet: Loopback from this host. MGID=%s/%s\n",
-					inet6_ntoa(mgid), c->text);
+			logg(LOG_DEBUG, "Discard Packet: Loopback from this host. MGID=%s/%s\n",
+				inet6_ntoa(mgid), c->text);
 
 			goto invalid_packet;
 		}
@@ -3895,20 +3867,16 @@ static void receive_multicast(struct buf *buf)
 //				if (m->mgid_mode->port)
 //					port = ntohs(*((unsigned short *)(mgid + 10)));
 			} else {
-				if (log_packets) {
-					logg(LOG_WARNING, "Discard Packet: MGID multicast signature(%x)  mismatch. MGID=%s\n",
-							signature, inet6_ntoa(mgid));
-					dump_buf_grh(buf);
-				}
+				logg(LOG_INFO, "Discard Packet: MGID multicast signature(%x)  mismatch. MGID=%s\n",
+						signature, inet6_ntoa(mgid));
 				goto invalid_packet;
 			}
 		}
 
 	} else { /* ROCE */
 		if (buf->ip.saddr == c->i->if_addr.sin_addr.s_addr) {
-			if (log_packets > 3)
-				logg(LOG_WARNING, "Discard Packet: Loopback from this host. %s/%s\n",
-					inet_ntoa(c->i->if_addr.sin_addr), c->text);
+			logg(LOG_DEBUG, "Discard Packet: Loopback from this host. %s/%s\n",
+				inet_ntoa(c->i->if_addr.sin_addr), c->text);
 			goto invalid_packet;
 		}
 	}
@@ -4021,8 +3989,7 @@ static void receive_main(struct buf *buf)
 		return;
 	}
 
-	if (log_packets)
-		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
+	logg(LOG_INFO, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
 
 	st(c, packets_invalid);
 }
@@ -4655,8 +4622,8 @@ static void receive_raw(struct buf *buf)
 	reason = "Only SIDR_REQ";
 
 discard:
-	if (reason[0] != '-' || log_packets > 1) 
-		logg(LOG_NOTICE, "Discard %s %s: %s Length=%u/prot=%u/pos=%lu\n",
+	if (reason[0] != '-') 
+		logg(LOG_INFO, "Discard %s %s: %s Length=%u/prot=%u/pos=%lu\n",
 			c->text, reason, header,
 			buf->w->byte_len, len, buf->cur - buf->raw);
 
@@ -4784,8 +4751,8 @@ static void receive_qp1(struct buf *buf)
 	reason = "Only SIDR_REQ/REP supporte on QP1";
 
 discard:
-	if (reason[0] != '-' || log_packets > 1) 
-		logg(LOG_NOTICE, "QP1: Discard %s %s: Length=%u/pos=%lu\n",
+	if (reason[0] != '-') 
+		logg(LOG_INFO, "QP1: Discard %s %s: Length=%u/pos=%lu\n",
 			buf->c->text, reason, w->byte_len, buf->cur - buf->raw);
 
 	st(buf->c, packets_invalid);
@@ -5772,6 +5739,7 @@ struct enable_option {
 { "irate", true,		NULL, &irate,		"1000", "0",	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
 { "rrate", true,		NULL, &rrate,		"1000", "0",	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
 { "latency", true,		&latency, NULL,		"on", "off",	"Monitor latency of busyloop and event processing and provide stats" },
+{ "loglevel", true,		NULL, &loglevel,	"5","3",	"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)" },
 { "iburst", true,		NULL, &max_iburst,	"100", "0",	"Infiniband: Exempt the first N packets from swrate (0=off)" },
 { "rburst", true,		NULL, &max_rburst,	"100", "0",	"ROCE: Exempt the first N packets from swrate (0=off)" },
 { "raw", false,			&raw, NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
@@ -5790,7 +5758,7 @@ static void enable(char *option, bool enable)
 
 	if (!option || !option[0]) {
 		printf("List of available options that can be enabled\n");
-		printf("Var\t\tType\tActive\tDescription\n");
+		printf("Setting\t\tType\tActive\tDescription\n");
 		printf("----------------------------------------------------------------\n");
 		for(i = 0; enable_table[i].id; i++) {
 			char state[10];
@@ -5820,7 +5788,7 @@ static void enable(char *option, bool enable)
 	}
 
 	for(i = 0; enable_table[i].id; i++) {
-		if (strcasecmp(name, enable_table[i].id) == 0)
+		if (strncasecmp(name, enable_table[i].id, strlen(name)) == 0)
 			goto got_it;
 	}
 	printf("Unknown option %s\n", name);
@@ -6014,7 +5982,7 @@ static void exec_opt(int op, char *optarg)
 			break;
 
 		case 'v':
-			log_packets++;
+			loglevel++;
 			break;
 
 		case 'x':
