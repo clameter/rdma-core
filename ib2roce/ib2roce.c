@@ -77,6 +77,7 @@
 #include "bth_hdr.h"
 #include "ib_hdrs.h"
 #include "fifo.h"
+#include "ring.h"
 #include "hash.h"
 #include "ibraw.h"
 #include "cma-hdr.h"
@@ -142,17 +143,7 @@ static uint64_t timestamp(void)
 thread_local uint64_t now;		/* We do not want contention on this one */
 
 __attribute__ ((format (printf, 2, 3)))
-static void logg(int prio, const char *fmt, ...)
-{
-	va_list valist;
-
-	va_start(valist, fmt);
-
-	if (background)
-		vsyslog(prio, fmt, valist);
-	else
-		vprintf(fmt, valist);
-}
+static void logg(int prio, const char *fmt, ...);
 
 static const char *inet6_ntoa(void *x)
 {
@@ -1201,6 +1192,7 @@ struct core_info {
 	long sum_latency;
 	unsigned max_latency;
 	unsigned min_latency;
+	struct ring ring;
 	/* Rarely used */
 	enum core_state state;
 	int numa_node;
@@ -1230,6 +1222,27 @@ static void show_core_config(void)
 		logg(LOG_NOTICE, "Core %d: NUMA=%d %s", i, ci->numa_node, b);
 
 	}
+}
+
+__attribute__ ((format (printf, 2, 3)))
+static void logg(int prio, const char *fmt, ...)
+{
+	va_list valist;
+
+	va_start(valist, fmt);
+
+	if (current) {
+		int n;
+		char b[150];
+		b[0] = '0' + prio;
+
+		n = vsnprintf(b + 1, 149, fmt, valist);
+		ring_put(&current->ring, b, n);
+
+	} else if (background)
+		vsyslog(prio, fmt, valist);
+	else
+		vprintf(fmt, valist);
 }
 
 
@@ -1404,6 +1417,22 @@ static void *busyloop(void *private)
 	return NULL;
 }
 
+static void get_core_logs(void *private)
+{
+	struct core_info *c = private;
+	char msg[251];
+	unsigned len;
+
+	while ((len = ring_get(&c->ring, msg, sizeof(msg) - 1))) {
+		int prio;
+
+		msg[len] = 0;
+		prio = msg[0] - '0';
+		logg(prio, "%s\n", msg + 1);
+	}
+	add_event(now + milliseconds(100), get_core_logs, c, "Get Core Logs");
+}
+
 /* Called after all the channels have been setup */
 static void start_cores(void)
 {
@@ -1416,6 +1445,9 @@ static void start_cores(void)
 
 		if (!ci->nr_channels)
 			continue;
+
+		ring_init(&ci->ring);
+		get_core_logs(ci);
 
 		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + j)) {
 			logg(LOG_CRIT, "Pthread create failed: %s\n", errname());
@@ -5975,6 +6007,7 @@ static void exec_opt(int op, char *optarg)
 			break;
 
 		case 't':
+			ring_test();
 			fifo_test();
 			hash_test();
 			testing = true;
