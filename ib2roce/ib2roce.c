@@ -252,7 +252,7 @@ enum interfaces { INFINIBAND, ROCE, NR_INTERFACES };
 
 static const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 
-enum stats { packets_received, packets_sent, packets_bridged, packets_invalid,
+enum stats { packets_received, packets_sent, packets_bridged, packets_invalid, packets_queued,
 		join_requests, join_failure, join_success,
 		leave_requests,
 		pgm_dup, pgm_odata, pgm_rdata, pgm_spm, pgm_nak, pgm_ack,
@@ -260,7 +260,7 @@ enum stats { packets_received, packets_sent, packets_bridged, packets_invalid,
 };
 
 static const char *stats_text[nr_stats] = {
-	"PacketsReceived", "PacketsSent", "PacketsBridged", "PacketsInvalid",
+	"PacketsReceived", "PacketsSent", "PacketsBridged", "PacketsInvalid", "PacketsQueued",
 	"JoinRequests", "JoinFailures", "JoinSuccess", "LeaveRequests",
 	"pgmdup", "pgm_odata", "pgm_rdata", "pgm_spm", "pgm_nak"
 };
@@ -1375,6 +1375,8 @@ static void *busyloop(void *private)
 				}
 			}
 		}
+
+
 		if (latency) {
 			tdiff = timestamp() - now;
 
@@ -2653,6 +2655,76 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 	return ret;
 }
 
+static int send_pending_buffers(struct rdma_channel *c)
+{
+	while (c->active_send_buffers < c->nr_send) {
+		struct buf *buf = fifo_get(&c->send_queue);
+		struct ibv_send_wr *bad_send_wr;
+		int ret;
+
+		if (!buf)
+			return true;
+
+		ret = ibv_post_send(c->qp, &buf->wr, &bad_send_wr);
+		if (ret) {
+			errno = ret;
+			logg(LOG_WARNING, "Failure to post send on %s: %s\n", c->text, errname());
+			put_buf(buf);
+		} else 
+			c->active_send_buffers++;
+	}
+	return false;
+}
+
+#define SEND_QUEUE_MAX 20
+
+struct rdma_channel *send_queue_table[SEND_QUEUE_MAX];
+
+static void send_queue_monitor(void *private)
+{
+	int i;
+	bool active;
+
+	for(i = 0; i < SEND_QUEUE_MAX; i++) {
+		struct rdma_channel *c = send_queue_table[i];
+
+		if (!c)
+			continue;
+
+		active = true;
+		if (send_pending_buffers(c)) {
+			/* We just drained the queue */
+			send_queue_table[i] = NULL;
+		}
+
+	}
+
+	add_event(now + milliseconds(active ? 10: 100),
+		send_queue_monitor, NULL, "SendQueue");
+
+}
+
+static void send_queue_add(struct rdma_channel *c)
+{
+	int free = -1;
+	int i;
+
+	for( i = 0; i < SEND_QUEUE_MAX; i++) {
+		struct rdma_channel *r = send_queue_table[i];
+
+		if (!r && free < 0)
+			free = i;
+		else if (r == c)
+			return;
+	}
+
+	if (free >= 0)
+		send_queue_table[free] = c;
+	else
+		/* No slots left for additional channels */
+		abort();
+}
+
 /*
  * Send data to a target. No metadata is used in struct buf. However, the buffer must be passed to the wc in order
  * to be able to free up resources when done.
@@ -2688,9 +2760,15 @@ static int send_to(struct rdma_channel *c,
 	buf->sge.lkey = c->mr->lkey;
 	buf->sge.addr = (uint64_t)addr;
 
+	if (!fifo_empty(&c->send_queue) || c->active_send_buffers >= c->nr_send)
+		goto queue;
+
 	c->active_send_buffers++;
 	ret = ibv_post_send(c->qp, &buf->wr, &bad_send_wr);
 	if (ret) {
+		if (errno == ENOMEM)
+			goto queue;
+
 		errno = ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
 		put_buf(buf);
@@ -2701,6 +2779,18 @@ static int send_to(struct rdma_channel *c,
 	}
 
 	return ret;
+
+queue:
+	if (fifo_put(&c->send_queue, buf) && !current)
+		/*
+		 * This moves the handling onto the high latency thread.
+		 * Adding the queue is only required when we add the first
+		 * buffer
+		 */
+		send_queue_add(c);
+
+	st(c, packets_queued);
+	return 0;
 }
 
 /* Send buffer based on state in struct buf. Unicast only */
@@ -6108,8 +6198,8 @@ static void disablecmd(char *parameters) {
 
 static void channel_stat(struct rdma_channel *c)
 {
-	printf(" Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%d \n", c->text,
-		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_cq, c->cq_high);
+	printf(" Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", c->text,
+		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_send, c->cq_high, fifo_items(&c->send_queue));
 
 	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))
 		printf(" pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n", 
@@ -6435,6 +6525,8 @@ int main(int argc, char **argv)
 
 
 	post_receive_buffers();
+
+	send_queue_monitor(NULL);
 
 	start_cores();
 
