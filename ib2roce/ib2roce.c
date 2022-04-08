@@ -1191,6 +1191,7 @@ nocore:
 }
 
 typedef void thread_callback(void *);
+thread_local struct core_info *current = NULL;
 
 struct core_info {
 	unsigned nr_channels;
@@ -1330,28 +1331,28 @@ static void arm_channels(struct core_info *core);
 static void *busyloop(void *private)
 {
 	struct rdma_channel *c;
-	struct core_info *core = private;
 	int cqs;
 	int i;
 	unsigned cpu;
 
 	struct ibv_wc wc[10];
 
+	current = private;
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
-	numa_run_on_node(core->numa_node);
+	numa_run_on_node(current->numa_node);
 
-	core->state = core_init;
+	current->state = core_init;
 
 	cpu = sched_getcpu();
-	logg(LOG_NOTICE, "Busyloop started (core %ld) on CPU %d NUMA=%d\n", core - core_infos, cpu, core->numa_node);
+	logg(LOG_NOTICE, "Busyloop started (core %ld) on CPU %d NUMA=%d\n", current - core_infos, cpu, current->numa_node);
 
 	/*
 	 * Initialize relevant data structures for this thread. These must be allocated
 	 * from the thread to ensure that they are thread local
 	 */
-	arm_channels(core);
+	arm_channels(current);
 
-	core->state = core_running;
+	current->state = core_running;
 
 	now = timestamp(); 	/* Will be done by run_events in the future */
 	do {
@@ -1359,17 +1360,17 @@ static void *busyloop(void *private)
 	
 		cpu_relax();
 		/* Scan CQs */
-		for(i = 0; i < core->nr_channels; i++) {
-			cqs = ibv_poll_cq(core->cq[i], 10, wc);
+		for(i = 0; i < current->nr_channels; i++) {
+			cqs = ibv_poll_cq(current->cq[i], 10, wc);
 			if (cqs) {
-				c = core->channel + i;
+				c = current->channel + i;
 
 				if (cqs > 0)
 					process_cqes(c, wc, cqs);
 				else {
 					logg(LOG_WARNING, "Busyloop: CQ polling failed with: %s on %s\n",
 						errname(), c->text);
-					core->state = core_err;
+					current->state = core_err;
 					continue;
 				}
 			}
@@ -1377,17 +1378,17 @@ static void *busyloop(void *private)
 		if (latency) {
 			tdiff = timestamp() - now;
 
-			if (tdiff > core->max_latency)
-				core->max_latency = tdiff;
-			if (tdiff < core->min_latency || !core->min_latency)
-				core->min_latency = tdiff;
+			if (tdiff > current->max_latency)
+				current->max_latency = tdiff;
+			if (tdiff < current->min_latency || !current->min_latency)
+				current->min_latency = tdiff;
 
 			if (tdiff > 5000) {
-				core->sum_latency += tdiff;
-				core->samples++;
-				if (core->samples > 1000000000) {
-					core->samples = 1;
-					core->sum_latency = tdiff;
+				current->sum_latency += tdiff;
+				current->samples++;
+				if (current->samples > 1000000000) {
+					current->samples = 1;
+					current->sum_latency = tdiff;
 				}
 				if (tdiff > ONE_MILLISECOND)
 					logg(LOG_ERR, "Busyloop took longer than a millisecond %ld\n", tdiff);
