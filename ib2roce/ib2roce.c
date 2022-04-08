@@ -1195,17 +1195,17 @@ thread_local struct core_info *current = NULL;
 
 struct core_info {
 	unsigned nr_channels;
-	struct ibv_cq *cq[MAX_CQS_PER_CORE];	/* The CQs to monitor */
-	enum core_state state;
-	int numa_node;
-	pthread_t thread;			/* Thread */
-	pthread_attr_t attr;
 	struct rdma_channel channel[MAX_CQS_PER_CORE];
 	/* Statistics */
 	unsigned samples;
 	long sum_latency;
 	unsigned max_latency;
 	unsigned min_latency;
+	/* Rarely used */
+	enum core_state state;
+	int numa_node;
+	pthread_t thread;			/* Thread */
+	pthread_attr_t attr;
 } core_infos[MAX_CORE];
 
 static void show_core_config(void)
@@ -1361,9 +1361,9 @@ static void *busyloop(void *private)
 		cpu_relax();
 		/* Scan CQs */
 		for(i = 0; i < current->nr_channels; i++) {
-			cqs = ibv_poll_cq(current->cq[i], 10, wc);
+			c = current->channel + i;
+			cqs = ibv_poll_cq(c->cq, 10, wc);
 			if (cqs) {
-				c = current->channel + i;
 
 				if (cqs > 0)
 					process_cqes(c, wc, cqs);
