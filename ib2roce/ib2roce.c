@@ -1396,14 +1396,16 @@ static void *busyloop(void *private)
 			if (tdiff < core->min_latency || !core->min_latency)
 				core->min_latency = tdiff;
 
-			core->sum_latency += tdiff;
-			if (core->samples > 1000000000) {
-				core->samples = 0;
-				core->sum_latency = tdiff;
+			if (tdiff > 5000) {
+				core->sum_latency += tdiff;
+				core->samples++;
+				if (core->samples > 1000000000) {
+					core->samples = 1;
+					core->sum_latency = tdiff;
+				}
+				if (tdiff > ONE_MILLISECOND)
+					logg(LOG_ERR, "Busyloop took longer than a millisecond %ld\n", tdiff);
 			}
-			core->samples ++;
-			if (tdiff > ONE_MILLISECOND)
-				logg(LOG_ERR, "Busyloop took longer than a millisecond %ld\n", tdiff);
 		}
 
 		run_events();
@@ -3864,7 +3866,7 @@ delayed_packet:
 	}
 
 	if (!mi->ai.ah)		/* After a join it may take awhile for the ah pointer to propagate */
- 		usleep(10);
+ 		sleep(1);
 	get_buf(buf);	/* Packet will not be freed on return from this function */
  
 	ret = send_to(ch_out, buf->cur, buf->end - buf->cur, &mi->ai, buf->imm_valid, buf->imm, buf);
@@ -6162,10 +6164,12 @@ static void channel_zap(struct rdma_channel *c)
 		for(unsigned i = 0; i < cores; i++) {
 			struct core_info *ci = core_infos + i;
 
-			ci->sum_latency = 0;
-			ci->samples = 0;
-			ci->max_latency = 0;
-			ci->min_latency = 0;
+			if (latency) {
+				ci->samples = 0;
+				ci->max_latency = 0;
+				ci->min_latency = 0;
+				ci->sum_latency = 0;
+			}
 
 		}
 	}
@@ -6198,8 +6202,8 @@ static void core_cmd(char *parameters) {
 
 				printf("Core %d: NUMA=%d", i, ci->numa_node);
 				if (latency)
-					printf(" Loops=%u Average=%luns, Max=%uns, Min=%uns\n",
-						ci->samples, ((ci->sum_latency / ci->samples) << 8),
+					printf(" Loops over 5usecs=%u Average=%luns, Max=%uns, Min=%uns\n",
+						ci->samples, ci->samples ? ci->sum_latency / ci->samples : 0,
 						ci->max_latency, ci->min_latency);
 
 				for (j = 0; j < ci->nr_channels; j++)
