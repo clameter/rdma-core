@@ -1777,7 +1777,8 @@ static void get_if_info(struct i2r_interface *i)
 	/* Read NUMA node of the IF */
 	snprintf(buffer, sizeof(buffer), "/sys/class/net/%s/device/numa_node", i->if_name);
 	fh = open(buffer, O_RDONLY);
-	read(fh, buffer, sizeof(buffer));
+	if (read(fh, buffer, sizeof(buffer)) < 0)
+		logg(LOG_CRIT, "Cannot read from sysfs. %s\n", errname());
 	close(fh);
 
 	i->numa_node = atoi(buffer);
@@ -5074,7 +5075,8 @@ static void status_write(void *private)
 	n+= show_endpoints(n+b);
 	
 	n += sprintf(n + b, "\n\n\n\n\n\n\n\n");
-	write(fd, b, n);
+	if (write(fd, b, n) < 0)
+		logg(LOG_ERR, "Status write failed with %s\n", errname());
 
 	if (update_requested) {
 		close(fd);
