@@ -112,7 +112,7 @@ static bool latency = true;		/* Perform Latency tests and provide stats */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
-static int rate = 0;			/* Limit sending rate */
+static int rate = IBV_RATE_20_GBPS;	/* Limit sending rate */
 static int rrate = 0;			/* Software delay per message for ROCE */
 static int irate = 0;			/* Software delay per message for Infiniband */
 static int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
@@ -5737,7 +5737,7 @@ struct enable_option {
 { "loopbackprev", false,	&loopback_blocking, NULL, "on", "off",	"Multicast loopback prevention of the NIC" },
 { "packetsocket", false,	&packet_socket, NULL,	"on", "off",	"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
 { "pgm", true,			NULL, (int *)&pgm_mode, "on", "off",	"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
-{ "hwrate", true,		NULL, &rate,		"2", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
+{ "hwrate", true,		NULL, &rate,		"6", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
 { "irate", true,		NULL, &irate,		"1000", "0",	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
 { "rrate", true,		NULL, &rrate,		"1000", "0",	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
 { "latency", true,		&latency, NULL,		"on", "off",	"Monitor latency of busyloop and event processing and provide stats" },
