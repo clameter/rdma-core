@@ -113,7 +113,7 @@ static bool latency = true;		/* Perform Latency tests and provide stats */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
-static int rate = IBV_RATE_20_GBPS;	/* Limit sending rate */
+static int rate = IBV_RATE_10_GBPS;	/* Limit sending rate */
 static int rrate = 0;			/* Software delay per message for ROCE */
 static int irate = 0;			/* Software delay per message for Infiniband */
 static int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
@@ -2394,6 +2394,9 @@ static void handle_rdma_event(void *private)
 
 				a->remote_qpn = param->qp_num;
 				a->remote_qkey = param->qkey;
+				if (rate)
+					param->ah_attr.static_rate = rate;
+
 				a->ah = ibv_create_ah(i->multicast->pd, &param->ah_attr);
 				if (!a->ah) {
 					logg(LOG_ERR, "Failed to create AH for Multicast group %s on %s \n",
