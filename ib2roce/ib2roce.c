@@ -72,6 +72,7 @@
 #include <infiniband/mad.h>
 #include <infiniband/umad_cm.h>
 #include <infiniband/umad_str.h>
+#include <execinfo.h>
 #include "packet.h"
 #include "errno.h"
 #include "bth_hdr.h"
@@ -152,6 +153,10 @@ static const char *inet6_ntoa(void *x)
 	return inet_ntop(AF_INET6, x, buf, INET6_ADDRSTRLEN);
 }
 
+__attribute__ ((format (printf, 1, 2)))
+static void panic(const char *fmt, ...);
+
+
 static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;		/* Generic serialization mutex */
 
 /* Is the lock taken */
@@ -168,7 +173,7 @@ static void lock(void)
 	}
 
 	if (locked)
-		abort();
+	       	panic("lock() called when already locked\n");
 
 	locked = true;
 }
@@ -176,12 +181,12 @@ static void lock(void)
 static void unlock(void)
 {
 	if (!locked)
-		abort();
+		panic("unlock() called when not locked\n");
 
 	locked = false;
 	if (multithreaded) {
  		if (pthread_mutex_unlock(&mutex))
- 			logg(LOG_CRIT, "Mutex unlock failed: %s\n", errname());
+ 			panic("Mutex unlock failed: %s\n", errname());
 
 	}
 }
@@ -987,7 +992,7 @@ static struct buf *alloc_buffer(struct rdma_channel *c)
 
 	for(uint8_t *q = buf->raw; q < buf->raw + DATA_SIZE; q++)
 		if (*q)
-			abort();
+			panic("buffer content not zeroed\n");
 #endif
 	return buf;
 }
@@ -1008,7 +1013,8 @@ static void free_buffer(struct buf *buf)
 static void __get_buf(struct buf *buf)
 {
 	if (!buf->refcount)
-		abort();
+		panic("Buf refcount zero on __get_buf()\n");
+
 	buf->refcount++;
 }
 
@@ -1029,8 +1035,7 @@ static void get_buf(struct buf *buf)
 	if (multithreaded) {
 		x = atomic_fetch_add(&buf->refcount, 1);
 		if (!x)
-			/* Incrementing the refcount from 0 ??? */
- 			abort();
+			panic("Buf refcount zero in get_buf()\n");
 	} else
 		__get_buf(buf);
 }
@@ -1068,10 +1073,8 @@ static void init_buf(void)
 	unsigned flags;
 	unsigned long x = nr_buffers;
 
-	if (sizeof(struct buf) != BUFFER_SIZE) {
-		logg(LOG_EMERG, "struct buf is not 8k as required\n");
-		abort();
-	}
+	if (sizeof(struct buf) != BUFFER_SIZE)
+		panic("struct buf is not 8k as required\n");
 
 	numa_run_on_node(i2r[INFINIBAND].context ? i2r[INFINIBAND].numa_node : i2r[ROCE].numa_node);
 
@@ -1086,11 +1089,9 @@ static void init_buf(void)
 				x / 1024 / 1024, nr_buffers);
 
 	buffers = mmap(0, x, PROT_READ|PROT_WRITE, flags, -1, 0);
-	if (!buffers) {
-		logg(LOG_EMERG, "Cannot allocate %lu KB of memory required for %d buffers. Error %s\n",
+	if (!buffers)
+		panic("Cannot allocate %lu KB of memory required for %d buffers. Error %s\n",
 				x / 1024, nr_buffers, errname());
-		abort();
-	}
 
 	numa_run_on_node(-1);
 
@@ -1248,6 +1249,30 @@ static void logg(int prio, const char *fmt, ...)
 		vprintf(fmt, valist);
 }
 
+#define NR_FRAMES 100
+__attribute__ ((format (printf, 1, 2)))
+static void panic(const char *fmt, ...)
+{
+	va_list valist;
+	void *frames[NR_FRAMES];
+	int nrframes;
+	int j;
+	char **strings;
+
+	printf("IB2ROCE Panic: ");
+	va_start(valist, fmt);
+	vprintf(fmt, valist);
+	
+	nrframes = backtrace(frames, NR_FRAMES);
+	strings = backtrace_symbols(frames, nrframes);
+
+	for( j= 0; j < nrframes; j++) {
+		printf("%d. %s\n", j, strings[j]);
+	}
+	free(strings);
+	abort();
+}
+
 
 static struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type)
 {
@@ -1270,10 +1295,9 @@ retry:
 		c = coi->channel + channel_nr;
 		memset(c, 0, sizeof(struct rdma_channel));
 		coi->nr_channels++;
-		if (coi->nr_channels > MAX_CQS_PER_CORE) {
-			logg(LOG_CRIT, "Too many RDMA channels per core. Max = %d\n", MAX_CQS_PER_CORE);
-			abort();
-		}
+		if (coi->nr_channels > MAX_CQS_PER_CORE)
+			panic("Too many RDMA channels per core. Max = %d\n", MAX_CQS_PER_CORE);
+
 		c->core = coi;
 
 	} else
@@ -1452,10 +1476,8 @@ static void start_cores(void)
 		ring_init(&ci->ring);
 		get_core_logs(ci);
 
-		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + j)) {
-			logg(LOG_EMERG, "Pthread create failed: %s\n", errname());
-			abort();
-		}
+		if (pthread_create(&ci->thread, &ci->attr, &busyloop, core_infos + j))
+			panic("Pthread create failed: %s\n", errname());
 	}
 }
 
@@ -1471,10 +1493,8 @@ static void stop_cores(void)
 
 		pthread_cancel(ci->thread);
 
-		if (pthread_join(ci->thread, NULL)) {
-			logg(LOG_CRIT, "pthread_join failed: %s\n", errname());
-			abort();
-		}
+		if (pthread_join(ci->thread, NULL))
+			panic("pthread_join failed: %s\n", errname());
 	}
 
 	multithreaded = false;
@@ -1734,11 +1754,8 @@ static void get_if_info(struct i2r_interface *i)
 				if (ioctl(fh, SIOCGIFINDEX, &ifr) == 0)
 					logg(LOG_WARNING, "Assuming ib1 is the IP device name for %s\n",
 						i->rdma_name);
-				else {
-					logg(LOG_CRIT, "Cannot determine device name for %s\n",
-						i->rdma_name);
-					abort();
-				}
+				else
+					panic("Cannot determine device name for %s\n", i->rdma_name);
 			}
 			strcpy(i->if_name, ifr.ifr_name);
 		} else
@@ -1785,10 +1802,8 @@ static void get_if_info(struct i2r_interface *i)
 	return;
 
 err:
-	logg(LOG_CRIT, "Cannot determine IP interface setup for %s %s : %s\n",
+	panic("Cannot determine IP interface setup for %s %s : %s\n",
 		     i->rdma_name, reason, errname());
-
-	abort();
 }
 
 static void start_channel(struct rdma_channel *c)
@@ -1860,11 +1875,9 @@ static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 	 */
 	if (!c->core) {
 		c->comp_events = ibv_create_comp_channel(c->id->verbs);
-		if (!c->comp_events) {
-			logg(LOG_CRIT, "ibv_create_comp_channel failed for %s : %s.\n",
+		if (!c->comp_events)
+			panic("ibv_create_comp_channel failed for %s : %s.\n",
 				c->text, errname());
-			abort();
-		}
 		register_callback(handle_comp_event, c->comp_events->fd, c->comp_events);
 	} else
 		c->comp_events = NULL;
@@ -2144,32 +2157,26 @@ static void setup_interface(enum interfaces in)
 	/* Create RDMA elements that are interface wide */
 
 	i->rdma_events = rdma_create_event_channel();
-	if (!i->rdma_events) {
-		logg(LOG_CRIT, "rdma_create_event_channel() for %s failed (%s).\n",
+	if (!i->rdma_events)
+		panic("rdma_create_event_channel() for %s failed (%s).\n",
 			i->text, errname());
-		abort();
-	}
+
 	register_callback(handle_rdma_event, i->rdma_events->fd, i);
 
 	i->pd = ibv_alloc_pd(i->context);
-	if (!i->pd) {
-		logg(LOG_CRIT, "ibv_alloc_pd failed for %s.\n", i->text);
-		abort();
-	}
+	if (!i->pd)
+       		panic("ibv_alloc_pd failed for %s.\n", i->text);
 
 	i->comp_events = ibv_create_comp_channel(i->context);
-	if (!i->comp_events) {
-		logg(LOG_CRIT, "ibv_create_comp_channel failed for %s : %s.\n",
+	if (!i->comp_events)
+       		panic("ibv_create_comp_channel failed for %s : %s.\n",
 			i->text, errname());
-		abort();
-	}
+
 	register_callback(handle_comp_event, i->comp_events->fd, i->comp_events);
 
 	i->mr = ibv_reg_mr(i->pd, buffers, nr_buffers * sizeof(struct buf), IBV_ACCESS_LOCAL_WRITE);
-	if (!i->mr) {
-		logg(LOG_CRIT, "ibv_reg_mr failed for %s:%s.\n", i->text, errname());
-		abort();
-	}
+	if (!i->mr)
+		panic("ibv_reg_mr failed for %s:%s.\n", i->text, errname());
 
 	i->multicast = new_rdma_channel(i, channel_rdmacm);
 
@@ -2312,7 +2319,7 @@ static void resolve_end(struct rdma_unicast *ru)
 	struct i2r_interface *i = ru->i;
 
 	if (ru != fifo_get(&i->resolve_queue))
-		abort();
+		panic("Nothing in fifo\n");
 
 	if (ru->state == UC_CONNECTED) {
 		struct buf *buf;
@@ -2745,8 +2752,7 @@ static void send_queue_add(struct rdma_channel *c)
 	if (free >= 0)
 		send_queue_table[free] = c;
 	else
-		/* No slots left for additional channels */
-		abort();
+		panic("No slots left in send_queue\n");
 }
 
 /*
@@ -2762,7 +2768,7 @@ static int send_to(struct rdma_channel *c,
 	struct ibv_send_wr *bad_send_wr;
 
 	if (!ai->ah)
-		abort();	/* Send without a route */
+		panic("Send without a route to a destination\n");
 
 	buf->c = c;	/* Change ownership to sending channel */
 	buf->w = NULL;
@@ -3285,7 +3291,7 @@ static bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 			/* This is either the next data or missing data */
 
 			if (!add_record(buf, &tsi, sqn, buf->cur, tdsu))
-				abort();
+				panic("PGM: SQN exists\n");
 
 			if (sqn == s->last_seq + 1) {
 				/* The next packet that we need ! */
@@ -3532,13 +3538,13 @@ static struct endpoint *at_to_ep(struct i2r_interface *i, struct ibv_ah_attr *at
 	memcpy(&addr, (void *)&at->grh.dgid + 12, sizeof(struct in_addr));
 
 	if (!at->dlid && !addr.s_addr)
-		abort();		/* Nothing given that could be resolved */
+		panic("Nothing to resolve\n");
 
 redo:
 	if (at->dlid) {
 
 		if (i == i2r + ROCE)
-			abort();
+			panic("DLID with ROCE\n");
 
 		ep = hash_find(i->ep, &at->dlid);
 		if (ep) {
@@ -3611,7 +3617,7 @@ redo:
 		at->src_path_bits = be16toh(id->route.path_rec->slid) & ((1 << i->port_attr.lmc) - 1);
 		at->static_rate = id->route.path_rec->rate;
 		if (at->port_num != id->port_num)
-			abort();
+			panic("Port number mismatch\n");
 
 		rdma_destroy_id(id);
 
@@ -3639,7 +3645,7 @@ redo:
 
 	ep = calloc(1, sizeof(struct endpoint));
 	if (!ep)
-		abort();
+		panic("calloc alloc failured\n");
 
 	ep->i = i;
 	ep->addr = addr;
@@ -4158,13 +4164,13 @@ static struct hash *sidrs;
 static void sidr_state_init(void)
 {
 	if (sizeof(struct umad_hdr) != 3 * 8)
-		abort();
+		panic("umad_hdr size mismatch\n");
 
 	if (sizeof(struct sidr_req) != 2 * 8)
-		abort();
+		panic("sidr_req size mismatch\n");
 
 	if (sizeof(struct sidr_rep) != 3* 8 + 72 + 136)
-		abort();
+		panic("sidr_rep size mismatch\n");
 
 	sidrs = hash_create(offsetof(struct sidr_state, request_id), sizeof(uint32_t));
 }
@@ -4354,7 +4360,7 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos, struct umad_hdr *um
 	unlock();
 
 	if (ss->dest != buf->source_ep)
-		abort();
+		panic("dest not the buf destination\n");
 
 	lock();
 
@@ -4852,15 +4858,11 @@ static void handle_comp_event(void *private)
 	}
 
 	ibv_ack_cq_events(cq, 1);
-	if (ibv_req_notify_cq(cq, 0)) {
-		logg(LOG_ERR, "ibv_req_notify_cq: Failed\n");
-		abort();
-	}
+	if (ibv_req_notify_cq(cq, 0))
+		panic("ibv_req_notify_cq: Failed\n");
 
-	if (!c || c->cq != cq) {
-		logg(LOG_ERR, "Invalid channel in handle_comp_event() %p\n", c);
-		return;
-	}
+	if (!c || c->cq != cq)
+       		panic("Invalid channel in handle_comp_event() %p\n", c);
 
 	/* Retrieve completion events and process incoming data */
 	cqs = ibv_poll_cq(cq, 10, wc);
@@ -5500,7 +5502,7 @@ static void register_callback(void (*callback)(void *), int fd, void *private)
 	struct pollfd e = { fd, POLLIN, 0};
 
 	if (poll_items == MAX_POLL_ITEMS)
-		abort();
+		panic("Max poll items reached\n");
 
 	poll_callback[poll_items] = callback;
 	pfd[poll_items] = e;
@@ -5690,27 +5692,19 @@ static void pid_open(void)
 
 	pid_fd = open("ib2roce.pid", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 
-	if (pid_fd < 0) {
-		logg(LOG_CRIT, "Cannot open pidfile. Error %s\n", errname());
-		abort();
-	}
+	if (pid_fd < 0)
+		panic("Cannot open pidfile. Error %s\n", errname());
 
-	if (fcntl(pid_fd, F_SETLK, &fl) < 0) {
-		logg(LOG_CRIT, "ib2roce already running.\n");
-		abort();
-	}
+	if (fcntl(pid_fd, F_SETLK, &fl) < 0)
+       		panic("ib2roce already running.\n");
 
-	if (ftruncate(pid_fd, 0) < 0) {
-		logg(LOG_CRIT, "Cannot truncate pidfile. Error %s\n", errname());
-		abort();
-	}
+	if (ftruncate(pid_fd, 0) < 0)
+       		panic("Cannot truncate pidfile. Error %s\n", errname());
 
 	n = snprintf(buf, sizeof(buf), "%ld", (long) getpid());
 
-	if (write(pid_fd, buf, n) != n) {
-		logg(LOG_CRIT, "Cannot write pidfile. Error %s\n", errname());
-		abort();
-	}
+	if (write(pid_fd, buf, n) != n)
+       		panic("Cannot write pidfile. Error %s\n", errname());
 }
 
 static void pid_close(void)
@@ -5827,7 +5821,7 @@ got_it:
 	if (eo->int_flag)
 		*eo->int_flag = atoi(value);
 	else
-		abort();
+		panic("object type unknown\n");
 }
 
 struct option opts[] = {
@@ -5934,7 +5928,7 @@ static void exec_opt(int op, char *optarg)
 		case 'k':
 			cores = atoi(optarg);
 			if (cores > 8)
-				abort();
+				panic("More than 8 cores\n");
 			break;
 
 		case 'l':
