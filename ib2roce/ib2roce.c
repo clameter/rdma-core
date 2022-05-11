@@ -382,6 +382,7 @@ static struct i2r_interface {
 	struct hash *ep;			/* Hash of all endpoints reachable here */
 	struct hash *ip_to_ep;			/* Hash based on IP address */
 	unsigned mc_rate_limited;		/* Number of MC groups where rate limiting is ongoing */
+	unsigned long out_of_buffer;		/* Last state of /sys/class/infiniband .../overrun */
 
 	/* PGM information:  Only updated from the multicast channel core */
 	unsigned nr_tsi;
@@ -2090,6 +2091,31 @@ static bool setup_raw(struct rdma_channel *c)
 	return true;
 }
 
+/* Check overrun counter */
+static void check_out_of_buffer(void *private)
+{
+	struct i2r_interface *i = private;
+	int fh;
+	char buffer[100];
+	unsigned long out_of_buffer;
+
+	snprintf(buffer, sizeof(buffer), "/sys/class/infiniband/%s/ports/%d/hw_counters/out_of_buffer", i->rdma_name, i->port);
+	fh = open(buffer, O_RDONLY);
+	if (read(fh, buffer, sizeof(buffer)) < 0)
+		logg(LOG_CRIT, "Cannot read out_of_buffer counter from sysfs. %s\n", errname());
+	close(fh);
+
+	out_of_buffer = atol(buffer);
+	if (i->out_of_buffer != out_of_buffer) {
+		if (i->out_of_buffer)
+			logg(LOG_ERR, "Out of Buffer on %s. %ld packets dropped (was %ld, now %ld)\n",
+					i->text, out_of_buffer - i->out_of_buffer, i->out_of_buffer, out_of_buffer);
+
+		i->out_of_buffer = out_of_buffer;
+	}
+	add_event(now + ONE_SECOND, check_out_of_buffer, i, "Check out of buffers\n");
+}
+
 static void setup_interface(enum interfaces in)
 {
 	struct i2r_interface *i = i2r + in;
@@ -2201,6 +2227,7 @@ static void setup_interface(enum interfaces in)
 		}
 	}
 
+	check_out_of_buffer(i);
 	numa_run_on_node(-1);
 
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u NUMA=%d.\n",
