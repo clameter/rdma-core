@@ -635,6 +635,7 @@ struct mc_interface {
 	uint64_t last_delayed;		/* Last a delayed packet was scheduled */
 	unsigned pending;		/* How many packets are waiting to be sent */
 	unsigned burst;			/* # of packets encountered with pacing below packet_time */
+	unsigned long delayed;		/* Packets delayed */
 };
 
 static struct mc {
@@ -3835,17 +3836,15 @@ static void delayed_send(void *private)
 	struct mc_interface *mi = buf->mi;
 	int ret;
 
+	mi->delayed++;
 	mi->pending--;
 	if (!mi->pending) {
 		/*
 		 * The last pending packet so we are off rate limiting.
-		 * leaving mi->burst set so that we will immediately go back to
-		 * rate limiting should the next packet be paced below mininum again.
 		 */
 		c->i->mc_rate_limited--;
 		mi->burst = 0;
 		mi->last_sent = timestamp();
-		logg(LOG_NOTICE, "%s: End of enforcing sending rate\n", c->i->text);
 	}
 
 	ret = send_to(c, buf->cur, buf->end - buf->cur, &mi->ai, buf->imm_valid, buf->imm, buf);
@@ -3980,9 +3979,6 @@ delayed_packet:
 			/* Packet spacing too tight */
 			mi->burst++;
 			if (mi->burst > mi->max_burst) {
-				logg(LOG_NOTICE, "%s: Burst too long. Rate limiting on %s\n", c->i->text, m->text);
-
-				/* Burst going on too long. Packet must be delayed */
 				c->i->mc_rate_limited++;
 				mi->last_delayed = mi->last_sent + mi->packet_time;
 				goto delayed_packet;
@@ -5823,6 +5819,9 @@ static void enable(char *option, bool enable)
 	}
 
 	r = index(option, '=');
+	if (!r)
+		r = index(option, ' ');
+
 	if (!r) {
 		name = option; 
 	} else {
@@ -6217,15 +6216,16 @@ static void multicast_cmd(char *parameters)
 	for(m = mcs; m < mcs + nr_mc; m++) {
 
 		for(enum interfaces in = INFINIBAND; in <= ROCE; in++) {
-			printf("%s %s %s %s %s packet_time=%d max_burst=%d last_sent=%lu last_delayed=%lu pending=%u burst=%d\n",
-				interfaces_text[in], inet_ntoa(m->addr),
+			printf("%s %s %s %s %s packet_time=%dns, max_burst=%d packets, delayed=%ld packets, last_sent=%ldms ago, last_delayed=%ldms ago, pending=%u packets, burst=%d\n",
+				interfaces_text[in], m->text,
 			mc_text[m->interface[in].status],
 			m->interface[in].sendonly ? "Sendonly " : "",
 			in == INFINIBAND ? m->mgid_mode->id : "",
 			m->interface[in].packet_time,
 			m->interface[in].max_burst,
-			m->interface[in].last_sent,
-			m->interface[in].last_delayed,
+			m->interface[in].delayed,
+			m->interface[in].last_sent ? (now - m->interface[in].last_sent / ONE_MILLISECOND) : -999,
+			m->interface[in].last_delayed ? (now - m->interface[in].last_delayed) / ONE_MILLISECOND : -999,
 			m->interface[INFINIBAND].pending,
 			m->interface[in].burst);
 		}
