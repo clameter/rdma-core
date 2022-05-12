@@ -10,6 +10,9 @@ rdma_executable(ib2roce
   errno.c
   hash.c
   )
+
+add_link_options("--export-dynamic")
+
 target_link_libraries(ib2roce LINK_PRIVATE
   ibverbs
   ibumad

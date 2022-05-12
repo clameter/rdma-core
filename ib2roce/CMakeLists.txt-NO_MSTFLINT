@@ -18,6 +18,9 @@ target_link_libraries(ib2roce LINK_PRIVATE
   ${CMAKE_DL_LIBS}
   numa
   )
+
+add_link_options("--export-dynamic")
+
 rdma_man_pages(
   man/ib2roce.1
   man/ib2roce.7
