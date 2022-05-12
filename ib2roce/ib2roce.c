@@ -83,7 +83,7 @@
 #include "ibraw.h"
 #include "cma-hdr.h"
 
-#define VERSION "2022.0406"
+#define VERSION "2022.0512"
 
 #define MIN(a,b) (((a)<(b))?(a):(b))
 
@@ -2397,6 +2397,32 @@ static void resolve(struct rdma_unicast *ru)
 		resolve_start(ru);
 }
 
+static void set_rate(struct mc *m)
+{
+	if (irate) {
+			m->interface[INFINIBAND].packet_time = ONE_SECOND / irate;
+			m->interface[INFINIBAND].max_burst = max_iburst;
+	}
+
+	if (rrate) {
+			m->interface[ROCE].packet_time = ONE_SECOND / rrate;
+			m->interface[ROCE].max_burst = max_rburst;
+	}
+
+}
+
+static void set_rates(void)
+{
+	int j;
+
+	for (j = 0; j < nr_mc; j++) {
+		struct mc *m = mcs + j;
+
+		set_rate(m);
+		set_rate(m);
+	}
+}
+
 static void handle_rdma_event(void *private)
 {
 	struct i2r_interface *i = private;
@@ -2443,17 +2469,8 @@ static void handle_rdma_event(void *private)
 					param->ah_attr.sl,
 					i->text);
 				st(i->multicast, join_success);
-	
-				if (irate) {
-					m->interface[INFINIBAND].packet_time = ONE_SECOND / irate;
-					m->interface[INFINIBAND].max_burst = max_iburst;
-				}
 
-				if (rrate) {
-					m->interface[ROCE].packet_time = ONE_SECOND / rrate;
-					m->interface[ROCE].max_burst = max_rburst;
-				}
-
+				set_rate(m);
 			}
 			break;
 
@@ -5751,27 +5768,28 @@ struct enable_option {
 	int *int_flag;
 	const char *on_value;
 	const char *off_value;
+	void (*callback)(void);
 	const char *description;
 } enable_table[] = {
-{ "buffers", false,		NULL, &nr_buffers,	"1000000", "10000",	"Number of 8k buffers allocated for packet processing" },
-{ "bridging", false,		&bridging, NULL,	"on", "off",	"Forwarding of packets between interfaces" },
-{ "drop", true,	NULL,		&drop_packets,		"100", "0",	"Drop multicast packets. The value is the number of multicast packets to send before dropping" },
-{ "flow", false,		&flow_steering, NULL,	"on", "off",	"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
-{ "huge", false,		&huge, NULL,		"on", "off",	"Enable the use of Huge memory for the packet pool" }, 
-{ "loopbackprev", false,	&loopback_blocking, NULL, "on", "off",	"Multicast loopback prevention of the NIC" },
-{ "packetsocket", false,	&packet_socket, NULL,	"on", "off",	"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
-{ "pgm", true,			NULL, (int *)&pgm_mode, "on", "off",	"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
-{ "hwrate", true,		NULL, &rate,		"6", "0",	"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
-{ "irate", true,		NULL, &irate,		"1000", "0",	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
-{ "rrate", true,		NULL, &rrate,		"1000", "0",	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
-{ "latency", true,		&latency, NULL,		"on", "off",	"Monitor latency of busyloop and event processing and provide stats" },
-{ "loglevel", true,		NULL, &loglevel,	"5","3",	"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)" },
-{ "iburst", true,		NULL, &max_iburst,	"100", "0",	"Infiniband: Exempt the first N packets from swrate (0=off)" },
-{ "rburst", true,		NULL, &max_rburst,	"100", "0",	"ROCE: Exempt the first N packets from swrate (0=off)" },
-{ "raw", false,			&raw, NULL,		"on", "off",	"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
-{ "statint", true,		NULL, &stat_interval,	"60", "1",	"Sampling interval to calculate pps values" },
-{ "unicast", false,		&unicast, NULL,		"on", "off",	"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
-{ NULL, false, NULL, NULL, NULL, NULL, NULL }
+{ "buffers", false,		NULL, &nr_buffers,	"1000000", "10000", NULL,	"Number of 8k buffers allocated for packet processing" },
+{ "bridging", false,		&bridging, NULL,	"on", "off",	NULL, 		"Forwarding of packets between interfaces" },
+{ "drop", true,	NULL,		&drop_packets,		"100", "0",	NULL,		"Drop multicast packets. The value is the number of multicast packets to send before dropping" },
+{ "flow", false,		&flow_steering, NULL,	"on", "off",	NULL,		"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{ "huge", false,		&huge, NULL,		"on", "off",	NULL,		"Enable the use of Huge memory for the packet pool" }, 
+{ "loopbackprev", false,	&loopback_blocking, NULL, "on", "off",	NULL,		"Multicast loopback prevention of the NIC" },
+{ "packetsocket", false,	&packet_socket, NULL,	"on", "off",	NULL,		"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
+{ "pgm", true,			NULL, (int *)&pgm_mode, "on", "off",	NULL,		"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
+{ "hwrate", true,		NULL, &rate,		"6", "0",	NULL,		"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
+{ "irate", true,		NULL, &irate,		"1000", "0",	set_rates,	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "rrate", true,		NULL, &rrate,		"1000", "0",	set_rates,	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "latency", true,		&latency, NULL,		"on", "off",	NULL,		"Monitor latency of busyloop and event processing and provide stats" },
+{ "loglevel", true,		NULL, &loglevel,	"5","3",	NULL,		"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)" },
+{ "iburst", true,		NULL, &max_iburst,	"100", "0",	set_rates,	"Infiniband: Exempt the first N packets from swrate (0=off)" },
+{ "rburst", true,		NULL, &max_rburst,	"100", "0",	set_rates,	"ROCE: Exempt the first N packets from swrate (0=off)" },
+{ "raw", false,			&raw, NULL,		"on", "off",	NULL,		"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
+{ "statint", true,		NULL, &stat_interval,	"60", "1",	NULL,		"Sampling interval to calculate pps values" },
+{ "unicast", false,		&unicast, NULL,		"on", "off",	NULL,		"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+{ NULL, false, NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
 static void enable(char *option, bool enable)
@@ -5852,6 +5870,9 @@ got_it:
 		*eo->int_flag = atoi(value);
 	else
 		panic("object type unknown\n");
+
+	if (eo->callback)
+		eo->callback();
 }
 
 struct option opts[] = {
@@ -6020,7 +6041,7 @@ static void exec_opt(int op, char *optarg)
 			break;
 
 		default:
-			printf("ib2roce " VERSION " Apr 5,2022 Christoph Lameter <cl@linux.com>\n");
+			printf("ib2roce " VERSION " May 12,2022 Christoph Lameter <cl@linux.com>\n");
 			printf("Usage: ib2roce [<option>] ...\n");
 			printf("-b|--beacon <multicast address>		Send beacon every second. Off by default\n");
 			printf("-c|--config <file>			Read config from file\n");
