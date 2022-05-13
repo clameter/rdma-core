@@ -3974,7 +3974,7 @@ delayed_packet:
 	       	/* No pending I/O */
 		t = timestamp();
 
-		if (t < mi->last_sent + mi->packet_time) {
+		if (mi->last_sent && t < mi->last_sent + mi->packet_time) {
 
 			/* Packet spacing too tight */
 			mi->burst++;
@@ -6211,6 +6211,8 @@ static void multicast_cmd(char *parameters)
 {
 	struct mc *m;
 
+	now = timestamp();
+
 	printf("Multicast: Active=%u NR=%u Max=%u\n", active_mc, nr_mc, MAX_MC);
 
 	for(m = mcs; m < mcs + nr_mc; m++) {
@@ -6224,7 +6226,7 @@ static void multicast_cmd(char *parameters)
 			m->interface[in].packet_time,
 			m->interface[in].max_burst,
 			m->interface[in].delayed,
-			m->interface[in].last_sent ? (now - m->interface[in].last_sent / ONE_MILLISECOND) : -999,
+			m->interface[in].last_sent ? (now - m->interface[in].last_sent) / ONE_MILLISECOND : -999,
 			m->interface[in].last_delayed ? (now - m->interface[in].last_delayed) / ONE_MILLISECOND : -999,
 			m->interface[INFINIBAND].pending,
 			m->interface[in].burst);
