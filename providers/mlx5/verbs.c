@@ -1893,7 +1893,7 @@ static int mlx5_alloc_qp_buf(struct ibv_context *context,
 	}
 
 	/* compatibility support */
-	qp_huge_key  = qptype2key(qp->ibv_qp->qp_type);
+	qp_huge_key = qptype2key(attr->qp_type);
 	if (mlx5_use_huge(qp_huge_key))
 		default_alloc_type = MLX5_ALLOC_TYPE_HUGE;
 
@@ -2245,6 +2245,27 @@ static int qp_init_wr_memcpy(struct mlx5_qp *mqp,
 		mqp->need_mmo_enable = 1;
 
 	return reg_opaque_mr(attr->pd);
+}
+
+static void set_qp_operational_state(struct mlx5_qp *qp,
+				     enum ibv_qp_state state)
+{
+	switch (state) {
+	case IBV_QPS_RESET:
+		mlx5_qp_fill_wr_complete_error(qp);
+		qp->rq.qp_state_max_gs = -1;
+		qp->sq.qp_state_max_gs = -1;
+		break;
+	case IBV_QPS_INIT:
+		qp->rq.qp_state_max_gs = qp->rq.max_gs;
+		break;
+	case IBV_QPS_RTS:
+		qp->sq.qp_state_max_gs = qp->sq.max_gs;
+		mlx5_qp_fill_wr_complete_real(qp);
+		break;
+	default:
+		break;
+	}
 }
 
 static struct ibv_qp *create_qp(struct ibv_context *context,
@@ -2628,6 +2649,8 @@ static struct ibv_qp *create_qp(struct ibv_context *context,
 	if (attr->comp_mask & IBV_QP_INIT_ATTR_SEND_OPS_FLAGS)
 		qp->verbs_qp.comp_mask |= VERBS_QP_EX;
 
+	set_qp_operational_state(qp, IBV_QPS_RESET);
+
 	return ibqp;
 
 err_destroy:
@@ -2912,6 +2935,7 @@ static int qp_enable_mmo(struct ibv_qp *qp)
 	uint32_t in[DEVX_ST_SZ_DW(init2init_qp_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(init2init_qp_out)] = {};
 	void *qpce = DEVX_ADDR_OF(init2init_qp_in, in, qpc_data_ext);
+	int ret;
 
 	DEVX_SET(init2init_qp_in, in, opcode, MLX5_CMD_OP_INIT2INIT_QP);
 	DEVX_SET(init2init_qp_in, in, qpc_ext, 1);
@@ -2921,7 +2945,8 @@ static int qp_enable_mmo(struct ibv_qp *qp)
 
 	DEVX_SET(qpc_ext, qpce, mmo, 1);
 
-	return mlx5dv_devx_qp_modify(qp, in, sizeof(in), out, sizeof(out));
+	ret = mlx5dv_devx_qp_modify(qp, in, sizeof(in), out, sizeof(out));
+	return ret ? mlx5_get_cmd_status_err(ret, out) : 0;
 }
 
 int mlx5_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
@@ -3034,6 +3059,9 @@ int mlx5_modify_qp(struct ibv_qp *qp, struct ibv_qp_attr *attr,
 	if (!ret && (attr_mask & IBV_QP_STATE) &&
 	    (attr->qp_state == IBV_QPS_INIT) && mqp->need_mmo_enable)
 		ret = qp_enable_mmo(qp);
+
+	if (!ret && (attr_mask & IBV_QP_STATE))
+		set_qp_operational_state(mqp, attr->qp_state);
 
 	return ret;
 }
@@ -3269,7 +3297,7 @@ static int _mlx5dv_map_ah_to_qp(struct ibv_ah *ah, uint32_t qp_num)
 		mah->ah_qp_mapping = mlx5dv_devx_obj_create(
 			ah->context, in, sizeof(in), out, sizeof(out));
 		if (!mah->ah_qp_mapping)
-			ret = errno;
+			ret = mlx5_get_cmd_status_err(errno, out);
 	}
 	pthread_mutex_unlock(&mah->mutex);
 
@@ -6009,15 +6037,46 @@ static int _mlx5dv_devx_qp_modify(struct ibv_qp *qp, const void *in,
 	return execute_ioctl(qp->context, cmd);
 }
 
+static enum ibv_qp_state modify_opcode_to_state(uint16_t opcode)
+{
+	switch (opcode) {
+	case MLX5_CMD_OP_INIT2INIT_QP:
+	case MLX5_CMD_OP_RST2INIT_QP:
+		return IBV_QPS_INIT;
+	case MLX5_CMD_OP_INIT2RTR_QP:
+		return IBV_QPS_RTR;
+	case MLX5_CMD_OP_RTR2RTS_QP:
+	case MLX5_CMD_OP_RTS2RTS_QP:
+	case MLX5_CMD_OP_SQERR2RTS_QP:
+	case MLX5_CMD_OP_SQD_RTS_QP:
+		return IBV_QPS_RTS;
+	case MLX5_CMD_OP_2ERR_QP:
+		return IBV_QPS_ERR;
+	case MLX5_CMD_OP_2RST_QP:
+		return IBV_QPS_RESET;
+	default:
+		return IBV_QPS_UNKNOWN;
+	}
+}
+
 int mlx5dv_devx_qp_modify(struct ibv_qp *qp, const void *in, size_t inlen,
 			  void *out, size_t outlen)
 {
+	int ret;
+	enum ibv_qp_state qp_state;
 	struct mlx5_dv_context_ops *dvops = mlx5_get_dv_ops(qp->context);
 
 	if (!dvops || !dvops->devx_qp_modify)
 		return EOPNOTSUPP;
 
-	return dvops->devx_qp_modify(qp, in, inlen, out, outlen);
+	ret = dvops->devx_qp_modify(qp, in, inlen, out, outlen);
+	if (ret)
+		return ret;
+
+	qp_state = modify_opcode_to_state(DEVX_GET(rtr2rts_qp_in, in, opcode));
+	set_qp_operational_state(to_mqp(qp), qp_state);
+
+	return 0;
 }
 
 static int _mlx5dv_devx_srq_query(struct ibv_srq *srq, const void *in,
@@ -6650,8 +6709,10 @@ _mlx5dv_create_mkey(struct mlx5dv_mkey_init_attr *mkey_init_attr)
 
 	mkey->devx_obj = mlx5dv_devx_obj_create(pd->context, in, sizeof(in),
 						out, sizeof(out));
-	if (!mkey->devx_obj)
+	if (!mkey->devx_obj) {
+		errno = mlx5_get_cmd_status_err(errno, out);
 		goto err_free_crypto;
+	}
 
 	mkey_init_attr->max_entries = mkey->num_desc;
 	mkey->dv_mkey.lkey = (DEVX_GET(create_mkey_out, out, mkey_index) << 8) | 0;
@@ -6886,7 +6947,7 @@ static int _mlx5dv_crypto_login(struct ibv_context *context,
 	mctx->crypto_login = mlx5dv_devx_obj_create(context, in, sizeof(in),
 						    out, sizeof(out));
 	if (!mctx->crypto_login)
-		ret = errno;
+		ret = mlx5_get_cmd_status_err(errno, out);
 
 out:
 	pthread_mutex_unlock(&mctx->crypto_login_mutex);
@@ -6931,8 +6992,10 @@ _mlx5dv_crypto_login_query_state(struct ibv_context *context,
 
 	ret = mlx5dv_devx_obj_query(mctx->crypto_login, in, sizeof(in), out,
 				    sizeof(out));
-	if (ret)
+	if (ret) {
+		ret = mlx5_get_cmd_status_err(ret, out);
 		goto out;
+	}
 
 	attr = DEVX_ADDR_OF(query_crypto_login_obj_out, out, obj);
 	crypto_login_state = DEVX_GET(crypto_login_obj, attr, state);
@@ -7060,6 +7123,7 @@ _mlx5dv_dek_create(struct ibv_context *context,
 
 	obj = mlx5dv_devx_obj_create(context, in, sizeof(in), out, sizeof(out));
 	if (!obj) {
+		errno = mlx5_get_cmd_status_err(errno, out);
 		free(dek);
 		return NULL;
 	}
@@ -7102,7 +7166,7 @@ static int _mlx5dv_dek_query(struct mlx5dv_dek *dek,
 	ret = mlx5dv_devx_obj_query(dek->devx_obj, in, sizeof(in), out,
 				    sizeof(out));
 	if (ret)
-		return ret;
+		return mlx5_get_cmd_status_err(ret, out);
 
 	attr = DEVX_ADDR_OF(query_encryption_key_obj_out, out, obj);
 	dek_state = DEVX_GET(encryption_key_obj, attr, state);

@@ -28,7 +28,7 @@
 
 %define         git_ver %{nil}
 Name:           rdma-core
-Version:        40.0
+Version:        41.0
 Release:        0
 Summary:        RDMA core userspace libraries and daemons
 License:        BSD-2-Clause OR GPL-2.0-only
@@ -50,7 +50,7 @@ Group:          Productivity/Networking/Other
 %define  mlx4_lname   libmlx4-%{mlx4_so_major}
 %define  mlx5_lname   libmlx5-%{mlx5_so_major}
 
-%ifnarch s390 %arm riscv64
+%ifnarch s390 %arm
 %define dma_coherent 1
 %endif
 
