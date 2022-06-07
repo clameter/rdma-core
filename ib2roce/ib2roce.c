@@ -109,7 +109,7 @@ static bool unicast = false;		/* Bridge unicast packets */
 static bool raw = false;		/* Use raw channels */
 static bool flow_steering = false;	/* Use flow steering to filter packets */
 static bool testing = false;		/* Run some tests on startup */
-static bool latency = true;		/* Perform Latency tests and provide stats */
+static bool latency = false;		/* Perform Latency tests and provide stats */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
@@ -3096,7 +3096,7 @@ static unsigned int remove_forwards(struct endpoint *source)
 
 enum pgm_mode { pgm_none, pgm_passthrough, pgm_dlr, pgm_resend };
 
-enum pgm_mode pgm_mode = pgm_passthrough;
+enum pgm_mode pgm_mode = pgm_none;
 
 struct nak {
 	struct pgm_nak *next;
