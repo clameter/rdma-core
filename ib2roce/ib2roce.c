@@ -116,6 +116,8 @@ static int drop_packets = 0;		/* Packet dropper */
 static int rate = IBV_RATE_10_GBPS;	/* Limit sending rate */
 static int rrate = 0;			/* Software delay per message for ROCE */
 static int irate = 0;			/* Software delay per message for Infiniband */
+static int rtos = 0;                   /* TOS for messages on ROCE */
+static int itos = 0;                   /* TOS for messages on Infiniband */
 static int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
 static int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 static int stat_interval = 10;		/* Interval for statistics */
@@ -2422,6 +2424,16 @@ static void set_rates(void)
 		set_rate(m);
 		set_rate(m);
 	}
+}
+
+static void set_tos(void)
+{
+
+	/* itos, rtos is uint_8 in other uses of rdma_set_option to set TOS */
+
+	rdma_set_option(i2r[INFINIBAND].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &itos, sizeof(itos));
+	rdma_set_option(i2r[ROCE].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &rtos, sizeof(itos));
+
 }
 
 static void handle_rdma_event(void *private)
@@ -5778,6 +5790,8 @@ struct enable_option {
 { "hwrate", true,		NULL, &rate,		"6", "0",	NULL,		"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
 { "irate", true,		NULL, &irate,		"1000", "0",	set_rates,	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
 { "rrate", true,		NULL, &rrate,		"1000", "0",	set_rates,	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
+{ "itos", true,			NULL, &itos,		"1", "0",	set_tos,	"Infiniband: Set the TOS (0=off)" },
+{ "rtos", true,			NULL, &rtos,		"1", "0",	set_tos,	"ROCE: Set the TOS (0=off)" },
 { "latency", true,		&latency, NULL,		"on", "off",	NULL,		"Monitor latency of busyloop and event processing and provide stats" },
 { "loglevel", true,		NULL, &loglevel,	"5","3",	NULL,		"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)" },
 { "iburst", true,		NULL, &max_iburst,	"100", "0",	set_rates,	"Infiniband: Exempt the first N packets from swrate (0=off)" },
