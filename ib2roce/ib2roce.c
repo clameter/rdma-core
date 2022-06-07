@@ -94,6 +94,7 @@
 
 // #define HAVE_MSTFLINT
 // #define DEBUG
+// #define UNICAST
 
 /* Globals */
 
@@ -105,12 +106,15 @@ static bool terminated = false;		/* Daemon received a signal to terminate */
 static bool update_requested = false;	/* Received SIGUSR1. Dump all MC data details */
 static bool beacon = false;		/* Announce our presence (and possibly coordinate between multiple instances in the future */
 static bool bridging = true;		/* Allow briding */
+#ifdef UNICAST
 static bool unicast = false;		/* Bridge unicast packets */
-static bool raw = false;		/* Use raw channels */
 static bool flow_steering = false;	/* Use flow steering to filter packets */
+static bool raw = false;		/* Use raw channels */
+static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
+#endif
+
 static bool testing = false;		/* Run some tests on startup */
 static bool latency = false;		/* Perform Latency tests and provide stats */
-static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 static int drop_packets = 0;		/* Packet dropper */
 static int rate = IBV_RATE_10_GBPS;	/* Limit sending rate */
@@ -348,9 +352,11 @@ static struct i2r_interface {
 	struct ibv_context *context;		/* Not for RDMA CM use */
 	struct rdma_event_channel *rdma_events;
 	struct rdma_channel *multicast;
+#ifdef UNICAST
 	struct rdma_channel *qp1;		/* Channel for QP1 communications but not QP1 (userspace) */
 	struct rdma_channel *ud;		/* Regular data */
 	struct rdma_channel *raw;
+#endif
 	struct ibv_comp_channel *comp_events;
 	struct ibv_cq *cq;
 	struct ibv_pd *pd;
@@ -403,6 +409,7 @@ struct ah_info {
 	uint32_t remote_qkey;
 };
 
+#ifdef UNICAST
 /*
  * A Unicastconnection to a certain port and host with
  * a list of pending I/O items and an rdma channel
@@ -418,6 +425,8 @@ struct rdma_unicast {
 	struct fifo pending;		/* Buffers waiting on resolution to complete */
 	struct ah_info ai;		/* If ai.ah != NULL then the address info is valid */
 };
+#endif
+
 
 static inline void st(struct rdma_channel *c, enum stats s)
 {
@@ -427,13 +436,14 @@ static inline void st(struct rdma_channel *c, enum stats s)
 /* Forwards */
 static void add_event(uint64_t  when, event_callback *callback, void *private, const char *text);
 static uint64_t run_events(void);
-static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 static void register_callback(void (*callback)(void *), int fd, void *private);
-static void handle_receive_packet(void *private);
 static void handle_comp_event(void *private);
 static void handle_rdma_event(void *private);
 static void handle_async_event(void *private);
-
+#ifdef UNICAST
+static struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
+static void handle_receive_packet(void *private);
+#endif
 
 static inline struct rdma_cm_id *id(enum interfaces i)
 {
@@ -955,7 +965,9 @@ static void pull(struct buf *buf, void *dest, unsigned length)
 
 static void beacon_received(struct buf *buf);
 
+#ifdef UNICAST
 static int send_buf(struct buf *buf, struct rdma_unicast *ra);
+#endif
 
 static struct buf *buffers;
 
@@ -1109,8 +1121,15 @@ static void init_buf(void)
 }
 
 typedef bool setup_callback(struct rdma_channel *c);
-static receive_callback receive_main, receive_multicast, receive_raw, receive_ud, receive_qp1;
-static setup_callback setup_multicast, setup_channel, setup_raw, setup_packet, setup_incoming;
+static receive_callback receive_multicast;
+#ifdef UNICAST
+static receive_main, receive_callback receive_raw, receive_ud, receive_qp1;
+#endif
+
+static setup_callback setup_multicast;
+#ifdef UNICAST
+static setup_callback setup_channel, setup_raw, setup_packet, setup_incoming;
+#endif
 
 #define NO_CORE (-1)
 /*
@@ -1131,12 +1150,14 @@ struct channel_info {
 
 } channel_infos[nr_channel_types] = {
 	{ "multicast",	0, 0,	10000,	1000,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
+#ifdef UNICAST
 	{ "ud",		1, 1,	500,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err }, 
 	{ "qp1",	2, 1,	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
 	{ "raw",	3, 1,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
 	{ "ibraw",	3, 1,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
 	{ "packet",	-1, -1,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
 	{ "incoming",	-1, -1,	100,	50,	0,		0,			setup_incoming,	receive_main,	channel_err },
+#endif
 	{ "error",	-1, -1,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
 };
 
@@ -1572,6 +1593,7 @@ static char *global_r_str(struct ibv_global_route *g)
 }
 
 #endif
+
 static char *grh_str(struct ibv_grh *g)
 {
         struct iphdr *i = (void *)g + 20;
@@ -1596,6 +1618,7 @@ static char *grh_str(struct ibv_grh *g)
 	return buf;
 }
 
+#ifdef UNICAST
 /* Dump GRH and the beginning of the packet */
 static void dump_buf_grh(struct buf *buf)
 {
@@ -1608,6 +1631,7 @@ static void dump_buf_grh(struct buf *buf)
 			inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN),
 			payload_dump(buf->cur));
 }
+#endif
 
 /*
  * Handling of RDMA work requests
@@ -1660,9 +1684,11 @@ static void post_receive_buffers(void)
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
 		post_receive(i->multicast);
+#ifdef UNICAST
 		post_receive(i->raw);
 		post_receive(i->qp1);
 		post_receive(i->ud);
+#endif
 	}
 }
 
@@ -1721,6 +1747,7 @@ static void qp_destroy(struct i2r_interface *i)
 	channel_destroy(i->multicast);
 	i->multicast = NULL;
 
+#ifdef UNICAST
 	channel_destroy(i->raw);
 	i->raw = NULL;
 
@@ -1729,6 +1756,7 @@ static void qp_destroy(struct i2r_interface *i)
 
 	channel_destroy(i->qp1);
 	i->qp1 = NULL;
+#endif
 }
 
 /* Retrieve Kernel Stack info about the interface */
@@ -1810,6 +1838,7 @@ err:
 		     i->rdma_name, reason, errname());
 }
 
+#ifdef UNICAST
 static void start_channel(struct rdma_channel *c)
 {
 	int ret;
@@ -1854,6 +1883,7 @@ static void stop_channel(struct rdma_channel *c)
 
 	logg(LOG_NOTICE, "QP %s moved to state QPS_INIT\n", c->text);
 }
+#endif
 
 static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 {
@@ -1966,6 +1996,7 @@ bool setup_multicast(struct rdma_channel *c)
 	return allocate_rdmacm_qp(c, true);
 }
 
+#ifdef UNICAST
 bool setup_incoming(struct rdma_channel *c)
 {
 	return allocate_rdmacm_qp(c, true);
@@ -2093,6 +2124,7 @@ static bool setup_raw(struct rdma_channel *c)
 #endif
 	return true;
 }
+#endif
 
 /* Check overrun counter */
 static void check_out_of_buffer(void *private)
@@ -2175,7 +2207,9 @@ static void setup_interface(enum interfaces in)
 
 	numa_run_on_node(i->numa_node);
 
+#ifdef UNICAST
 	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
+#endif
 	i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
 	if (i == i2r + INFINIBAND)
 		i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
@@ -2212,6 +2246,7 @@ static void setup_interface(enum interfaces in)
 	if (!i->multicast)
 		abort();
 
+#ifdef UNICAST
 	if (unicast) {
 
 		i->ud = new_rdma_channel(i, channel_ud);
@@ -2229,11 +2264,16 @@ static void setup_interface(enum interfaces in)
 			}
 		}
 	}
+#endif
 
 	check_out_of_buffer(i);
 	numa_run_on_node(-1);
 
-	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u/%u/%u MTU=%u NUMA=%d.\n",
+	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u"
+#ifdef UNICAST
+		"/%u/%u"
+#endif
+			" MTU=%u NUMA=%d.\n",
 		i->text,
 		i->rdma_name,
 		i->if_name, i->ifindex,
@@ -2241,8 +2281,10 @@ static void setup_interface(enum interfaces in)
 		inet6_ntoa(e->gid.raw), i->gid_index,
 		inet_ntoa(i->if_addr.sin_addr), default_port,
 		i->multicast ? i->multicast->nr_cq: 0,
+#ifdef UNICAST
 		i->ud ? i->ud->nr_cq : 0,
 		i->raw ? i->raw->nr_cq : 0,
+#endif
 		i->mtu,
 		i->numa_node
 	);
@@ -2325,6 +2367,7 @@ static void join_processing(void)
 	}
 }
 
+#ifdef UNICAST
 static void resolve_start(struct rdma_unicast *);
 
 static void zap_channel(struct rdma_unicast *ru)
@@ -2399,6 +2442,7 @@ static void resolve(struct rdma_unicast *ru)
 	if (fifo_put(&i->resolve_queue, ru))
 		resolve_start(ru);
 }
+#endif
 
 static void set_rate(struct mc *m)
 {
@@ -2442,7 +2486,9 @@ static void handle_rdma_event(void *private)
 	struct rdma_cm_event *event;
 	int ret;
 	enum interfaces in = i - i2r;
+#ifdef UNICAST
 	struct rdma_unicast *ru = fifo_first(&i->resolve_queue);
+#endif
 
 	ret = rdma_get_cm_event(i->rdma_events, &event);
 	if (ret) {
@@ -2504,6 +2550,7 @@ static void handle_rdma_event(void *private)
 			}
 			break;
 
+#ifdef UNICAST
 		case RDMA_CM_EVENT_ADDR_RESOLVED:
 			logg(LOG_NOTICE, "RDMA_CM_EVENT_ADDR_RESOLVED for %s:%d\n",
 				inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
@@ -2631,6 +2678,7 @@ static void handle_rdma_event(void *private)
 
 			goto err;
 			break;
+#endif
 
 		default:
 			logg(LOG_NOTICE, "RDMA Event handler:%s status: %d\n",
@@ -2641,10 +2689,12 @@ static void handle_rdma_event(void *private)
 	rdma_ack_cm_event(event);
 	return;
 
+#ifdef UNICAST
 err:
 	rdma_ack_cm_event(event);
 	ru->state = UC_ERROR;
 	resolve_end(ru);
+#endif
 }
 
 /*
@@ -2696,6 +2746,7 @@ static int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct 
 	return ret;
 }
 
+#ifdef UNICAST
 /*
  * Send data to target using native RDMA structs relying on state in struct buf.
  */
@@ -2745,6 +2796,7 @@ static int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, u
 
 	return ret;
 }
+#endif
 
 static int send_pending_buffers(struct rdma_channel *c)
 {
@@ -2882,6 +2934,7 @@ queue:
 	return 0;
 }
 
+#ifdef UNICAST
 /* Send buffer based on state in struct buf. Unicast only */
 static int send_buf(struct buf *buf, struct rdma_unicast *ra)
 {
@@ -2971,6 +3024,7 @@ static void unicast_packet(struct rdma_channel *c, struct buf *buf, struct in_ad
 }
 
 static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *sin);
+#endif
 
 static void list_endpoints(struct i2r_interface *i)
 {
@@ -3017,6 +3071,7 @@ static void list_endpoints(struct i2r_interface *i)
 		logg(LOG_NOTICE, "Known Endpoints on %s:%s\n", i->text, buf);
 }
 
+#ifdef UNICAST
 /*
  * Establish a forwarding for UD unicast packets. Used on UD packet
  * reception to find the destination.
@@ -3101,6 +3156,7 @@ static unsigned int remove_forwards(struct endpoint *source)
 	}
 	return n;
 }
+#endif
 
 /* 
  * PGM RFC3208 Support
@@ -3574,6 +3630,7 @@ static inline void map_ipv4_addr_to_ipv6(__be32 ipv4, struct in6_addr *ipv6)
 	ipv6->s6_addr32[3] = ipv4;
 }
 
+#ifdef UNICAST
 static bool valid_addr(struct i2r_interface *i, struct in_addr addr) {
 	unsigned netmask = i->if_netmask.sin_addr.s_addr;
 
@@ -3734,8 +3791,6 @@ redo:
 	return ep;
 }
 
-
-
 /* Create Endpoint just from the IP address */
 static struct endpoint *ip_to_ep(struct i2r_interface *i, struct in_addr addr)
 {
@@ -3839,6 +3894,7 @@ static void learn_source_address(struct buf *buf)
 
 	buf->source_ep = buf_to_ep(buf, addr);
 }
+#endif
 
 /* Delayed packet send due to traffic shaping */
 static void delayed_send(void *private)
@@ -3878,7 +3934,9 @@ static void receive_multicast(struct buf *buf)
 	struct in_addr dest_addr;
 	int ret;
 
+#ifdef UNICAST
 	learn_source_address(buf);
+#endif
 
 	if (!buf->grh_valid) {
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",
@@ -4019,6 +4077,7 @@ invalid_packet:
 	st(c, packets_invalid);
 }
 
+#ifdef UNICAST
 /*
  * We have an GRH header so the packet has been processed by the RDMA
  * Subsystem and we can take care of it using the RDMA calls
@@ -4819,6 +4878,7 @@ discard:
 
 	st(buf->c, packets_invalid);
 }
+#endif
 
 static void reset_flags(struct buf *buf)
 {
@@ -4931,6 +4991,7 @@ static void handle_comp_event(void *private)
 		process_cqes(c, wc, cqs);
 }
 
+#ifdef UNICAST
 /* Special handling using raw socket */
 static void handle_receive_packet(void *private)
 {
@@ -4979,7 +5040,7 @@ static void handle_receive_packet(void *private)
 	c->receive(buf);
 	put_buf(buf);
 }
-
+#endif
 
 static void handle_async_event(void *private)
 {
@@ -5028,10 +5089,12 @@ static unsigned show_interfaces(char *b)
 
 		if (i->multicast)
 			n += channel_stats(b + n, i->multicast, i->text, "Multicast");
+#ifdef UNICAST
 		if (i->ud)
 			n += channel_stats(b + n, i->ud, i->text, "UD");
 		if (i->raw)
 			n += channel_stats(b + n, i->raw, i->text, "Raw");
+#endif
 
 	}
 	return n;
@@ -5213,6 +5276,7 @@ static void beacon_received(struct buf *buf)
 		inet_ntoa(b->to_addr), b->nr_mc, b->nr_tsi, diff, b->gateway_qp);
 }
 
+#ifdef UNICAST
 /* A mini router follows */
 static struct i2r_interface *find_interface(struct sockaddr_in *sin)
 {
@@ -5261,6 +5325,7 @@ static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockadd
 
 	}
 }
+#endif
 
 static void beacon_send(void *private)
 {
@@ -5286,7 +5351,9 @@ static void beacon_send(void *private)
 			}
 		}
 
-	} else {
+	}
+#ifdef UNICAST
+	else {
 		struct i2r_interface *i = find_interface(beacon_sin);
 
 		if (!i) {
@@ -5305,6 +5372,7 @@ static void beacon_send(void *private)
 		send_buf_to(i, buf, beacon_sin);
 
 	}
+#endif
 	add_event(timestamp() + seconds(10), beacon_send, NULL, "Send Beacon");
 }
 
@@ -5468,9 +5536,10 @@ static void calculate_pps(void *private)
 	{
 		if (i->multicast)
 			calculate_pps_channel(i->multicast);
-
+#ifdef UNICAST
 		if (i->ud)
 			calculate_pps_channel(i->ud);
+#endif
 	}
 	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
 }
@@ -5517,14 +5586,14 @@ static void brief_status(void)
 				i->multicast->stats[pgm_odata],
 				i->multicast->stats[pgm_rdata],
 				i->multicast->stats[pgm_nak]);
-
+#ifdef UNICAST
 		if (i->ud && i->ud->stats[packets_received])
 			n+= sprintf(counts + n, ", UD %d/%d",
 				i->ud->stats[packets_received],
 				i->ud->stats[packets_sent]);
 		if (i->raw && i->raw->stats[packets_received])
 			n+= sprintf(counts + n, ", RAW %d", i->raw->stats[packets_received]);
-
+#endif
 		n+= sprintf(counts + n, ") ");
 	}
 
@@ -5590,7 +5659,7 @@ static void arm_channels(struct core_info *core)
 		if (i->multicast && core == i->multicast->core) {
 			ibv_req_notify_cq(i->multicast->cq, 0);
 		}
-
+#ifdef UNICAST
 		if (i->raw && core == i->raw->core &&
 			       (i->raw->type == channel_raw || i->raw->type == channel_ibraw)) {
 			start_channel(i->raw);
@@ -5608,6 +5677,7 @@ static void arm_channels(struct core_info *core)
 			start_channel(i->qp1);
 			ibv_req_notify_cq(i->qp1->cq, 0);
 		}
+#endif
 	}
 
 }
@@ -5782,10 +5852,8 @@ struct enable_option {
 { "buffers", false,		NULL, &nr_buffers,	"1000000", "10000", NULL,	"Number of 8k buffers allocated for packet processing" },
 { "bridging", false,		&bridging, NULL,	"on", "off",	NULL, 		"Forwarding of packets between interfaces" },
 { "drop", true,	NULL,		&drop_packets,		"100", "0",	NULL,		"Drop multicast packets. The value is the number of multicast packets to send before dropping" },
-{ "flow", false,		&flow_steering, NULL,	"on", "off",	NULL,		"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
 { "huge", false,		&huge, NULL,		"on", "off",	NULL,		"Enable the use of Huge memory for the packet pool" }, 
 { "loopbackprev", false,	&loopback_blocking, NULL, "on", "off",	NULL,		"Multicast loopback prevention of the NIC" },
-{ "packetsocket", false,	&packet_socket, NULL,	"on", "off",	NULL,		"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
 { "pgm", true,			NULL, (int *)&pgm_mode, "on", "off",	NULL,		"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI" },
 { "hwrate", true,		NULL, &rate,		"6", "0",	NULL,		"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
 { "irate", true,		NULL, &irate,		"1000", "0",	set_rates,	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
@@ -5796,9 +5864,13 @@ struct enable_option {
 { "loglevel", true,		NULL, &loglevel,	"5","3",	NULL,		"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)" },
 { "iburst", true,		NULL, &max_iburst,	"100", "0",	set_rates,	"Infiniband: Exempt the first N packets from swrate (0=off)" },
 { "rburst", true,		NULL, &max_rburst,	"100", "0",	set_rates,	"ROCE: Exempt the first N packets from swrate (0=off)" },
-{ "raw", false,			&raw, NULL,		"on", "off",	NULL,		"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
 { "statint", true,		NULL, &stat_interval,	"60", "1",	NULL,		"Sampling interval to calculate pps values" },
+#ifdef UNICAST
+{ "packetsocket", false,	&packet_socket, NULL,	"on", "off",	NULL,		"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic" },
+{ "flow", false,		&flow_steering, NULL,	"on", "off",	NULL,		"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]" },
+{ "raw", false,			&raw, NULL,		"on", "off",	NULL,		"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel" },
 { "unicast", false,		&unicast, NULL,		"on", "off",	NULL,		"Processing of unicast packets with QP1 handling of SIDR REQ/REP" },
+#endif
 { NULL, false, NULL, NULL, NULL, NULL, NULL, NULL }
 };
 
@@ -6282,12 +6354,14 @@ static void channels_cmd(char *parameters)
 	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
 		if (i->multicast)
 			channel_stat(i->multicast);
+#ifdef UNICAST
 		if (i->ud)
 			channel_stat(i->ud);
 		if (i->raw)
 			channel_stat(i->raw);
 		if (i->qp1)
 			channel_stat(i->qp1);
+#endif
 	}
 }
 
@@ -6322,12 +6396,14 @@ static void zap_cmd(char *parameters)
 	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
 		if (i->multicast)
 			channel_zap(i->multicast);
+#ifdef UNICAST
 		if (i->ud)
 			channel_zap(i->ud);
 		if (i->raw)
 			channel_zap(i->raw);
 		if (i->qp1)
 			channel_zap(i->qp1);
+#endif
 	}
 	printf("Ok\n");
 }
@@ -6532,7 +6608,9 @@ int main(int argc, char **argv)
 
 	mc_hash = hash_create(offsetof(struct mc, addr), sizeof(struct in_addr));
 
+#ifdef UNICAST
 	sidr_state_init();
+#endif
 
 	while ((op = getopt_long(argc, argv, "b::c:d:e::hi:k:l::m:o:p:i:tvxz:",
 					opts, NULL)) != -1) {
