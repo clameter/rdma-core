@@ -6627,7 +6627,7 @@ int main(int argc, char **argv)
 	sidr_state_init();
 #endif
 
-	while ((op = getopt_long(argc, argv, "b::c:d:e::hi:k:l::m:o:p:i:tvxz:",
+	while ((op = getopt_long(argc, argv, "b::c:d:e::hi:k:l::m:o:p:i:qt:vxz:",
 					opts, NULL)) != -1) {
 		if (!optarg && argv[optind] && argv[optind][0] != '-') {
 			optarg = argv[optind];
