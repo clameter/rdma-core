@@ -716,7 +716,7 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 		.ai_protocol = IPPROTO_UDP
 	};
 	struct sockaddr_in *si;
-	char *p;
+	char *p, *q;
 	int ret;
 	struct mgid_signature *mgid;
 	struct in_addr addr;
@@ -738,22 +738,23 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 		p = a;
 	}
 
-	p = strchr(p, '/');
-	if (p) {
-		*p++ = 0;
-		mgid = find_mgid_mode(p);
+	q = strchr(p, '/');
+	if (q) {
+		*q++ = 0;
+		mgid = find_mgid_mode(q);
 
 		if (!mgid) {
 			fprintf(stderr, "MGID mode not found %s\n", p);
 			return NULL;
 		}
+		p = q;
 	} else
 		mgid = mgid_mode;
 
-	p = strchr(p, '#');
-	if (p) {
-		*p++ = 0;
-		tos = atoi(p);
+	q = strchr(p, '#');
+	if (q) {
+		*q++ = 0;
+		tos = atoi(q);
 		if (!tos) {
 			fprintf(stderr, "TOS value invalid : %p\n", p);
 			return NULL;
