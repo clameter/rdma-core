@@ -120,8 +120,6 @@ static int drop_packets = 0;		/* Packet dropper */
 static int rate = IBV_RATE_10_GBPS;	/* Limit sending rate */
 static int rrate = 0;			/* Software delay per message for ROCE */
 static int irate = 0;			/* Software delay per message for Infiniband */
-static int rtos = 0;                   /* TOS for messages on ROCE */
-static int itos = 0;                   /* TOS for messages on Infiniband */
 static int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
 static int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 static int stat_interval = 10;		/* Interval for statistics */
@@ -241,6 +239,8 @@ struct mgid_signature {		/* Manage different MGID formats used */
 
 struct mgid_signature *mgid_mode = mgid_signatures + 3;		/* CLLM is the default */
 
+uint8_t tos_mode = 0;
+
 /*
  * Basic RDMA interface management
  */
@@ -303,8 +303,8 @@ struct rdma_channel {
 	unsigned int nr_receive;	/* Number of read buffer to post */
 	unsigned stats[nr_stats];
 	enum channel_type type;
-	struct fifo send_queue;	/* Packets that were deferred for write */
-	bool listening;		/* rdmacm Channel is listening for connections */
+	struct fifo send_queue;		/* Packets that were deferred for write */
+	bool listening;			/* rdmacm Channel is listening for connections */
 	const char *text;
 	struct rdma_unicast *ru;	/* Only rdmacm */
 	struct rdma_cm_id *id;		/* Only rdmacm */
@@ -654,6 +654,7 @@ static struct mc {
 	struct in_addr addr;
 	struct mc_interface interface[2];
 	bool beacon;
+	uint8_t tos_mode;
 	uint16_t port;
 	struct mgid_signature *mgid_mode;
 	const char *text;
@@ -705,7 +706,7 @@ static struct mgid_signature *find_mgid_mode(char *p)
  * Parse an address with port number [:xxx] and/or mgid format [/YYYY]
  */
 static struct sockaddr_in *parse_addr(const char *arg, int port,
-	struct mgid_signature **p_mgid_mode, bool mc_only)
+	struct mgid_signature **p_mgid_mode, uint8_t *p_tos_mode, bool mc_only)
 {
 	struct addrinfo *res;
 	char *service;
@@ -719,6 +720,7 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 	int ret;
 	struct mgid_signature *mgid;
 	struct in_addr addr;
+	uint8_t tos;
 	char *a = strdupa(arg);
 
 	service = strchr(a, ':');
@@ -741,10 +743,23 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 		*p++ = 0;
 		mgid = find_mgid_mode(p);
 
-		if (!mgid)
+		if (!mgid) {
+			fprintf(stderr, "MGID mode not found %s\n", p);
 			return NULL;
+		}
 	} else
 		mgid = mgid_mode;
+
+	p = strchr(p, '#');
+	if (p) {
+		*p++ = 0;
+		tos = atoi(p);
+		if (!tos) {
+			fprintf(stderr, "TOS value invalid : %p\n", p);
+			return NULL;
+		}
+	} else
+		tos = tos_mode;
 
 	ret = getaddrinfo(a, service, &hints, &res);
 	if (ret) {
@@ -763,6 +778,7 @@ static struct sockaddr_in *parse_addr(const char *arg, int port,
 	}
 
 	*p_mgid_mode = mgid;
+	*p_tos_mode = tos;
 	return si;
 }
 
@@ -831,7 +847,7 @@ static int new_mc_addr(char *arg,
 	m->interface[ROCE].sendonly = sendonly_roce;
 	m->text = strdup(arg);
 
-	si = parse_addr(arg, default_mc_port, &m->mgid_mode, true);
+	si = parse_addr(arg, default_mc_port, &m->mgid_mode, &m->tos_mode, true);
 	if (!si)
 		return 1;
 
@@ -851,7 +867,7 @@ out:
 }
 
 static int _join_mc(struct in_addr addr, struct sockaddr *sa,
-	unsigned port, enum interfaces i, bool sendonly, void *private)
+	unsigned port, uint8_t tos, enum interfaces i, bool sendonly, void *private)
 {
 	struct rdma_cm_join_mc_attr_ex mc_attr = {
 		.comp_mask = RDMA_CM_JOIN_MC_ATTR_ADDRESS | RDMA_CM_JOIN_MC_ATTR_JOIN_FLAGS,
@@ -860,6 +876,9 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 		.addr = sa
 	};
 	int ret;
+	
+	if (rdma_set_option(id(i), RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &tos, sizeof(tos)) < 0)
+		logg(LOG_ERR, "rdma_set_option %s : %s\n", interfaces_text[i], errname());
 
 	ret = rdma_join_multicast_ex(id(i), &mc_attr, private);
 
@@ -1992,7 +2011,6 @@ bool setup_multicast(struct rdma_channel *c)
 			c->text, errname());
 		return false;
 	}
-
 	return allocate_rdmacm_qp(c, true);
 }
 
@@ -2331,12 +2349,13 @@ static void join_processing(void)
 
 		for(in = 0; in < 2; in++) {
 			struct mc_interface *mi = m->interface + in;
+			uint8_t tos = i == ROCE ? m->tos_mode : 0;
 
 			if (i2r[in].context) {
 				switch(mi->status) {
 
 				case MC_OFF:
-					if (_join_mc(m->addr, mi->sa, port, in, mi->sendonly, m) == 0)
+					if (_join_mc(m->addr, mi->sa, port, tos, in, mi->sendonly, m) == 0)
 						m->interface[in].status = MC_JOINING;
 					break;
 
@@ -2468,21 +2487,6 @@ static void set_rates(void)
 		set_rate(m);
 		set_rate(m);
 	}
-}
-
-static void set_tos(void)
-{
-	uint8_t tos;
-	/* itos, rtos is uint_8 in other uses of rdma_set_option to set TOS */
-
-	tos = itos;
-	if (tos && rdma_set_option(i2r[INFINIBAND].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &tos, sizeof(tos)) < 0)
-		logg(LOG_ERR, "rdma_set_option INFINIBAND : %s\n", errname());
-
-	tos = rtos;
-	if (tos && rdma_set_option(i2r[ROCE].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &tos, sizeof(tos)) < 0)
-		logg(LOG_ERR, "rdma_set_option ROCE : %s\n", errname());
-
 }
 
 static void handle_rdma_event(void *private)
@@ -5385,12 +5389,13 @@ static void beacon_setup(const char *opt_arg)
 {
 	struct mgid_signature *mgid;
 	struct in_addr addr;
+	uint8_t tos;
 
 	if (!opt_arg)
 		opt_arg = "239.1.2.3";
 
 	beacon_mc = NULL;
-	beacon_sin = parse_addr(opt_arg, default_mc_port, &mgid, false);
+	beacon_sin = parse_addr(opt_arg, default_mc_port, &mgid, &tos, false);
 	addr = beacon_sin->sin_addr;
 	if (IN_MULTICAST(ntohl(addr.s_addr))) {
 		struct mc *m = mcs + nr_mc++;
@@ -5399,6 +5404,7 @@ static void beacon_setup(const char *opt_arg)
 		m->beacon = true;
 		m->text = strdup(opt_arg);
 		m->mgid_mode = mgid;
+		m->tos_mode = tos;
 		m->addr = addr;
 
 		setup_mc_addrs(m, beacon_sin);
@@ -5863,8 +5869,6 @@ struct enable_option {
 { "hwrate", true,		NULL, &rate,		"6", "0",	NULL,		"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)" },
 { "irate", true,		NULL, &irate,		"1000", "0",	set_rates,	"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)" },
 { "rrate", true,		NULL, &rrate,		"1000", "0",	set_rates,	"ROCE: Limit the packets per second to be sent to an endpoint (0=off)" },
-{ "itos", true,			NULL, &itos,		"1", "0",	set_tos,	"Infiniband: Set the TOS (0=off)" },
-{ "rtos", true,			NULL, &rtos,		"1", "0",	set_tos,	"ROCE: Set the TOS (0=off)" },
 { "latency", true,		&latency, NULL,		"on", "off",	NULL,		"Monitor latency of busyloop and event processing and provide stats" },
 { "loglevel", true,		NULL, &loglevel,	"5","3",	NULL,		"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)" },
 { "iburst", true,		NULL, &max_iburst,	"100", "0",	set_rates,	"Infiniband: Exempt the first N packets from swrate (0=off)" },
@@ -5975,7 +5979,8 @@ struct option opts[] = {
 	{ "debug", no_argument, NULL, 'x' },
 	{ "port", required_argument, NULL, 'p' },
 	{ "verbose", no_argument, NULL, 'v' },
-	{ "test", no_argument, NULL, 't' },
+	{ "tos", required_argument, NULL, 't' },
+	{ "test", no_argument, NULL, 'q' },
 	{ "config", required_argument, NULL, 'c' },
 	{ "cores", required_argument, NULL, 'k' },
 	{ "enable", optional_argument, NULL, 'e' },
@@ -6112,6 +6117,10 @@ static void exec_opt(int op, char *optarg)
 			break;
 
 		case 't':
+			tos_mode = atoi(optarg);
+			break;
+
+		case 'q':
 			ring_test();
 			fifo_test();
 			hash_test();
@@ -6147,6 +6156,7 @@ static void exec_opt(int op, char *optarg)
 			printf("-o|--outbound <multicast address>	Outgoing multicast only / sendonly /(ib trafic out, roce traffic in)\n");
 			printf("-p|--port <number>			Set default port number to use if none is specified\n");
 			printf("-r|--roce <if[:portnumber]>		ROCE device. Uses the first available if not specified.\n");
+			printf("-t|--tos <value>			Set TOS default for the following multicast defs\n");
 			printf("-v|--log-packets			Show more detailed logs. Can be specified multiple times\n");
 			printf("-x|--debug				Do not daemonize, enter command line mode\n");
 			printf("-y|--disable <option>			Disable feature\n");
