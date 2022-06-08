@@ -2532,9 +2532,10 @@ static void handle_rdma_event(void *private)
 				if (!bridging || m->interface[in^1].status == MC_JOINED)
 					active_mc++;
 
-				logg(LOG_NOTICE, "Joined %s MLID 0x%x sl %u on %s\n",
+				logg(LOG_NOTICE, "Joined %s MLID 0x%x tos %u sl %u on %s\n",
 					inet6_ntoa(param->ah_attr.grh.dgid.raw),
 					param->ah_attr.dlid,
+					m->tos_mode,
 					param->ah_attr.sl,
 					i->text);
 				st(i->multicast, join_success);
