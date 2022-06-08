@@ -2475,8 +2475,11 @@ static void set_tos(void)
 
 	/* itos, rtos is uint_8 in other uses of rdma_set_option to set TOS */
 
-	rdma_set_option(i2r[INFINIBAND].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &itos, sizeof(itos));
-	rdma_set_option(i2r[ROCE].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &rtos, sizeof(itos));
+	if (rdma_set_option(i2r[INFINIBAND].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &itos, sizeof(itos)) < 0)
+		logg(LOG_ERR, "rdma_set_option INFINIBAND : %s\n", errname());
+
+	if (rdma_set_option(i2r[ROCE].multicast->id, RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &rtos, sizeof(itos)) < 0)
+		logg(LOG_ERR, "rdma_set_option ROCE : %s\n", errname());
 
 }
 
