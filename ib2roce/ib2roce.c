@@ -878,9 +878,6 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 	};
 	int ret;
 	
-	if (rdma_set_option(id(i), RDMA_OPTION_ID, RDMA_OPTION_ID_TOS, &tos, sizeof(tos)) < 0)
-		logg(LOG_ERR, "rdma_set_option %s : %s\n", interfaces_text[i], errname());
-
 	ret = rdma_join_multicast_ex(id(i), &mc_attr, private);
 
 	if (ret) {
@@ -2516,8 +2513,12 @@ static void handle_rdma_event(void *private)
 
 				a->remote_qpn = param->qp_num;
 				a->remote_qkey = param->qkey;
+
 				if (rate)
 					param->ah_attr.static_rate = rate;
+
+				if (m->tos_mode)
+					param->ah_attr.grh.traffic_class = m->tos_mode;
 
 				a->ah = ibv_create_ah(i->multicast->pd, &param->ah_attr);
 				if (!a->ah) {
