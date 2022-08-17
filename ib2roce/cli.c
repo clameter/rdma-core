@@ -245,7 +245,9 @@ void parse_options(int argc, char **argv)
 			optarg = argv[optind];
 			optind++;
 		}
-		opts_datas[op].callback(optarg);
+		if (opts_datas[op].callback)
+			opts_datas[op].callback(optarg);
+		else help(NULL);
 	}
 }
 
