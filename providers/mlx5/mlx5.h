@@ -263,6 +263,7 @@ enum mlx5_ctx_flags {
 	MLX5_CTX_FLAGS_ECE_SUPPORTED = 1 << 2,
 	MLX5_CTX_FLAGS_SQD2RTS_SUPPORTED = 1 << 3,
 	MLX5_CTX_FLAGS_REAL_TIME_TS_SUPPORTED = 1 << 4,
+	MLX5_CTX_FLAGS_MKEY_UPDATE_TAG_SUPPORTED = 1 << 5,
 };
 
 struct mlx5_entropy_caps {
@@ -756,6 +757,12 @@ struct mlx5dv_flow_matcher {
 	uint32_t handle;
 };
 
+struct mlx5_steering_anchor {
+	struct ibv_context *context;
+	uint32_t handle;
+	struct mlx5dv_steering_anchor sa;
+};
+
 enum mlx5_devx_obj_type {
 	MLX5_DEVX_FLOW_TABLE		= 1,
 	MLX5_DEVX_FLOW_COUNTER		= 2,
@@ -890,6 +897,10 @@ struct mlx5_mkey {
 	uint64_t length;
 	struct mlx5_sig_ctx *sig;
 	struct mlx5_crypto_attr *crypto;
+};
+
+struct mlx5dv_crypto_login_obj {
+	struct mlx5dv_devx_obj *devx_obj;
 };
 
 struct mlx5dv_dek {
@@ -1499,6 +1510,15 @@ struct mlx5_dv_context_ops {
 					enum mlx5dv_crypto_login_state *state);
 	int (*crypto_logout)(struct ibv_context *context);
 
+	struct mlx5dv_crypto_login_obj *(*crypto_login_create)(
+		struct ibv_context *context,
+		struct mlx5dv_crypto_login_attr_ex *login_attr);
+	int (*crypto_login_query)(
+		struct mlx5dv_crypto_login_obj *crypto_login,
+		struct mlx5dv_crypto_login_query_attr *query_attr);
+	int (*crypto_login_destroy)(
+		struct mlx5dv_crypto_login_obj *crypto_login);
+
 	struct mlx5dv_dek *(*dek_create)(struct ibv_context *context,
 					 struct mlx5dv_dek_init_attr *init_attr);
 	int (*dek_query)(struct mlx5dv_dek *dek,
@@ -1554,6 +1574,9 @@ struct mlx5_dv_context_ops {
 					struct mlx5dv_flow_action_attr actions_attr[],
 					struct mlx5_flow_action_attr_aux actions_attr_aux[]);
 
+	struct mlx5dv_steering_anchor *(*create_steering_anchor)(struct ibv_context *conterxt,
+								 struct mlx5dv_steering_anchor_attr *attr);
+	int (*destroy_steering_anchor)(struct mlx5_steering_anchor *sa);
 	int (*query_device)(struct ibv_context *ctx_in, struct mlx5dv_context *attrs_out);
 
 	int (*query_qp_lag_port)(struct ibv_qp *qp, uint8_t *port_num,

@@ -633,7 +633,7 @@ static inline int set_bind_wr(struct mlx5_qp *qp, enum ibv_mw_type type,
 	if (!bind_info->length)
 		return 0;
 
-	if (unlikely((seg == qend)))
+	if (unlikely((*seg == qend)))
 		*seg = mlx5_get_send_wqe(qp, 0);
 
 	set_umr_data_seg(qp, type, rkey, bind_info, qpn, seg, size);
@@ -2414,7 +2414,8 @@ static int mlx5_umr_fill_crypto_bsf(struct mlx5_crypto_bsf *crypto_bsf,
 
 	memset(crypto_bsf, 0, sizeof(*crypto_bsf));
 
-	crypto_bsf->bsf_size_type |= MLX5_BSF_SIZE_WITH_INLINE
+	crypto_bsf->bsf_size_type |= (block ? MLX5_BSF_SIZE_SIG_AND_CRYPTO :
+					      MLX5_BSF_SIZE_WITH_INLINE)
 				     << MLX5_BSF_SIZE_SHIFT;
 	crypto_bsf->bsf_size_type |= MLX5_BSF_TYPE_CRYPTO;
 	order = get_crypto_order(attr->encrypt_on_tx,
@@ -2579,8 +2580,27 @@ static inline void umr_finalize_and_set_psvs(struct mlx5_qp *mqp,
 	}
 }
 
+static inline int block_size_to_bytes(enum mlx5dv_block_size data_unit_size)
+{
+	switch (data_unit_size) {
+	case MLX5DV_BLOCK_SIZE_512:
+		return 512;
+	case MLX5DV_BLOCK_SIZE_520:
+		return 520;
+	case MLX5DV_BLOCK_SIZE_4048:
+		return 4048;
+	case MLX5DV_BLOCK_SIZE_4096:
+		return 4096;
+	case MLX5DV_BLOCK_SIZE_4160:
+		return 4160;
+	default:
+		return -1;
+	}
+}
+
 static void crypto_umr_wqe_finalize(struct mlx5_qp *mqp)
 {
+	struct mlx5_context *ctx = to_mctx(mqp->ibv_qp->context);
 	struct mlx5_mkey *mkey = mqp->cur_mkey;
 	void *seg;
 	void *qend = mqp->sq.qend;
@@ -2603,6 +2623,19 @@ static void crypto_umr_wqe_finalize(struct mlx5_qp *mqp)
 	if (mkey->sig && upd_mkc_sig_err_cnt(mkey, umr_ctrl, mk) &&
 	    mkey->sig->block.state == MLX5_MKEY_BSF_STATE_SET)
 		set_psv = true;
+
+	/* Length must fit block size in single block encryption. */
+	if ((mkey->crypto->state == MLX5_MKEY_BSF_STATE_UPDATED ||
+	     mkey->crypto->state == MLX5_MKEY_BSF_STATE_SET) &&
+	    ctx->crypto_caps.crypto_engines &
+		    MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK) {
+		int block_size =
+			block_size_to_bytes(mkey->crypto->data_unit_size);
+		if (block_size < 0 || mkey->length > block_size) {
+			mqp->err = EINVAL;
+			return;
+		}
+	}
 
 	if (!(mkey->sig &&
 	      mkey->sig->block.state == MLX5_MKEY_BSF_STATE_UPDATED) &&
@@ -2763,6 +2796,7 @@ static void mlx5_send_wr_mkey_configure(struct mlx5dv_qp_ex *dv_qp,
 					struct mlx5dv_mkey_conf_attr *attr)
 {
 	struct mlx5_qp *mqp = mqp_from_mlx5dv_qp_ex(dv_qp);
+	struct mlx5_context *mctx = to_mctx(mqp->ibv_qp->context);
 	struct ibv_qp_ex *ibqp = &mqp->verbs_qp.qp_ex;
 	struct mlx5_wqe_umr_ctrl_seg *umr_ctrl;
 	struct mlx5_wqe_mkey_context_seg *mk;
@@ -2805,7 +2839,14 @@ static void mlx5_send_wr_mkey_configure(struct mlx5dv_qp_ex *dv_qp,
 
 	mk = seg;
 	memset(mk, 0, sizeof(*mk));
+	if (unlikely(dv_mkey->lkey & 0xff &&
+		     !(mctx->flags &
+		       MLX5_CTX_FLAGS_MKEY_UPDATE_TAG_SUPPORTED))) {
+		mqp->err = EOPNOTSUPP;
+		return;
+	}
 	mk->qpn_mkey = htobe32(0xffffff00 | (dv_mkey->lkey & 0xff));
+	mkey_mask |= MLX5_WQE_UMR_CTRL_MKEY_MASK_MKEY;
 
 	seg += sizeof(*mk);
 	mqp->cur_size += (sizeof(*mk) / 16);
