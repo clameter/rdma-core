@@ -1564,6 +1564,8 @@ static void daemonize(void)
 
 static int pid_fd;
 
+static char pid_name[40];
+
 static void pid_open(void)
 {
 	struct flock fl = {
@@ -1575,7 +1577,12 @@ static void pid_open(void)
 	int n;
 	char buf[10];
 
-	pid_fd = open("ib2roce.pid", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+	if (default_port)
+		snprintf(pid_name, sizeof(pid_name), "ib2roce-%d.pid", default_port);
+	else
+		strcpy(pid_name, "ib2roce.pid");
+
+	pid_fd = open(buf, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 
 	if (pid_fd < 0)
 		panic("Cannot open pidfile. Error %s\n", errname());
@@ -1594,7 +1601,7 @@ static void pid_open(void)
 
 static void pid_close(void)
 {
-	unlink("ib2roce.pid");
+	unlink(pid_name);
 	close(pid_fd);
 }
 
