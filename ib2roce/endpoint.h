@@ -80,6 +80,18 @@ void list_endpoints(struct i2r_interface *i);
 
 enum uc_state { UC_NONE, UC_ADDR_REQ, UC_ROUTE_REQ, UC_CONN_REQ, UC_CONNECTED, UC_ERROR };
 
+/* Enough to fit a GID */
+#define hash_max_keylen 16
+
+struct hash_item {
+	struct rdma_unicast *next;      /* Linked list to avoid collisions */
+	unsigned hash;
+	bool member;
+	uint8_t key[hash_max_keylen];
+};
+
+enum hashes { hash_ip, hash_mac, hash_gid, hash_lid, nr_hashes };
+
 struct rdma_unicast {
 	struct i2r_interface *i;
 	enum uc_state state;
@@ -87,6 +99,7 @@ struct rdma_unicast {
 	struct rdma_channel *c;		/* Channel for resolution and I/O */
 	struct fifo pending;		/* Buffers waiting on resolution to complete */
 	struct ah_info ai;		/* If ai.ah != NULL then the address info is valid */
+	struct hash_item hash[nr_hashes];
 };
 
 struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);

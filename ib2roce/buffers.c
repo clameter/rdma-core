@@ -43,6 +43,7 @@
 #include "buffers.h"
 #include "endpoint.h"
 #include "cli.h"
+#include "hash.h"
 
 #include <sys/mman.h>
 #include <stdatomic.h>
@@ -454,6 +455,94 @@ int send_buf(struct buf *buf, struct rdma_unicast *ra)
 	return ret;
 }
 
+
+static unsigned keylength[nr_hashes] = { 4, 6, 16, 2 };
+
+struct rdma_unicast *hash_table[nr_hashes][0x100];
+
+static unsigned generate_hash_key(enum hashes type, uint8_t *key, void *p)
+{
+	int i;
+	unsigned sum = 0;
+
+	memcpy(key, p, keylength[type]);
+
+	for (i = 0; i < keylength[type]; i++)
+		sum += key[i];
+
+	return sum & 0xff;
+}
+
+static struct rdma_unicast *find_key_in_chain(enum hashes type,
+	struct rdma_unicast *next, uint8_t *key)
+{
+	for ( ; next != NULL; next = next->hash[type].next)
+		if (memcmp(key, next->hash[type].key, keylength[type]) == 0)
+			break;
+
+	return next;
+}
+
+static void add_to_hash(struct rdma_unicast *ra, enum hashes type, void *p)
+{
+	struct hash_item *h = &ra->hash[type];
+
+	if (h->member)
+		abort();        /* Already a member of the hash */
+
+	h->hash = generate_hash_key(type, h->key, p);
+
+	/* Duplicate key ? */
+	if (find_key_in_chain(type, hash_table[type][h->hash], h->key))
+		abort();
+
+	h->next = hash_table[type][h->hash];
+	hash_table[type][h->hash] = ra;
+
+	h->member = true;
+}
+
+static struct rdma_unicast *find_in_hash(enum hashes type, void *p)
+{
+	uint8_t key[hash_max_keylen];
+	unsigned hash;
+
+	hash = generate_hash_key(type, key, p);
+
+	return find_key_in_chain(type, hash_table[type][hash], key);
+}
+
+/* Ship a unicast datagram to an IP address .... */
+void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *sin)
+{
+	struct rdma_unicast *ra;
+	int ret;
+
+	/* Find address */
+	ra = find_in_hash(hash_ip, &sin->sin_addr);
+	if (!ra) {
+		ra = new_rdma_unicast(i, sin);
+		add_to_hash(ra, hash_ip, &sin->sin_addr);
+	}
+
+	switch (ra->state) {
+		case UC_NONE:   /* We need to resolve the address. Queue up the buffer and initiate */
+			fifo_put(&ra->pending, buf);
+			resolve(ra);
+			return;
+
+		case UC_CONNECTED: /* Channel is open. We can send now */
+			ret = send_buf(buf, ra);
+			if (!ret)
+				logg(LOG_ERR, "Failed to send to %s:%d\n",
+				inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
+			return;
+
+		default:                /* Resolution is in progress. Just queue it up on the address */
+			fifo_put(&ra->pending, buf);
+			return;
+	}
+}
 
 static void buffers_cmd(char *parameters)
 {
