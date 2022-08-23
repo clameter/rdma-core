@@ -292,6 +292,9 @@ void receive_multicast(struct buf *buf)
 		goto invalid_packet;
 	}
 
+	if (!m->enabled)
+		return;
+
 	if (m->interface[in].sendonly) {
 
 		logg(LOG_INFO, "Discard Packet: Received data from Sendonly MC group %s from %s\n",
@@ -330,7 +333,7 @@ void receive_multicast(struct buf *buf)
 		return;
 
 	struct mc_interface *mi = m->interface  + (in ^ 1);
-	struct rdma_channel *ch_out = i2r[in ^ 1].multicast;
+	struct rdma_channel *ch_out = mi->channel;
 
 	if (mi->packet_time) {
 		uint64_t t;
@@ -1423,8 +1426,6 @@ static void setup_timed_events(void)
 		logging(NULL);
 	}
 
-	add_event(now + milliseconds(100), check_joins, NULL, "Check Multicast Joins");
-
 	calculate_pps(NULL);
 }
 
@@ -1634,10 +1635,12 @@ int main(int argc, char **argv)
 	start_cores();
 	arm_channels(NULL);
 	setup_timed_events();
+	check_joins(i2r[INFINIBAND].multicast, i2r[ROCE].multicast);
 
 	if (event_loop() <0)
 		logg(LOG_ERR, "Event Loop failed with %s\n", errname());
 
+	beacon_shutdown();
 	stop_cores();
 
 	if (background)

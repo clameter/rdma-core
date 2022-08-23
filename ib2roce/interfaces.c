@@ -406,7 +406,7 @@ void check_out_of_buffer(void *private)
 
 		i->out_of_buffer = out_of_buffer;
 	}
-	add_event(now + ONE_SECOND, check_out_of_buffer, i, "Check out of buffers\n");
+	add_event(now + ONE_SECOND, check_out_of_buffer, i, "Check out of buffers");
 }
 
 void setup_interface(enum interfaces in)
@@ -545,7 +545,7 @@ void shutdown_ib(void)
 	if (!i2r[INFINIBAND].context)
 		return;
 
-	leave_mc(INFINIBAND);
+	leave_mc(INFINIBAND, i2r[INFINIBAND].multicast);
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + INFINIBAND);
@@ -556,7 +556,7 @@ void shutdown_roce(void)
 	if (!i2r[ROCE].context)
 		return;
 
-	leave_mc(ROCE);
+	leave_mc(ROCE, i2r[ROCE].multicast);
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + ROCE);
@@ -615,7 +615,6 @@ void handle_rdma_event(void *private)
 					param->ah_attr.sl,
 					i->text);
 				st(i->multicast, join_success);
-
 				set_rate(m);
 			}
 			break;
@@ -1072,7 +1071,6 @@ struct i2r_interface *find_interface(struct sockaddr_in *sin)
 
 	return NULL;
 }
-
 
 static unsigned show_interfaces(char *b)
 {
