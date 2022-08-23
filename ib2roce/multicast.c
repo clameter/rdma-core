@@ -126,23 +126,23 @@ static struct mgid_signature {		/* Manage different MGID formats used */
 	{	0x4001, "IB",	false, false, false }
 };
 
-static struct mgid_signature *mgid_mode = mgid_signatures + 3;		/* CLLM is the default */
+static uint8_t mgid_mode = 4;		/* CLLM is the default */
 
 
-static struct mgid_signature *__find_mgid_mode(char *p)
+static uint8_t __find_mgid_mode(char *p)
 {
-	struct mgid_signature *g;
+	int i;
 
-	for(g = mgid_signatures; g < mgid_signatures + nr_mgid_signatures; g++)
-		if (strcasecmp(p, g->id) == 0)
-			return g;
+	for(i = 0; i < nr_mgid_signatures; i++)
+		if (strcasecmp(p, mgid_signatures[i].id) == 0)
+			return i + 1;
 
-	return NULL;
+	return 0;
 }
 
 static bool find_mgid_mode(char *p)
 {
-	struct mgid_signature *g = __find_mgid_mode(p);
+	uint8_t g = __find_mgid_mode(p);
 
 	if (!g) {
 		fprintf(stderr, "Not a valid mgid mode %s\n", p);
@@ -159,7 +159,7 @@ void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 	m->port = ntohs(si->sin_port);
 	m->interface[INFINIBAND].sa = m->interface[ROCE].sa;
 
-	if (m->mgid_mode->signature) {
+	if (mgid_signatures[m->mgid_mode - 1].signature) {
 		/*
 		 * MGID is build according to according to RFC 4391 Section 4
 		 * by taking 28 bits and putting them into the mgid
@@ -174,7 +174,7 @@ void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 		unsigned short *mgid_port	= (unsigned short *)(saib->sib_addr.sib_raw + 10);
 		unsigned int *mgid_ipv4		= (unsigned int *)(saib->sib_addr.sib_raw + 12);
 		unsigned int multicast = ntohl(m->addr.s_addr);
-		struct mgid_signature *mg = m->mgid_mode;
+		struct mgid_signature *mg = mgid_signatures + m->mgid_mode - 1;
 
 		saib->sib_family = AF_IB,
 		saib->sib_sid = si->sin_port;
@@ -203,7 +203,7 @@ void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
  * Parse an address with port number [:xxx] and/or mgid format [/YYYY]
  */
 struct sockaddr_in *parse_addr(const char *arg, int port,
-	struct mgid_signature **p_mgid_mode, uint8_t *p_tos_mode, bool mc_only)
+	uint8_t *p_mgid_mode, uint8_t *p_tos_mode, bool mc_only)
 {
 	struct addrinfo *res;
 	char *service;
@@ -215,7 +215,7 @@ struct sockaddr_in *parse_addr(const char *arg, int port,
 	struct sockaddr_in *si;
 	char *p, *q;
 	int ret;
-	struct mgid_signature *mgid;
+	uint8_t mgid;
 	struct in_addr addr;
 	uint8_t tos;
 	char *a = strdupa(arg);
@@ -282,10 +282,17 @@ struct sockaddr_in *parse_addr(const char *arg, int port,
 
 const char * mgid_text(struct mc *m)
 {
+	int g;
+
 	if (m)
-		return m->mgid_mode->id;
+		g = m->mgid_mode;
 	else
-		return mgid_mode->id;
+		g = mgid_mode;
+
+	if (!g)
+		abort();
+
+	return mgid_signatures[g -1].id;
 }
 
 void mgids_out(void)
@@ -306,8 +313,10 @@ void mgids_out(void)
 
 bool mgid_check(struct mc *m, unsigned short signature)
 {
-	if (m->mgid_mode->signature) {
-		if (signature != m->mgid_mode->signature)
+	struct mgid_signature *g= mgid_signatures + m->mgid_mode - 1;
+
+	if (g->signature) {
+		if (signature != g->signature)
 			return false;
 	}
 	return true;

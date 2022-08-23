@@ -97,8 +97,8 @@ struct mc {
 	struct mc_interface interface[2];
 	void (*callback)(struct mc *, enum interfaces, struct buf *);
 	uint8_t tos_mode;
+	uint8_t mgid_mode;
 	uint16_t port;
-	struct mgid_signature *mgid_mode;
 	const char *text;
 };
 
@@ -123,7 +123,7 @@ int leave_mc(enum interfaces i);
 void check_joins(void *);
 
 struct sockaddr_in *parse_addr(const char *arg, int port,
-	struct mgid_signature **p_mgid_mode, uint8_t *p_tos_mode, bool mc_only);
+	uint8_t *p_mgid_mode, uint8_t *p_tos_mode, bool mc_only);
 
 const char *mgid_text(struct mc *m);
 
