@@ -626,6 +626,43 @@ void arm_channels(struct core_info *core)
 
 }
 
+static int stat_interval = 10;		/* Interval for statistics */
+
+static void calculate_pps_channel(struct rdma_channel *c)
+{
+	if (c->last_snapshot) {
+		uint64_t tdiff = now - c->last_snapshot;
+
+		c->pps_in = seconds(c->stats[packets_received] - c->last_received) / tdiff;
+		c->pps_out = seconds(c->stats[packets_sent] - c->last_sent) / tdiff;
+
+		if (c->pps_in > c->max_pps_in)
+			c->max_pps_in = c->pps_in;
+
+		if (c->pps_out > c->max_pps_out)
+			c->max_pps_out = c->pps_out;
+
+	}
+	c->last_received = c->stats[packets_received];
+	c->last_sent = c->stats[packets_sent];
+	c->last_snapshot = now;
+}
+
+void calculate_pps(void *private)
+{
+	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
+	if (i->context)
+	{
+		if (i->multicast)
+			calculate_pps_channel(i->multicast);
+#ifdef UNICAST
+		if (i->ud)
+			calculate_pps_channel(i->ud);
+#endif
+	}
+	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
+}
+
 int channel_stats(char *b, struct rdma_channel *c, const char *interface, const char *type)
 {
 	int n = 0;
@@ -685,4 +722,7 @@ static void channel_init(void)
 
 	register_option("port", required_argument, 'p', port_set,
 		       "<number>", "Set default port number to use if none is specified");
+
+	register_enable("statint", true, NULL, &stat_interval, "60", "1", NULL,
+		"Sampling interval to calculate pps values");
 }
