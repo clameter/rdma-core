@@ -97,6 +97,7 @@ static bool debug = false;		/* Stay in foreground, print more details */
 static bool update_requested = false;	/* Received SIGUSR1. Dump all MC data details */
 static bool testing = false;		/* Run some tests on startup */
 static int drop_packets = 0;		/* Packet dropper */
+static int stat_interval = 10;		/* Interval for statistics */
 
 
 /*
@@ -1315,6 +1316,41 @@ static void status_write(void *private)
 	add_event(timestamp() + seconds(60), status_write, NULL,  "Status File Write");
 }
 
+static void calculate_pps_channel(struct rdma_channel *c)
+{
+	if (c->last_snapshot) {
+		uint64_t tdiff = now - c->last_snapshot;
+
+		c->pps_in = seconds(c->stats[packets_received] - c->last_received) / tdiff;
+		c->pps_out = seconds(c->stats[packets_sent] - c->last_sent) / tdiff;
+
+		if (c->pps_in > c->max_pps_in)
+			c->max_pps_in = c->pps_in;
+
+		if (c->pps_out > c->max_pps_out)
+			c->max_pps_out = c->pps_out;
+
+	}
+	c->last_received = c->stats[packets_received];
+	c->last_sent = c->stats[packets_sent];
+	c->last_snapshot = now;
+}
+
+static void calculate_pps(void *private)
+{
+	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
+	if (i->context)
+	{
+		if (i->multicast)
+			calculate_pps_channel(i->multicast);
+#ifdef UNICAST
+		if (i->ud)
+			calculate_pps_channel(i->ud);
+#endif
+	}
+	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
+}
+
 static void brief_status(void)
 {
 	char buf[4000];
@@ -1390,8 +1426,6 @@ static void setup_timed_events(void)
 	}
 
 	calculate_pps(NULL);
-
-	check_joins(i2r[INFINIBAND].multicast, i2r[ROCE].multicast);
 }
 
 static void update_status(int x)
@@ -1533,6 +1567,8 @@ static void setup_enable(void)
 		"Infiniband: Exempt the first N packets from swrate (0=off)");
 	register_enable("rburst", true,	NULL, &max_rburst, "100", "0", set_rates,
 		"ROCE: Exempt the first N packets from swrate (0=off)");
+	register_enable("statint", true, NULL, &stat_interval, "60", "1", NULL,
+		"Sampling interval to calculate pps values");
 }
 
 __attribute__((constructor))
@@ -1598,6 +1634,7 @@ int main(int argc, char **argv)
 	start_cores();
 	arm_channels(NULL);
 	setup_timed_events();
+	check_joins(i2r[INFINIBAND].multicast, i2r[ROCE].multicast);
 
 	if (event_loop() <0)
 		logg(LOG_ERR, "Event Loop failed with %s\n", errname());
