@@ -214,6 +214,8 @@ void register_option(const char  *name, int has_arg, const char x, void (*callba
 	nr_opts++;
 }
 
+static void help_opt(char *);
+
 void parse_options(int argc, char **argv)
 {
 	char opt_string[300];
@@ -245,9 +247,11 @@ void parse_options(int argc, char **argv)
 			optarg = argv[optind];
 			optind++;
 		}
-		if (opts_datas[op].callback)
+		if (op != '?' && opts_datas[op].callback)
+
 			opts_datas[op].callback(optarg);
-		else help(NULL);
+		else
+			help_opt(NULL);
 	}
 }
 
@@ -461,6 +465,7 @@ void register_enable(const char *id, bool runtime, bool  *bool_flag, int *int_fl
 		panic("Too many console commands limit is %d\n", MAX_CONCOMS);
 
 	c->id = id;
+	c->runtime = runtime;
 	c->bool_flag = bool_flag;
 	c->int_flag = int_flag;
 	c->on_value = on_value;
