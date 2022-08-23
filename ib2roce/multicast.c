@@ -534,7 +534,7 @@ void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce)
 {
 	struct cj *cj;
 
-	cj = malloc(sizeof(cj));
+	cj = malloc(sizeof(struct cj));
 	cj->channels[INFINIBAND] = infiniband;
 	cj->channels[ROCE] = roce;
 
