@@ -1314,57 +1314,6 @@ static void status_write(void *private)
 	add_event(timestamp() + seconds(60), status_write, NULL,  "Status File Write");
 }
 
-#ifdef UNICAST
-/* A mini router follows */
-static struct i2r_interface *find_interface(struct sockaddr_in *sin)
-{
-	struct i2r_interface *i;
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-	    if (i->context) {
-		unsigned netmask = i->if_netmask.sin_addr.s_addr;
-
-		if ((sin->sin_addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask))
-			return i;
-	}
-
-	return NULL;
-}
-
-/* Ship a unicast datagram to an IP address .... */
-static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *sin)
-{
-	struct rdma_unicast *ra;
-	int ret;
-
-	/* Find address */
-	ra = hash_find(i->ru_hash,  sin);
-	if (!ra) {
-		ra = new_rdma_unicast(i, sin);
-		hash_add(i->ru_hash, ra);
-	}
-
-	switch (ra->state) {
-		case UC_NONE:	/* We need to resolve the address. Queue up the buffer and initiate */
-			fifo_put(&ra->pending, buf);
-			resolve(ra);
-			return;
-
-		case UC_CONNECTED: /* Channel is open. We can send now */
-			ret = send_buf(buf, ra);
-			if (!ret)
-				logg(LOG_ERR, "Failed to send to %s:%d\n",
-					inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
-			return;
-
-		default:		/* Resolution is in progress. Just queue it up on the address */
-			fifo_put(&ra->pending, buf);
-			return;
-
-	}
-}
-#endif
-
 static void calculate_pps_channel(struct rdma_channel *c)
 {
 	if (c->last_snapshot) {

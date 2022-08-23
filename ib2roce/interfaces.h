@@ -136,11 +136,15 @@ void set_rates(void);
 /* Scan a cores rdma channels for completion queue entries */
 void scan_cqs(void *private);
 
+void reset_flags(struct buf *);
+
 int check_rdma_device(enum interfaces i, int port, char *name,
 	       struct ibv_context *c, struct ibv_port_attr *a, struct ibv_device_attr *d);
 
 /* Scan through available RDMA devices in order to locate the devices for bridging */
 int find_rdma_devices(void);
+/* Find the interface that allows us to reach a certain IP address */
+struct i2r_interface *find_interface(struct sockaddr_in *sin);
 
 void check_out_of_buffer(void *);
 

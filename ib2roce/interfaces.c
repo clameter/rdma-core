@@ -863,7 +863,7 @@ void post_receive_buffers(void)
 }
 
 
-static void reset_flags(struct buf *buf)
+void reset_flags(struct buf *buf)
 {
 	memset(&buf->ip_valid, 0, (void *)&buf->ip_csum_ok - (void *)&buf->ip_valid);
 }
@@ -1056,6 +1056,23 @@ void handle_receive_packet(void *private)
 	c->receive(buf);
 	put_buf(buf);
 }
+
+/* A mini router follows */
+struct i2r_interface *find_interface(struct sockaddr_in *sin)
+{
+	struct i2r_interface *i;
+
+	for(i = i2r; i < i2r + NR_INTERFACES; i++)
+	    if (i->context) {
+		unsigned netmask = i->if_netmask.sin_addr.s_addr;
+
+		if ((sin->sin_addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask))
+			return i;
+	}
+
+	return NULL;
+}
+
 
 static unsigned show_interfaces(char *b)
 {
