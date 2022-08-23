@@ -120,7 +120,7 @@ int _leave_mc(struct in_addr addr,struct sockaddr *si, enum interfaces i);
 
 int leave_mc(enum interfaces i);
 
-void join_processing(void);
+void check_joins(void *);
 
 struct sockaddr_in *parse_addr(const char *arg, int port,
 	struct mgid_signature **p_mgid_mode, uint8_t *p_tos_mode, bool mc_only);
