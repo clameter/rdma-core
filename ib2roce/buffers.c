@@ -59,10 +59,6 @@ static bool huge = false;
 struct buf *buffers;
 struct buf *nextbuffer;
 
-#ifdef UNICAST
-static int send_buf(struct buf *buf, struct rdma_unicast *ra);
-#endif
-
 static bool buf_cmpxchg(struct buf **x, struct buf *y, struct buf *z)
 {
 	if (multithreaded) {
