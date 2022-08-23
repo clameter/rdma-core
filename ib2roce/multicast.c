@@ -413,7 +413,7 @@ int leave_mc(enum interfaces i)
  * Join MC groups. This is called from the event loop every second
  * as long as there are unjoined groups
  */
-void join_processing(void)
+static void join_processing(void)
 {
 	int i;
 	enum interfaces in;
@@ -465,6 +465,31 @@ void join_processing(void)
 	}
 }
 
+
+void check_joins(void *private)
+{
+	struct i2r_interface *i;
+
+	/* Maintenance tasks */
+	if (nr_mc > active_mc) {
+		join_processing();
+		add_event(timestamp() + ONE_SECOND, check_joins, NULL, "Check Multicast Joins");
+	} else {
+		/*
+		 * All active so start listening. This means we no longer
+		 * are able to subscribe to Multicast groups
+		 */
+		for(i = i2r; i < i2r + NR_INTERFACES; i++)
+		   if (i->context)	{
+			struct rdma_channel *c = i->multicast;
+
+			if (rdma_listen(c->id, 50))
+				logg(LOG_ERR, "rdma_listen on %s error %s\n", c->text, errname());
+
+			c->listening = true;
+		}
+	}
+}
 
 static void multicast_cmd(char *parameters)
 {

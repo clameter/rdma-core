@@ -1365,31 +1365,6 @@ static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockadd
 }
 #endif
 
-static void check_joins(void *private)
-{
-	struct i2r_interface *i;
-
-	/* Maintenance tasks */
-	if (nr_mc > active_mc) {
-		join_processing();
-		add_event(timestamp() + ONE_SECOND, check_joins, NULL, "Check Multicast Joins");
-	} else {
-		/*
-		 * All active so start listening. This means we no longer
-		 * are able to subscribe to Multicast groups
-		 */
-		for(i = i2r; i < i2r + NR_INTERFACES; i++)
-		   if (i->context)	{
-			struct rdma_channel *c = i->multicast;
-
-			if (rdma_listen(c->id, 50))
-				logg(LOG_ERR, "rdma_listen on %s error %s\n", c->text, errname());
-
-			c->listening = true;
-		}
-	}
-}
-
 static void calculate_pps_channel(struct rdma_channel *c)
 {
 	if (c->last_snapshot) {
