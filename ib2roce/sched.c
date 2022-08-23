@@ -345,16 +345,15 @@ static void zap_cmd(char *parameters)
 
 static void event_cmd(char *parameters)
 {
-	char buffer[4000];
-	int n;
-
 	printf("Scheduled events on the high latency thread\n");
 	printf("-------------------------------------------\n");
 
-	n = get_timer_list(buffer, '\n');
-	if (n)
-		printf("%s\n", buffer);
-	else
+	if (next_event) {
+
+		for(struct timed_event *z = next_event; z; z = z->next)
+			printf("%ldms %s\n", (z->time - timestamp()) / ONE_MILLISECOND, z->text);
+
+	} else
 		printf("No events.\n");
 }
 
