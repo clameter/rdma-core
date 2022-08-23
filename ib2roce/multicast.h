@@ -79,6 +79,7 @@ extern unsigned int default_mc_port;
  * mode. Access to that status information requires some care.
  */
 struct mc_interface {
+	struct rdma_channel *channel;
 	enum mc_status status;
 	bool sendonly;
 	struct ah_info ai;
@@ -98,6 +99,8 @@ struct mc {
 	void (*callback)(struct mc *, enum interfaces, struct buf *);
 	uint8_t tos_mode;
 	uint8_t mgid_mode;
+	bool enabled;				/* Is forwarding active ? */
+	bool admin;				/* Administrative group */
 	uint16_t port;
 	const char *text;
 };
@@ -114,13 +117,9 @@ int new_mc_addr(char *arg,
 	bool sendonly_infiniband,
 	bool sendonly_roce);
 
-int _join_mc(struct in_addr addr, struct sockaddr *sa,
-	unsigned port, uint8_t tos, enum interfaces i, bool sendonly, void *private);
-int _leave_mc(struct in_addr addr,struct sockaddr *si, enum interfaces i);
+int leave_mc(enum interfaces i, struct rdma_channel *);
 
-int leave_mc(enum interfaces i);
-
-void check_joins(void *);
+void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce);
 
 struct sockaddr_in *parse_addr(const char *arg, int port,
 	uint8_t *p_mgid_mode, uint8_t *p_tos_mode, bool mc_only);

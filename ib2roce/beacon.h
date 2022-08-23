@@ -38,5 +38,6 @@
  */
 
 void beacon_setup(void);
-
+void beacon_shutdown(void);
 #endif
+
