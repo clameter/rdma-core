@@ -655,10 +655,10 @@ void calculate_pps(void *private)
 	{
 		if (i->multicast)
 			calculate_pps_channel(i->multicast);
-#ifdef UNICAST
+
 		if (i->ud)
 			calculate_pps_channel(i->ud);
-#endif
+
 	}
 	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
 }
