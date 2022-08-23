@@ -589,6 +589,11 @@ void stop_channel(struct rdma_channel *c)
 }
 
 
+void arm_channel(struct rdma_channel *c)
+{
+	ibv_req_notify_cq(c->cq, 0);
+}
+
 void arm_channels(struct core_info *core)
 {
 	struct i2r_interface *i;
