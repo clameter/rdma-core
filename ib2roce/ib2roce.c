@@ -97,7 +97,6 @@ static bool debug = false;		/* Stay in foreground, print more details */
 static bool update_requested = false;	/* Received SIGUSR1. Dump all MC data details */
 static bool testing = false;		/* Run some tests on startup */
 static int drop_packets = 0;		/* Packet dropper */
-static int stat_interval = 10;		/* Interval for statistics */
 
 
 /*
@@ -238,9 +237,7 @@ void receive_multicast(struct buf *buf)
 	int ret;
 	const char *reason = NULL;
 
-#ifdef UNICAST
 	learn_source_address(buf);
-#endif
 
 	if (!buf->grh_valid) {
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",
@@ -316,6 +313,9 @@ void receive_multicast(struct buf *buf)
 		return;
 	}
 
+	if (!m->enabled)
+		return;
+
 	if (pgm_mode != pgm_none) {
 		uint8_t *saved = buf->cur;
 		if (!pgm_process(c, m, buf))
@@ -330,7 +330,7 @@ void receive_multicast(struct buf *buf)
 		return;
 
 	struct mc_interface *mi = m->interface  + (in ^ 1);
-	struct rdma_channel *ch_out = i2r[in ^ 1].multicast;
+	struct rdma_channel *ch_out = mi->channel;
 
 	if (mi->packet_time) {
 		uint64_t t;
@@ -371,6 +371,7 @@ delayed_packet:
 
 	if (!mi->ai.ah)		/* After a join it may take awhile for the ah pointer to propagate */
  		sleep(1);
+
 	get_buf(buf);	/* Packet will not be freed on return from this function */
  
 	ret = send_to(ch_out, buf->cur, buf->end - buf->cur, &mi->ai, buf->imm_valid, buf->imm, buf);
@@ -1314,117 +1315,6 @@ static void status_write(void *private)
 	add_event(timestamp() + seconds(60), status_write, NULL,  "Status File Write");
 }
 
-#ifdef UNICAST
-/* A mini router follows */
-static struct i2r_interface *find_interface(struct sockaddr_in *sin)
-{
-	struct i2r_interface *i;
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-	    if (i->context) {
-		unsigned netmask = i->if_netmask.sin_addr.s_addr;
-
-		if ((sin->sin_addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask))
-			return i;
-	}
-
-	return NULL;
-}
-
-/* Ship a unicast datagram to an IP address .... */
-static void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *sin)
-{
-	struct rdma_unicast *ra;
-	int ret;
-
-	/* Find address */
-	ra = hash_find(i->ru_hash,  sin);
-	if (!ra) {
-		ra = new_rdma_unicast(i, sin);
-		hash_add(i->ru_hash, ra);
-	}
-
-	switch (ra->state) {
-		case UC_NONE:	/* We need to resolve the address. Queue up the buffer and initiate */
-			fifo_put(&ra->pending, buf);
-			resolve(ra);
-			return;
-
-		case UC_CONNECTED: /* Channel is open. We can send now */
-			ret = send_buf(buf, ra);
-			if (!ret)
-				logg(LOG_ERR, "Failed to send to %s:%d\n",
-					inet_ntoa(sin->sin_addr), ntohs(sin->sin_port));
-			return;
-
-		default:		/* Resolution is in progress. Just queue it up on the address */
-			fifo_put(&ra->pending, buf);
-			return;
-
-	}
-}
-#endif
-
-static void check_joins(void *private)
-{
-	struct i2r_interface *i;
-
-	/* Maintenance tasks */
-	if (nr_mc > active_mc) {
-		join_processing();
-		add_event(timestamp() + ONE_SECOND, check_joins, NULL, "Check Multicast Joins");
-	} else {
-		/*
-		 * All active so start listening. This means we no longer
-		 * are able to subscribe to Multicast groups
-		 */
-		for(i = i2r; i < i2r + NR_INTERFACES; i++)
-		   if (i->context)	{
-			struct rdma_channel *c = i->multicast;
-
-			if (rdma_listen(c->id, 50))
-				logg(LOG_ERR, "rdma_listen on %s error %s\n", c->text, errname());
-
-			c->listening = true;
-		}
-	}
-}
-
-static void calculate_pps_channel(struct rdma_channel *c)
-{
-	if (c->last_snapshot) {
-		uint64_t tdiff = now - c->last_snapshot;
-
-		c->pps_in = seconds(c->stats[packets_received] - c->last_received) / tdiff;
-		c->pps_out = seconds(c->stats[packets_sent] - c->last_sent) / tdiff;
-
-		if (c->pps_in > c->max_pps_in)
-			c->max_pps_in = c->pps_in;
-
-		if (c->pps_out > c->max_pps_out)
-			c->max_pps_out = c->pps_out;
-
-	}
-	c->last_received = c->stats[packets_received];
-	c->last_sent = c->stats[packets_sent];
-	c->last_snapshot = now;
-}
-
-static void calculate_pps(void *private)
-{
-	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
-	if (i->context)
-	{
-		if (i->multicast)
-			calculate_pps_channel(i->multicast);
-#ifdef UNICAST
-		if (i->ud)
-			calculate_pps_channel(i->ud);
-#endif
-	}
-	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
-}
-
 static void brief_status(void)
 {
 	char buf[4000];
@@ -1499,9 +1389,9 @@ static void setup_timed_events(void)
 		logging(NULL);
 	}
 
-	add_event(now + milliseconds(100), check_joins, NULL, "Check Multicast Joins");
-
 	calculate_pps(NULL);
+
+	check_joins(i2r[INFINIBAND].multicast, i2r[ROCE].multicast);
 }
 
 static void update_status(int x)
@@ -1564,6 +1454,8 @@ static void daemonize(void)
 
 static int pid_fd;
 
+static char pid_name[40];
+
 static void pid_open(void)
 {
 	struct flock fl = {
@@ -1575,7 +1467,12 @@ static void pid_open(void)
 	int n;
 	char buf[10];
 
-	pid_fd = open("ib2roce.pid", O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+	if (default_port)
+		snprintf(pid_name, sizeof(pid_name), "ib2roce-%d.pid", default_port);
+	else
+		strcpy(pid_name, "ib2roce.pid");
+
+	pid_fd = open(buf, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 
 	if (pid_fd < 0)
 		panic("Cannot open pidfile. Error %s\n", errname());
@@ -1594,7 +1491,7 @@ static void pid_open(void)
 
 static void pid_close(void)
 {
-	unlink("ib2roce.pid");
+	unlink(pid_name);
 	close(pid_fd);
 }
 
@@ -1636,8 +1533,6 @@ static void setup_enable(void)
 		"Infiniband: Exempt the first N packets from swrate (0=off)");
 	register_enable("rburst", true,	NULL, &max_rburst, "100", "0", set_rates,
 		"ROCE: Exempt the first N packets from swrate (0=off)");
-	register_enable("statint", true, NULL, &stat_interval, "60", "1", NULL,
-		"Sampling interval to calculate pps values");
 }
 
 __attribute__((constructor))
@@ -1707,6 +1602,7 @@ int main(int argc, char **argv)
 	if (event_loop() <0)
 		logg(LOG_ERR, "Event Loop failed with %s\n", errname());
 
+	beacon_shutdown();
 	stop_cores();
 
 	if (background)

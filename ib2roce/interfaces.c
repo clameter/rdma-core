@@ -406,7 +406,7 @@ void check_out_of_buffer(void *private)
 
 		i->out_of_buffer = out_of_buffer;
 	}
-	add_event(now + ONE_SECOND, check_out_of_buffer, i, "Check out of buffers\n");
+	add_event(now + ONE_SECOND, check_out_of_buffer, i, "Check out of buffers");
 }
 
 void setup_interface(enum interfaces in)
@@ -545,7 +545,7 @@ void shutdown_ib(void)
 	if (!i2r[INFINIBAND].context)
 		return;
 
-	leave_mc(INFINIBAND);
+	leave_mc(INFINIBAND, i2r[INFINIBAND].multicast);
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + INFINIBAND);
@@ -556,7 +556,7 @@ void shutdown_roce(void)
 	if (!i2r[ROCE].context)
 		return;
 
-	leave_mc(ROCE);
+	leave_mc(ROCE, i2r[ROCE].multicast);
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + ROCE);
@@ -615,7 +615,6 @@ void handle_rdma_event(void *private)
 					param->ah_attr.sl,
 					i->text);
 				st(i->multicast, join_success);
-
 				set_rate(m);
 			}
 			break;
@@ -863,7 +862,7 @@ void post_receive_buffers(void)
 }
 
 
-static void reset_flags(struct buf *buf)
+void reset_flags(struct buf *buf)
 {
 	memset(&buf->ip_valid, 0, (void *)&buf->ip_csum_ok - (void *)&buf->ip_valid);
 }
@@ -1055,6 +1054,22 @@ void handle_receive_packet(void *private)
 	buf->cur = buf->raw;
 	c->receive(buf);
 	put_buf(buf);
+}
+
+/* A mini router follows */
+struct i2r_interface *find_interface(struct sockaddr_in *sin)
+{
+	struct i2r_interface *i;
+
+	for(i = i2r; i < i2r + NR_INTERFACES; i++)
+	    if (i->context) {
+		unsigned netmask = i->if_netmask.sin_addr.s_addr;
+
+		if ((sin->sin_addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask))
+			return i;
+	}
+
+	return NULL;
 }
 
 static unsigned show_interfaces(char *b)
