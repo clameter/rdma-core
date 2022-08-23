@@ -129,7 +129,6 @@ static struct mgid_signature {		/* Manage different MGID formats used */
 
 static uint8_t mgid_mode = 4;		/* CLLM is the default */
 
-
 static uint8_t __find_mgid_mode(char *p)
 {
 	int i;
@@ -361,6 +360,8 @@ out:
 	return ret;
 }
 
+
+
 static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 	unsigned port, uint8_t tos, struct rdma_channel *c, bool sendonly, void *private)
 {
@@ -412,22 +413,24 @@ int leave_mc(enum interfaces i, struct rdma_channel *c)
 
 	for (j = 0; j < nr_mc; j++) {
 		struct mc *m = mcs + j;
+		struct mc_interface *mi = m->interface + i;
 
-		if (m->interface[i].channel != c)
+		if (mi->channel != c)
 			continue;
 
 		m->enabled = false;
-		if (m->interface[i].channel) {
-			ret = _leave_mc(m->addr, m->interface[i].sa, c);
+		if (mi->channel) {
+			ret = _leave_mc(m->addr, mi->sa, c);
 			if (ret)
 				return 1;
 		}
 
-		m->interface[i].channel = NULL;
+		mi->channel = NULL;
 	}
 	return 0;
 }
 
+/* List the two rdma channels for bridging MC traffic */
 struct cj {
 	struct rdma_channel *channels[2];
 };
@@ -452,16 +455,16 @@ static void join_processing(struct cj* cj)
 		if (m->interface[ROCE].status == MC_JOINED && m->interface[INFINIBAND].status == MC_JOINED)
 			continue;
 
-		for(in = 0; in < 2; in++) {
+		for(in = 0; in < NR_INTERFACES; in++) {
 			struct mc_interface *mi = m->interface + in;
-			uint8_t tos = i == ROCE ? m->tos_mode : 0;
+			uint8_t tos = in == ROCE ? m->tos_mode : 0;
 
 			if (i2r[in].context) {
 				switch(mi->status) {
 
 				case MC_OFF:
 					if (_join_mc(m->addr, mi->sa, port, tos, cj->channels[in], mi->sendonly, m) == 0) {
-						m->interface[in].status = MC_JOINING;
+						mi->status = MC_JOINING;
 						mi->channel = cj->channels[in];
 					}
 					break;
@@ -499,15 +502,18 @@ static void __check_joins(void *private)
 	struct cj *cj = private;
 	struct i2r_interface *i;
 
-	/* Maintenance tasks */
 	if (nr_mc > active_mc) {
+
+		/* Still subscribing to multicast groups */
 		join_processing(cj);
-		add_event(timestamp() + ONE_SECOND, __check_joins, private, "Check Multicast Joins");
+		add_event(timestamp() + milliseconds(100), __check_joins, private, "Check Multicast Joins");
+
 	} else {
 		/*
 		 * All active so start listening. This means we no longer
 		 * are able to subscribe to Multicast groups
 		 */
+
 		for(i = i2r; i < i2r + NR_INTERFACES; i++)
 		   if (i->context)	{
 			struct rdma_channel *c = cj->channels[i - i2r];
@@ -547,24 +553,30 @@ static void multicast_cmd(char *parameters)
 	for(m = mcs; m < mcs + nr_mc; m++) {
 
 		for(enum interfaces in = INFINIBAND; in <= ROCE; in++) {
+			struct mc_interface *mi = m->interface + in;
+
 			printf("%s %s %s %s %s ", interfaces_text[in], m->text,
-				mc_text[m->interface[in].status],
-				m->interface[in].sendonly ? "Sendonly " : "",
+				mc_text[mi->status],
+				mi->sendonly ? "Sendonly " : "",
 				in == INFINIBAND ? mgid_text(m) : "");
+
 			if (!m->enabled)
 				printf("disabled ");
 
 			if (m->admin)
 				printf("admin ");
 
+			if (mi->channel != i2r[in].multicast)
+				printf("remote ");
+
 			printf("packet_time=%dns, max_burst=%d packets, delayed=%ld packets, last_sent=%ldms ago, last_delayed=%ldms ago, pending=%u packets, burst=%d\n",
-				m->interface[in].packet_time,
-				m->interface[in].max_burst,
-				m->interface[in].delayed,
-				m->interface[in].last_sent ? (now - m->interface[in].last_sent) / ONE_MILLISECOND : -999,
-				m->interface[in].last_delayed ? (now - m->interface[in].last_delayed) / ONE_MILLISECOND : -999,
-				m->interface[INFINIBAND].pending,
-				m->interface[in].burst);
+				mi->packet_time,
+				mi->max_burst,
+				mi->delayed,
+				mi->last_sent ? (now - mi->last_sent) / ONE_MILLISECOND : -999,
+				mi->last_delayed ? (now - mi->last_delayed) / ONE_MILLISECOND : -999,
+				mi->pending,
+				mi->burst);
 		}
 	}
 }

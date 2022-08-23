@@ -238,9 +238,7 @@ void receive_multicast(struct buf *buf)
 	int ret;
 	const char *reason = NULL;
 
-#ifdef UNICAST
 	learn_source_address(buf);
-#endif
 
 	if (!buf->grh_valid) {
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",
@@ -292,9 +290,6 @@ void receive_multicast(struct buf *buf)
 		goto invalid_packet;
 	}
 
-	if (!m->enabled)
-		return;
-
 	if (m->interface[in].sendonly) {
 
 		logg(LOG_INFO, "Discard Packet: Received data from Sendonly MC group %s from %s\n",
@@ -318,6 +313,9 @@ void receive_multicast(struct buf *buf)
 		m->callback(m, in, buf);
 		return;
 	}
+
+	if (!m->enabled)
+		return;
 
 	if (pgm_mode != pgm_none) {
 		uint8_t *saved = buf->cur;
@@ -374,6 +372,7 @@ delayed_packet:
 
 	if (!mi->ai.ah)		/* After a join it may take awhile for the ah pointer to propagate */
  		sleep(1);
+
 	get_buf(buf);	/* Packet will not be freed on return from this function */
  
 	ret = send_to(ch_out, buf->cur, buf->end - buf->cur, &mi->ai, buf->imm_valid, buf->imm, buf);

@@ -58,9 +58,8 @@
 
 #define MAX_MC 240
 
-extern unsigned nr_mc;
-
-extern unsigned active_mc;	/* MC groups actively briding */
+extern unsigned nr_mc;		/* Multicast groups entries */
+extern unsigned active_mc;	/* MC groups active */
 
 enum mc_status { MC_OFF, MC_JOINING, MC_JOINED, MC_ERROR, NR_MC_STATUS };
 
@@ -84,6 +83,8 @@ struct mc_interface {
 	bool sendonly;
 	struct ah_info ai;
 	struct sockaddr *sa;
+
+	/* Statistics */
 	uint32_t packet_time;		/* How much time must elapse for a packet to be sent 0 = disabled */
 	uint32_t max_burst;		/* How long can a burst last */
 	uint64_t last_sent;		/* Last time a packet was sent */
@@ -95,11 +96,11 @@ struct mc_interface {
 
 struct mc {
 	struct in_addr addr;
-	struct mc_interface interface[2];
+	struct mc_interface interface[NR_INTERFACES];
 	void (*callback)(struct mc *, enum interfaces, struct buf *);
 	uint8_t tos_mode;
 	uint8_t mgid_mode;
-	bool enabled;				/* Is forwarding active ? */
+	bool enabled;				/* Are we handling traffic? */
 	bool admin;				/* Administrative group */
 	uint16_t port;
 	const char *text;
@@ -112,22 +113,24 @@ struct mc *hash_lookup_mc(struct in_addr addr);
 
 /* Setup the addreses for ROCE and INFINIBAND based on a ipaddr:port spec */
 void setup_mc_addrs(struct mc *m, struct sockaddr_in *si);
+
 /* Multicast group specifications on the command line */
 int new_mc_addr(char *arg,
 	bool sendonly_infiniband,
 	bool sendonly_roce);
 
+struct sockaddr_in *parse_addr(const char *arg, int port,
+	uint8_t *p_mgid_mode, uint8_t *p_tos_mode, bool mc_only);
+
+
+
 int leave_mc(enum interfaces i, struct rdma_channel *);
 
 void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce);
 
-struct sockaddr_in *parse_addr(const char *arg, int port,
-	uint8_t *p_mgid_mode, uint8_t *p_tos_mode, bool mc_only);
-
+/* MGID format related functions */
 const char *mgid_text(struct mc *m);
-
 void mgids_out(void);
-
 bool mgid_check(struct mc *m, unsigned short signature);
 
 #endif
