@@ -112,6 +112,19 @@ static struct bridge_state remote_bridge[MAX_BRIDGES];
 
 static unsigned int nr_bridges;
 
+
+void run_bridge_channels(void (*func)(struct rdma_channel *))
+{
+	int i;
+
+	for(i = 0; i < nr_bridges; i++) {
+		struct bridge_state *br = remote_bridge + i;
+
+		func(br->channel[INFINIBAND]);
+		func(br->channel[ROCE]);
+	}
+}
+
 static struct mc *beacon_mc;		/* == NULL if unicast */
 
 static void enable_bridge(struct bridge_state *b)

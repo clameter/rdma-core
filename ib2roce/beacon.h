@@ -37,6 +37,9 @@
  *
  */
 
+
+void run_bridge_channels(void (*func)(struct rdma_channel *));
+
 void beacon_setup(void);
 void beacon_shutdown(void);
 #endif

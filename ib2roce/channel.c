@@ -46,6 +46,7 @@
 #include "interfaces.h"
 #include "channel.h"
 #include "cli.h"
+#include "beacon.h"
 
 const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 
@@ -660,6 +661,8 @@ void calculate_pps(void *private)
 			calculate_pps_channel(i->ud);
 
 	}
+
+	run_bridge_channels(calculate_pps_channel);
 	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
 }
 
