@@ -52,6 +52,8 @@
 
 extern unsigned default_port;
 
+extern bool latency;
+
 enum interfaces { INFINIBAND, ROCE, NR_INTERFACES };
 
 extern const char *interfaces_text[NR_INTERFACES];
@@ -151,6 +153,8 @@ struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type
 void arm_channels(struct core_info *core);
 void arm_channel(struct rdma_channel *);
 void channel_destroy(struct rdma_channel *c);
+
+void all_channels(void (*func)(struct rdma_channel *));
 
 void calculate_pps(void *private);
 

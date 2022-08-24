@@ -77,8 +77,6 @@ thread_local uint64_t now;
 thread_local struct core_info *current = NULL;
 
 int cores = 0;
-static bool latency = false;
-
 static bool terminated = false;
 
 /*
@@ -300,49 +298,6 @@ void stop_cores(void)
 	multithreaded = false;
 }
 
-static void channel_zap(struct rdma_channel *c)
-{
-	c->last_snapshot = 0;
-	c->max_pps_in = 0;
-	c->max_pps_out = 0;
-	c->cq_high = 0;
-
-	for(int k = 0; k < nr_stats; k++)
-		c->stats[k] = 0;
-
-	if (cores) {
-		for(unsigned i = 0; i < cores; i++) {
-			struct core_info *ci = core_infos + i;
-
-			if (latency) {
-				ci->samples = 0;
-				ci->max_latency = 0;
-				ci->min_latency = 0;
-				ci->sum_latency = 0;
-			}
-
-		}
-	}
-}
-
-
-static void zap_cmd(char *parameters)
-{
-	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
-		if (i->multicast)
-			channel_zap(i->multicast);
-#ifdef UNICAST
-		if (i->ud)
-			channel_zap(i->ud);
-		if (i->raw)
-			channel_zap(i->raw);
-		if (i->qp1)
-			channel_zap(i->qp1);
-#endif
-	}
-	printf("Ok\n");
-}
-
 static void event_cmd(char *parameters)
 {
 	printf("Scheduled events on the high latency thread\n");
@@ -392,7 +347,6 @@ static void core_set(char *optarg)
 __attribute__((constructor))
 static void sched_init(void)
 {
-	register_concom("zap", true, 0, "Clear counters", zap_cmd );
 	register_concom("cores", true, 1, "Setup and list core configuration", core_cmd);
 	register_concom("events", true,	0, "Show scheduler event queue", event_cmd);
 	register_option("cores", required_argument, 'k', core_set,
