@@ -1444,8 +1444,9 @@ static void daemonize(void)
 
 	/* Close all open file descriptors */
 	int x;
-	for (x = sysconf(_SC_OPEN_MAX); x>=0; x--)
-		close (x);
+	for (x = sysconf(_SC_OPEN_MAX); x>2; x--)
+		close(x);
+	close(0);
 
 	openlog ("ib2roce", LOG_PID, LOG_DAEMON);
 

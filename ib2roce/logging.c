@@ -59,17 +59,8 @@
 int loglevel = LOG_INFO;
 bool background;
 
-
-__attribute__ ((format (printf, 2, 3)))
-void logg(int prio, const char *fmt, ...)
+static void __logg(int prio, const char *fmt, va_list valist)
 {
-	va_list valist;
-
-	if ((prio & 0x7) > loglevel)
-		return;
-
-	va_start(valist, fmt);
-
 	if (current) {
 		int n;
 		char b[150];
@@ -84,6 +75,19 @@ void logg(int prio, const char *fmt, ...)
 		vprintf(fmt, valist);
 }
 
+
+__attribute__ ((format (printf, 2, 3)))
+void logg(int prio, const char *fmt, ...)
+{
+	va_list valist;
+
+	if ((prio & 0x7) > loglevel)
+		return;
+
+	va_start(valist, fmt);
+	__logg(prio, fmt, valist);
+}
+
 #define NR_FRAMES 100
 __attribute__ ((format (printf, 1, 2)))
 void panic(const char *fmt, ...)
@@ -96,10 +100,10 @@ void panic(const char *fmt, ...)
 	char **strings;
 #endif
 
-	printf("IB2ROCE Panic: ");
 	va_start(valist, fmt);
-	vprintf(fmt, valist);
+	__logg(LOG_CRIT, fmt, valist);
 
+	logg(LOG_CRIT, "Panic");	
 #if 0
 	nrframes = backtrace(frames, NR_FRAMES);
 	strings = backtrace_symbols(frames, nrframes);
@@ -108,8 +112,10 @@ void panic(const char *fmt, ...)
 		printf("%d. %s\n", j, strings[j]);
 	}
 	free(strings);
-#endif
 	abort();
+#else
+	exit(7);
+#endif
 }
 
 static char hexbyte(unsigned x)
