@@ -160,12 +160,9 @@ out:
 	prompt(NULL);
 }
 
-__attribute__((constructor))
-static void concom_init(void)
+/* Only called if ib2roce is in the foreground */
+void concom_init(void)
 {
-	if (background)
-		return;
-
 	register_concom("help",	true,	0,	"Print a list of commands",			help );
 	register_concom("quit",	false,	0,	"Terminate ib2roce",				exitcmd);
 

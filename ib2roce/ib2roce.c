@@ -1472,7 +1472,7 @@ static void pid_open(void)
 	else
 		strcpy(pid_name, "ib2roce.pid");
 
-	pid_fd = open(buf, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+	pid_fd = open(pid_name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
 
 	if (pid_fd < 0)
 		panic("Cannot open pidfile. Error %s\n", errname());
@@ -1551,9 +1551,10 @@ int main(int argc, char **argv)
 
 	parse_options(argc, argv);
 
-	if (debug || !bridging)
+	if (debug || !bridging) {
 		openlog("ib2roce", LOG_PERROR, LOG_USER);
-	else {
+		concom_init();
+	} else {
 		background = true;
 		daemonize();
 		pid_open();

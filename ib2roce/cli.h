@@ -55,4 +55,6 @@ void enable(char *option, bool enable);
 
 void parse_options(int argc, char **argv);
 
+void concom_init(void);
+
 #endif
