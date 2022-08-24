@@ -358,7 +358,6 @@ static void beacon_send(void *private)
 				buf = alloc_buffer(i->multicast);
 				prep_beacon_struct(i, buf);
 				send_to(i->multicast, buf->raw, buf->end - buf->raw, &beacon_mc->interface[in].ai, false, 0, buf);
-
 			}
 
 		} else { /* Unicast */
@@ -500,13 +499,24 @@ static void beacon_cmd(char *parameters)
 {
 	struct bridge_state *b;
 
+	printf("Nr|Origin           |SessID  |Time to Expire|Stat|Rec. |Miss|MC |TSI| Latencies\n");
+	printf("--+-----------------+--------+--------------+----+-----+----+---+---|--------------\n");
+	printf("%2lu|%-17s|%8x|%s|%s|%5u|%4u|%3u|%3u| Sent=%d\n",
+				0L,
+				hostname,
+				sessionid,
+				"    LOCAL     ",
+				"    ",
+				0,
+				0,
+				nr_mc,
+				i2r[INFINIBAND].nr_tsi + i2r[ROCE].nr_tsi,
+		     		beacon_seq);
+
 	if (!nr_bridges) {
 		printf("No remote bridges detected\n");
 		return;
 	}
-
-	printf("Nr|Origin           |SessID  |Time to Expire|Stat|Rec. |Miss|MC |TSI| Latencies\n");
-	printf("--+-----------------+--------+--------------+----+-----+----+---+---|--------------\n");
 
 	for(b = remote_bridge; b < remote_bridge + nr_bridges; b++) {
 		char ex[30];
