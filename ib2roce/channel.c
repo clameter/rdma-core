@@ -56,6 +56,8 @@ const char *stats_text[nr_stats] = {
 	"pgmdup", "pgm_odata", "pgm_rdata", "pgm_spm", "pgm_nak"
 };
 
+bool latency = false;
+
 /*
  * Core layout
  *
@@ -589,6 +591,20 @@ void stop_channel(struct rdma_channel *c)
 	logg(LOG_NOTICE, "QP %s moved to state QPS_INIT\n", c->text);
 }
 
+void all_channels(void (*func)(struct rdma_channel *))
+{
+	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
+		if (i->multicast)
+			func(i->multicast);
+		if (i->ud)
+			func(i->ud);
+		if (i->raw)
+			func(i->raw);
+		if (i->qp1)
+			func(i->qp1);
+	}
+	run_bridge_channels(func);
+}
 
 void arm_channel(struct rdma_channel *c)
 {
@@ -651,19 +667,40 @@ static void calculate_pps_channel(struct rdma_channel *c)
 
 void calculate_pps(void *private)
 {
-	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
-	if (i->context)
-	{
-		if (i->multicast)
-			calculate_pps_channel(i->multicast);
-
-		if (i->ud)
-			calculate_pps_channel(i->ud);
-
-	}
-
-	run_bridge_channels(calculate_pps_channel);
+	all_channels(calculate_pps_channel);
 	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
+}
+
+static void channel_zap(struct rdma_channel *c)
+{
+	c->last_snapshot = 0;
+	c->max_pps_in = 0;
+	c->max_pps_out = 0;
+	c->cq_high = 0;
+
+	for(int k = 0; k < nr_stats; k++)
+		c->stats[k] = 0;
+
+	if (cores) {
+		for(unsigned i = 0; i < cores; i++) {
+			struct core_info *ci = core_infos + i;
+
+			if (latency) {
+				ci->samples = 0;
+				ci->max_latency = 0;
+				ci->min_latency = 0;
+				ci->sum_latency = 0;
+			}
+
+		}
+	}
+}
+
+
+static void zap_cmd(char *parameters)
+{
+	all_channels(channel_zap);
+	printf("Ok\n");
 }
 
 int channel_stats(char *b, struct rdma_channel *c, const char *interface, const char *type)
@@ -698,23 +735,13 @@ void channel_stat(struct rdma_channel *c)
 
 static void channels_cmd(char *parameters)
 {
-	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
-		if (i->multicast)
-			channel_stat(i->multicast);
-#ifdef UNICAST
-		if (i->ud)
-			channel_stat(i->ud);
-		if (i->raw)
-			channel_stat(i->raw);
-		if (i->qp1)
-			channel_stat(i->qp1);
-#endif
-	}
+	all_channels(channel_stat);
 }
 
 __attribute__((constructor))
 static void channel_init(void)
 {
+	register_concom("zap", true, 0, "Clear counters", zap_cmd );
 	register_concom("channels", true, 0, "Print information about communication channels", channels_cmd);
 
 	register_enable("flow", false, &flow_steering, NULL, "on", "off", NULL,
