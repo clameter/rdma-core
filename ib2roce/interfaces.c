@@ -595,6 +595,13 @@ void handle_rdma_event(void *private)
 				if (m->tos_mode)
 					param->ah_attr.grh.traffic_class = m->tos_mode;
 
+				/* This is set as a marker so that another ib2roce can
+				 * discern that a message loop exists and avoid
+				 * forwarding the packet.
+				 * By default the hop_limit is 0!!!
+				 */
+				param->ah_attr.grh.hop_limit = 1;
+
 				a->ah = ibv_create_ah(i->multicast->pd, &param->ah_attr);
 				if (!a->ah) {
 					logg(LOG_ERR, "Failed to create AH for Multicast group %s on %s \n",

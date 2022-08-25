@@ -272,10 +272,19 @@ void receive_multicast(struct buf *buf)
 
 		if (memcmp(&buf->grh.sgid, &c->i->gid, sizeof(union ibv_gid)) == 0) {
 
-			logg(LOG_DEBUG, "Loopback Packet");
+			reason = "Loopback Packet";
 			goto discardit;
 		}
 
+		/*
+		 * ib2roce sets the hop limit to 1. By default is it
+		 * 0. So if hop_limit is set then another ib2roce already
+		 * processed the packet. Discard it.
+		 */
+		if (buf->grh.hop_limit) {
+			reason = "Hop Limit !=0 discard packet.\n";
+			goto discardit;
+		}
 	}
 
 	dest_addr.s_addr = dgid->sib_addr32[3];
