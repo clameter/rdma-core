@@ -41,7 +41,7 @@
 #include "multicast.h"
 #include "buffers.h"
 
-enum pgm_mode { pgm_none, pgm_passthrough, pgm_dlr, pgm_resend };
+enum pgm_mode { pgm_none, pgm_basic, pgm_passthrough, pgm_dlr, pgm_resend };
 
 extern enum pgm_mode pgm_mode;
 

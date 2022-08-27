@@ -38,6 +38,7 @@
 #include "interfaces.h"
 #include "pgm.h"
 #include "packet.h"
+#include "endpoint.h"
 #include "cli.h"
 
 /*
@@ -175,6 +176,15 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 	int ret = true;
 
 	PULL(buf, header);
+
+	/* Verify if pgm message originated from our subnet */
+	if (!valid_addr(c->i, header.addr)) {
+		logg(LOG_INFO, "Discarded PGM packet originating from %s is from outside our subnet %s\n", inet_ntoa(header.addr), c->i->text);
+		return false;
+	}
+
+	if (pgm_mode < pgm_passthrough)
+		return true;
 
 	tdsu = ntohs(header.pgm.pgm_tsdu_length);
 
@@ -512,6 +522,9 @@ __attribute__((constructor))
 static void pgm_init(void)
 {
 	register_concom("tsi", true, 0, "Show PGM info", tsi_cmd);
+	register_enable("pgm", true, NULL, (int *)&pgm_mode, "2", "off", NULL,
+		"PGM processing mode (0=None, 1= verify source address, 2=Passtrough, 3=DLR, 4=Resend with new TSI");
+
 	init_pgm_streams();
 }
 

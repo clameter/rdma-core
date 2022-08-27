@@ -1358,7 +1358,7 @@ static void brief_status(void)
 		if (i->mc_rate_limited)
 			n+= sprintf(counts + n, " R%d", i->mc_rate_limited);
 
-		if (pgm_mode != pgm_none && (i->multicast->stats[pgm_spm] || i->multicast->stats[pgm_odata]))
+		if (pgm_mode > pgm_basic && (i->multicast->stats[pgm_spm] || i->multicast->stats[pgm_odata]))
 			n+= sprintf(counts + n, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
 				i->nr_tsi,
 				i->multicast->stats[pgm_spm],
@@ -1531,8 +1531,6 @@ static void setup_enable(void)
 		"Forwarding of packets between interfaces");
 	register_enable("drop", true, NULL, &drop_packets, "100", "0", NULL,
 		"Drop multicast packets. The value is the number of multicast packets to send before dropping");
-	register_enable("pgm", true,NULL, (int *)&pgm_mode, "on", "off", NULL,
-		"PGM processing mode (0=None, 1= Passtrough, 2=DLR, 3=Resend with new TSI");
 	register_enable("hwrate", true, NULL, &rate, "6", "0", NULL,
 		"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)");
 	register_enable("irate", true,NULL, &irate, "1000", "0", set_rates,
