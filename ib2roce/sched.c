@@ -239,6 +239,7 @@ void *busyloop(void *private)
 	struct core_info *core = private;
 	unsigned cpu;
 
+	current = core;
 	pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
 	numa_run_on_node(core->numa_node);
 
