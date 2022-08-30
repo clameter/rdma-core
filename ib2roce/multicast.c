@@ -491,7 +491,7 @@ static void join_processing(struct cj* cj)
 
 		mcs_per_call++;
 
-		if (mcs_per_call > 10)
+		if (mcs_per_call > 100)
 			break;
 
 	}
@@ -506,7 +506,7 @@ static void __check_joins(void *private)
 
 		/* Still subscribing to multicast groups */
 		join_processing(cj);
-		add_event(timestamp() + milliseconds(100), __check_joins, private, "Check Multicast Joins");
+		add_event(timestamp() + milliseconds(50), __check_joins, private, "Check Multicast Joins");
 
 	} else {
 		/*
