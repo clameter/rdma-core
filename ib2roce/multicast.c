@@ -430,20 +430,21 @@ int leave_mc(enum interfaces i, struct rdma_channel *c)
 	return 0;
 }
 
-/* List the two rdma channels for bridging MC traffic */
-struct cj {
+/*
+ * List the two rdma channels for bridging MC traffic on which joins are currently processed
+ */
+static struct global_join_state {
 	struct rdma_channel *channels[2];
-};
+} gjs;
 
 /*
  * Join MC groups. This is called from the event loop every second
  * as long as there are unjoined groups
  */
-static void join_processing(struct cj* cj)
+static void send_joins(void)
 {
 	int i;
 	enum interfaces in;
-	int mcs_per_call = 0;
 
 	for (i = 0; i < nr_mc; i++) {
 		struct mc *m = mcs + i;
@@ -459,14 +460,22 @@ static void join_processing(struct cj* cj)
 			struct mc_interface *mi = m->interface + in;
 			uint8_t tos = in == ROCE ? m->tos_mode : 0;
 
+			if (mi->channel && mi->channel != gjs.channels[in]) {
+				logg(LOG_INFO, "Not joning multicast group %s which is not on rdma channel %s but on %s\n",
+						m->text, gjs.channels[in]->text, mi->channel->text);
+				continue;
+			}
+
 			if (i2r[in].context) {
 				switch(mi->status) {
 
 				case MC_OFF:
-					if (_join_mc(m->addr, mi->sa, port, tos, cj->channels[in], mi->sendonly, m) == 0) {
+					if (_join_mc(m->addr, mi->sa, port, tos, gjs.channels[in], mi->sendonly, m) == 0) {
 						mi->status = MC_JOINING;
-						mi->channel = cj->channels[in];
-					}
+						mi->channel = gjs.channels[in];
+					} else
+						/* Error during join... Lets retry this in awhile */
+						return;
 					break;
 
 				case MC_ERROR:
@@ -481,6 +490,10 @@ static void join_processing(struct cj* cj)
 				case MC_JOINED:
 					break;
 
+				case MC_JOINING:
+					/* Join is still being processed */
+					break;
+
 				default:
 					logg(LOG_ERR, "Bad MC status %d MC %s on %s\n",
 					       mi->status, m->text, interfaces_text[in]);
@@ -488,57 +501,57 @@ static void join_processing(struct cj* cj)
 				}
 			}
 		}
+	}
+}
 
-		mcs_per_call++;
+/*
+ * RDMA handler event occurred that completed the next join
+ * for a couple of multicast groups
+ */
+void next_join_complete(void)
+{
+	struct i2r_interface *i;
 
-		if (mcs_per_call > 100)
-			break;
+	active_mc++;
+	if (active_mc < nr_mc)
+		return;
 
+	/*
+	 * All active so start listening. This means we no longer
+	 * are able to subscribe to Multicast groups
+	 */
+
+	for(i = i2r; i < i2r + NR_INTERFACES; i++)
+	   if (i->context)	{
+		struct rdma_channel *c = gjs.channels[i - i2r];
+
+		if (c->listening)
+			continue;
+
+		if (rdma_listen(c->id, 50))
+			logg(LOG_ERR, "rdma_listen on %s error %s\n", c->text, errname());
+
+		c->listening = true;
 	}
 }
 
 static void __check_joins(void *private)
 {
-	struct cj *cj = private;
-	struct i2r_interface *i;
-
 	if (nr_mc > active_mc) {
 
-		/* Still subscribing to multicast groups */
-		join_processing(cj);
+		/* Still subscribing to multicast groups. Send the joins and check back after 50 milliseconds  */
+		send_joins();
 		add_event(timestamp() + milliseconds(50), __check_joins, private, "Check Multicast Joins");
 
-	} else {
-		/*
-		 * All active so start listening. This means we no longer
-		 * are able to subscribe to Multicast groups
-		 */
-
-		for(i = i2r; i < i2r + NR_INTERFACES; i++)
-		   if (i->context)	{
-			struct rdma_channel *c = cj->channels[i - i2r];
-
-			if (c->listening)
-				continue;
-
-			if (rdma_listen(c->id, 50))
-				logg(LOG_ERR, "rdma_listen on %s error %s\n", c->text, errname());
-
-			c->listening = true;
-		}
-		free(cj);
 	}
 }
 
 void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce)
 {
-	struct cj *cj;
+	gjs.channels[INFINIBAND] = infiniband;
+	gjs.channels[ROCE] = roce;
 
-	cj = malloc(sizeof(struct cj));
-	cj->channels[INFINIBAND] = infiniband;
-	cj->channels[ROCE] = roce;
-
-	__check_joins(cj);
+	__check_joins(NULL);
 }
 
 
