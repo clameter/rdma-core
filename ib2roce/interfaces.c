@@ -611,10 +611,6 @@ void handle_rdma_event(void *private)
 				}
 				m->interface[in].status = MC_JOINED;
 
-				/* Things actually work if both multicast groups are joined */
-				if (!bridging || m->interface[in^1].status == MC_JOINED)
-					active_mc++;
-
 				logg(LOG_NOTICE, "Joined %s MLID 0x%x tos %u sl %u on %s\n",
 					inet6_ntoa(param->ah_attr.grh.dgid.raw),
 					param->ah_attr.dlid,
@@ -623,6 +619,11 @@ void handle_rdma_event(void *private)
 					i->text);
 				st(i->multicast, join_success);
 				set_rate(m);
+
+				/* Things actually work if both multicast groups are joined */
+				if (!bridging || m->interface[in^1].status == MC_JOINED)
+			       		next_join_complete();
+
 			}
 			break;
 
