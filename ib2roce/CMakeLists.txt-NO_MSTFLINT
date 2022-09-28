@@ -30,6 +30,10 @@ target_link_libraries(ib2roce LINK_PRIVATE
   numa
   )
 
+rdma_executable(bcom
+  bcom.c
+)
+
 add_link_options("--export-dynamic")
 
 rdma_man_pages(
