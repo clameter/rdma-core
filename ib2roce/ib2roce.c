@@ -1259,7 +1259,7 @@ static unsigned show_endpoints(char *b)
 		unsigned nr;
 		unsigned offset = 0;
 
-		printf("\nEndpoints on %s", i->text);
+		n += snprintf(b + n, sizeof(buf) -  n, "\nEndpoints on %s", i->text);
 		while ((nr = hash_get_objects(i->ep, offset, 20, (void **)e))) {
 			int j;
 
