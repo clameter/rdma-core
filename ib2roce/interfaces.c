@@ -394,8 +394,11 @@ void check_out_of_buffer(void *private)
 
 	snprintf(buffer, sizeof(buffer), "/sys/class/infiniband/%s/ports/%d/hw_counters/out_of_buffer", i->rdma_name, i->port);
 	fh = open(buffer, O_RDONLY);
-	if (read(fh, buffer, sizeof(buffer)) < 0)
+	if (read(fh, buffer, sizeof(buffer)) < 0) {
 		logg(LOG_CRIT, "Cannot read out_of_buffer counter from sysfs. %s\n", errname());
+		close(fh);
+		return;
+	}
 	close(fh);
 
 	out_of_buffer = atol(buffer);
