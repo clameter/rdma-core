@@ -96,7 +96,23 @@ static void prompt(void *private)
 {
 	printf("ib2roce-$ ");
 	fflush(stdout);
-}
+};
+
+static struct connparam {
+	int in_fd;
+	int out_fd;
+	FILE *file;
+	socklen_t socklen;
+	struct sockaddr sa;
+	char buffer[10000];
+} cons = {
+	STDIN_FILENO,
+	STDOUT_FILENO,
+	NULL,
+	0,
+	{ },
+	{ }
+};
 
 static void console_input(void *private)
 {
@@ -105,18 +121,26 @@ static void console_input(void *private)
 	int ret;
 	char *p;
 	unsigned len;
-	FILE *out = stdout;
+	struct connparam *cp = private;
+	FILE *out = cp->file;
 
-	ret = read(STDIN_FILENO, in, sizeof(in));
+	ret = read(cp->in_fd, in, sizeof(in));
 
 	if (ret == 0) {
-		printf("\n");
-		terminate(0);
+		/* End of Input */
+		if (cp->in_fd == STDIN_FILENO) {
+			printf("\n");
+			terminate(0);
+		} else {
+			fclose(out);
+			unregister_callback(cp->in_fd);
+			free(cp);
+		}
 		return;
 	}
 
 	if (ret < 0) {
-		printf("Console Input Error: %s\n", errname());
+		logg(LOG_WARNING, "Console Input Error: %s\n", errname());
 		goto out;
 	}
 
@@ -129,7 +153,7 @@ static void console_input(void *private)
 	for (p = in; *p; p++)
 	{
 		if (*p < ' ') {
-			printf("\nControl Character %d at position %ld\n", *p, p - in);
+			fprintf(out, "\nControl Character %d at position %ld\n", *p, p - in);
 			goto out;
 		}
 	}
@@ -156,19 +180,90 @@ static void console_input(void *private)
 			goto out;
 		}
 	};
-	printf("Command \"%s\" not found. Try \"help\".\n", in);
+	fprintf(out, "Command \"%s\" not found. Try \"help\".\n", in);
+
 out:
-	prompt(NULL);
+	if (cp->in_fd == STDIN_FILENO)
+		prompt(NULL);
+	else
+		fflush(out);
 }
 
-/* Only called if ib2roce is in the foreground */
+struct conn_req_info {
+	int fd;
+};
+
+static void connect_request(void *private)
+{
+	int fd;
+	struct connparam *cp;
+	struct conn_req_info *cri = private;
+
+	cp = calloc(1, sizeof(struct connparam));
+	fd = accept(cri->fd, &cp->sa, &cp->socklen);
+	if (fd < 0) {
+		logg(LOG_WARNING, "Connect failed %s", errname());
+		free(cp);
+		return;
+	}
+	cp->file = fdopen(fd, "r+");
+	if (!cp->file) {
+		logg(LOG_ERR, "fdopen failes %s", errname());
+		close(fd);
+		return;
+	}
+	cp->in_fd = fd;
+	cp->out_fd = fd;
+
+	register_callback(console_input, fd, cp);
+}
+
+static void initcon_debug(void)
+{
+	cons.file = stdout;
+
+	register_callback(console_input, cons.in_fd, &cons);
+	add_event(timestamp() + seconds(2), prompt, NULL, "Console Prompt");
+}
+
+static void initcon_daemon(void)
+{
+	int fd;
+	struct sockaddr_in sin;
+	struct conn_req_info *cri;
+
+	fd = socket(AF_INET, SOCK_STREAM, 0);
+	if (fd < 0) {
+		logg(LOG_WARNING, "Cannot create TCP socket %s\n", errname());
+		return;
+	}
+
+	sin.sin_family = AF_INET;
+	sin.sin_addr.s_addr = inet_addr("127.0.0.1");
+	sin.sin_port = htons(default_port ? default_port: 4711);
+
+	if (bind(fd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
+		logg(LOG_WARNING, "Cannot bind to socket %s\n", errname());
+		return;
+	}
+
+	if (listen(fd, 2) < 0) {
+		logg(LOG_WARNING, "Cannot listen to socket %s\n", errname());
+		return;
+	}
+
+	cri = calloc(1, sizeof(cri));
+	cri->fd = fd;
+	register_callback(connect_request, fd,  cri);
+}
+
+
 void concom_init(void)
 {
-	register_concom("help",	true,	0,	"Print a list of commands",			help );
-	register_concom("quit",	false,	0,	"Terminate ib2roce",				exitcmd);
-
-	register_callback(console_input, STDIN_FILENO, NULL);
-	add_event(timestamp() + seconds(2), prompt, NULL, "Console Prompt");
+	if (background)
+		initcon_daemon();
+	else
+		initcon_debug();
 }
 
 /*
@@ -345,6 +440,9 @@ static void opts_init(void)
 	register_option("disable", required_argument, 'y', disable_opt,"<option>",
 			"Disable feature");
 	register_option("help", no_argument, 'h', help_opt, NULL, "Show these instructions");
+
+	register_concom("help",	true,	0,	"Print a list of commands",			help );
+	register_concom("quit",	false,	0,	"Terminate ib2roce",				exitcmd);
 }
 
 
