@@ -318,21 +318,21 @@ void stop_cores(void)
 	multithreaded = false;
 }
 
-static void event_cmd(char *parameters)
+static void event_cmd(FILE *out, char *parameters)
 {
-	printf("Scheduled events on the high latency thread\n");
-	printf("-------------------------------------------\n");
+	fprintf(out, "Scheduled events on the high latency thread\n");
+	fprintf(out, "-------------------------------------------\n");
 
 	if (next_event) {
 
 		for(struct timed_event *z = next_event; z; z = z->next)
-			printf("%ldms %s\n", (z->time - timestamp()) / ONE_MILLISECOND, z->text);
+			fprintf(out, "%ldms %s\n", (z->time - timestamp()) / ONE_MILLISECOND, z->text);
 
 	} else
-		printf("No events.\n");
+		fprintf(out, "No events.\n");
 }
 
-static void core_cmd(char *parameters) {
+static void core_cmd(FILE *out, char *parameters) {
 	if (!parameters) {
 		if (cores) {
 			unsigned i;
@@ -341,19 +341,19 @@ static void core_cmd(char *parameters) {
 				unsigned j;
 				struct core_info *ci = core_infos + i;
 
-				printf("Core %d: NUMA=%d", i, ci->numa_node);
+				fprintf(out, "Core %d: NUMA=%d", i, ci->numa_node);
 				if (latency)
-					printf(" Loops over 5usecs=%u Average=%luns, Max=%uns, Min=%uns\n",
+					fprintf(out, " Loops over 5usecs=%u Average=%luns, Max=%uns, Min=%uns\n",
 						ci->samples, ci->samples ? ci->sum_latency / ci->samples : 0,
 						ci->max_latency, ci->min_latency);
 
 				for (j = 0; j < ci->nr_channels; j++)
-					channel_stat(ci->channel + j);
+					channel_stat(out, ci->channel + j);
 			}
 		} else
-			printf("No cores active. ib2roce operates in single threaded mode.\n");
+			fprintf(out, "No cores active. ib2roce operates in single threaded mode.\n");
 	} else
-		printf("Dynamic reseetting of the core config not supported.\n");
+		fprintf(out, "Dynamic reseetting of the core config not supported.\n");
 }
 
 

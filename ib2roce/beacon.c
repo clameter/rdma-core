@@ -113,15 +113,15 @@ static struct bridge_state remote_bridge[MAX_BRIDGES];
 static unsigned int nr_bridges;
 
 
-void run_bridge_channels(void (*func)(struct rdma_channel *))
+void run_bridge_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *))
 {
 	int i;
 
 	for(i = 0; i < nr_bridges; i++) {
 		struct bridge_state *br = remote_bridge + i;
 
-		func(br->channel[INFINIBAND]);
-		func(br->channel[ROCE]);
+		func(out, br->channel[INFINIBAND]);
+		func(out, br->channel[ROCE]);
 	}
 }
 
@@ -495,13 +495,13 @@ static void beacon_option(char *optarg)
 }
 
 /* Print the bridge states */
-static void beacon_cmd(char *parameters)
+static void beacon_cmd(FILE *out, char *parameters)
 {
 	struct bridge_state *b;
 
-	printf("Nr|Origin           |SessID  |Time to Expire|Stat|Rec. |Miss|MC |TSI| Latencies\n");
-	printf("--+-----------------+--------+--------------+----+-----+----+---+---|--------------\n");
-	printf("%2lu|%-17s|%8x|%s|%s|%5u|%4u|%3u|%3u| Sent=%d\n",
+	fprintf(out, "Nr|Origin           |SessID  |Time to Expire|Stat|Rec. |Miss|MC |TSI| Latencies\n");
+	fprintf(out, "--+-----------------+--------+--------------+----+-----+----+---+---|--------------\n");
+	fprintf(out, "%2lu|%-17s|%8x|%s|%s|%5u|%4u|%3u|%3u| Sent=%d\n",
 				0L,
 				hostname,
 				sessionid,
@@ -514,7 +514,7 @@ static void beacon_cmd(char *parameters)
 		     		beacon_seq);
 
 	if (!nr_bridges) {
-		printf("No remote bridges detected\n");
+		fprintf(out, "No remote bridges detected\n");
 		return;
 	}
 
@@ -529,7 +529,7 @@ static void beacon_cmd(char *parameters)
 
 		inet_ntop(AF_INET, &b->origin[ROCE], origin_roce, INET_ADDRSTRLEN);
 
-		printf("%2lu|%-17s|%8x|%s|%s|%5u|%4u|%3u|%3u|%ld us %ld us %ld us\n",
+		fprintf(out, "%2lu|%-17s|%8x|%s|%s|%5u|%4u|%3u|%3u|%ld us %ld us %ld us\n",
 				(b - remote_bridge) + 1,
 				b->last.name,
 				b->last.sessionid,

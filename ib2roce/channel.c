@@ -591,19 +591,19 @@ void stop_channel(struct rdma_channel *c)
 	logg(LOG_NOTICE, "QP %s moved to state QPS_INIT\n", c->text);
 }
 
-void all_channels(void (*func)(struct rdma_channel *))
+void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *))
 {
 	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
 		if (i->multicast)
-			func(i->multicast);
+			func(out, i->multicast);
 		if (i->ud)
-			func(i->ud);
+			func(out, i->ud);
 		if (i->raw)
-			func(i->raw);
+			func(out, i->raw);
 		if (i->qp1)
-			func(i->qp1);
+			func(out, i->qp1);
 	}
-	run_bridge_channels(func);
+	run_bridge_channels(NULL, func);
 }
 
 void arm_channel(struct rdma_channel *c)
@@ -645,7 +645,7 @@ void arm_channels(struct core_info *core)
 
 static int stat_interval = 10;		/* Interval for statistics */
 
-static void calculate_pps_channel(struct rdma_channel *c)
+static void calculate_pps_channel(FILE *out, struct rdma_channel *c)
 {
 	if (c->last_snapshot) {
 		uint64_t tdiff = now - c->last_snapshot;
@@ -667,11 +667,11 @@ static void calculate_pps_channel(struct rdma_channel *c)
 
 void calculate_pps(void *private)
 {
-	all_channels(calculate_pps_channel);
+	all_channels(NULL, calculate_pps_channel);
 	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
 }
 
-static void channel_zap(struct rdma_channel *c)
+static void channel_zap(FILE *out, struct rdma_channel *c)
 {
 	c->last_snapshot = 0;
 	c->max_pps_in = 0;
@@ -697,10 +697,10 @@ static void channel_zap(struct rdma_channel *c)
 }
 
 
-static void zap_cmd(char *parameters)
+static void zap_cmd(FILE *out, char *parameters)
 {
-	all_channels(channel_zap);
-	printf("Ok\n");
+	all_channels(NULL, channel_zap);
+	fprintf(out, "Ok\n");
 }
 
 int channel_stats(char *b, struct rdma_channel *c, const char *interface, const char *type)
@@ -717,25 +717,25 @@ int channel_stats(char *b, struct rdma_channel *c, const char *interface, const 
 	return n;
 }
 
-void channel_stat(struct rdma_channel *c)
+void channel_stat(FILE *out, struct rdma_channel *c)
 {
-	printf(" Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", c->text,
+	fprintf(out, " Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", c->text,
 		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_send, c->cq_high, fifo_items(&c->send_queue));
 
 	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))
-		printf(" pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n",
+		fprintf(out, " pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n",
 				c->pps_in, c->pps_out, c->max_pps_in, c->max_pps_out);
 
 	for(int k = 0; k < nr_stats; k++)
 		if (c->stats[k])
-			printf(" %s=%u", stats_text[k], c->stats[k]);
+			fprintf(out, " %s=%u", stats_text[k], c->stats[k]);
 
-	printf("\n");
+	fprintf(out, "\n");
 }
 
-static void channels_cmd(char *parameters)
+static void channels_cmd(FILE *out, char *parameters)
 {
-	all_channels(channel_stat);
+	all_channels(out, channel_stat);
 }
 
 __attribute__((constructor))

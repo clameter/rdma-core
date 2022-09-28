@@ -540,7 +540,7 @@ void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *s
 	}
 }
 
-static void buffers_cmd(char *parameters)
+static void buffers_cmd(FILE *out, char *parameters)
 {
 	struct buf *buf;
 	int free = 0;
@@ -549,7 +549,7 @@ static void buffers_cmd(char *parameters)
 		if (buf->free)
 		       free++;
 
-	printf("Buffers: Active=%u Total=%u\n", nr_buffers-free , nr_buffers);
+	fprintf(out, "Buffers: Active=%u Total=%u\n", nr_buffers-free , nr_buffers);
 	/* Sometime show more details */
 }
 

@@ -1109,7 +1109,7 @@ static const char *port_state_text[] = { "PORT_NOP","PORT_DOWN","PORT_INIT","POR
 static const char *mtu_text[] = { "NONE", "256", "512", "1024", "2048", "4096" };
 static const char *link_layer_text[] = { "UNSPECIFIED", "INFINIBAND", "ETHERNET" };
 
-static void interfaces_cmd(char *parameters)
+static void interfaces_cmd(FILE *out,char *parameters)
 {
 	int n;
 	char b[5000];
@@ -1117,34 +1117,34 @@ static void interfaces_cmd(char *parameters)
 	if (parameters) {
 		for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
 			if (i->context && strncasecmp(i->text, parameters, strlen(parameters)) == 0) {
-				printf("Interface %s\n", i->text);
-				printf("-------------------------------------\n");
-				printf("RDMA device=%s Port=%d MTU=%d\n", i->rdma_name, i->port, i->mtu);
-				printf("NET device=%s IFindex=%d IP=%s ", i->if_name, i->ifindex, inet_ntoa(i->if_addr.sin_addr));
-				printf("Netmask=%s MacLen=%d MAC=%s\n", inet_ntoa(i->if_netmask.sin_addr), i->maclen, hexbytes(i->if_mac, i->maclen, '-'));
-				printf("GID %s GIDIndex=%d GIDtablesize=%d\n", inet6_ntoa(&i->gid), i->gid_index, i->iges);
+				fprintf(out, "Interface %s\n", i->text);
+				fprintf(out, "-------------------------------------\n");
+				fprintf(out, "RDMA device=%s Port=%d MTU=%d\n", i->rdma_name, i->port, i->mtu);
+				fprintf(out, "NET device=%s IFindex=%d IP=%s ", i->if_name, i->ifindex, inet_ntoa(i->if_addr.sin_addr));
+				fprintf(out, "Netmask=%s MacLen=%d MAC=%s\n", inet_ntoa(i->if_netmask.sin_addr), i->maclen, hexbytes(i->if_mac, i->maclen, '-'));
+				fprintf(out, "GID %s GIDIndex=%d GIDtablesize=%d\n", inet6_ntoa(&i->gid), i->gid_index, i->iges);
 				for(struct ibv_gid_entry *g = i->ige; g < i->ige + i->iges; g++) {
-					printf(" gid=%s gid_index=%d port_num=%d gid_type=%s ndev_ifindex=%d\n",
+					fprintf(out, " gid=%s gid_index=%d port_num=%d gid_type=%s ndev_ifindex=%d\n",
 							inet6_ntoa(&g->gid), g->gid_index, g->port_num, gid_text[g->gid_type], g->ndev_ifindex);
 
 				}
 
-				printf("Device Attributes\n");
-				printf(" Firmware=%s, NodeGUID=%lx Sys_Image_GUID=%lx\n",
+				fprintf(out, "Device Attributes\n");
+				fprintf(out, " Firmware=%s, NodeGUID=%lx Sys_Image_GUID=%lx\n",
 					       i->device_attr.fw_ver,
 					       be64toh(i->device_attr.node_guid),
 					       be64toh(i->device_attr.sys_image_guid));
-				printf(" max_mr_size=%ld page_size_cap=%lx vendor_id=%x vendor_part_id=%x hw_ver=%x",
+				fprintf(out, " max_mr_size=%ld page_size_cap=%lx vendor_id=%x vendor_part_id=%x hw_ver=%x",
 					       i->device_attr.max_mr_size,
 					       i->device_attr.page_size_cap,
 					       i->device_attr.vendor_id,
 					       i->device_attr.vendor_part_id,
 					       i->device_attr.hw_ver);
-				printf(" max_qp=%d max_qp_wr=%d device_cap_flags=%x\n",
+				fprintf(out, " max_qp=%d max_qp_wr=%d device_cap_flags=%x\n",
 					       i->device_attr.max_qp,
 					       i->device_attr.max_qp_wr,
 					       i->device_attr.device_cap_flags);
-				printf(" max_sge=%d max_sge_rd=%d max_cq=%d max_cqe=%d max_mr=%d max_pd=%d max_qp_rd_atom=%d max_ee_rd_atom=%d\n",
+				fprintf(out, " max_sge=%d max_sge_rd=%d max_cq=%d max_cqe=%d max_mr=%d max_pd=%d max_qp_rd_atom=%d max_ee_rd_atom=%d\n",
 					       i->device_attr.max_sge,
 					       i->device_attr.max_sge_rd,
 					       i->device_attr.max_cq,
@@ -1153,55 +1153,55 @@ static void interfaces_cmd(char *parameters)
 					       i->device_attr.max_pd,
 					       i->device_attr.max_qp_rd_atom,
 					       i->device_attr.max_ee_rd_atom);
-				printf(" max_res_rd_atom=%d atomic_cap=%x max_ee=%d max_rdd=%d max_mw=%d\n",
+				fprintf(out, " max_res_rd_atom=%d atomic_cap=%x max_ee=%d max_rdd=%d max_mw=%d\n",
 					       i->device_attr.max_res_rd_atom,
 					       i->device_attr.atomic_cap,
 					       i->device_attr.max_ee,
 					       i->device_attr.max_rdd,
 					       i->device_attr.max_mw);
-				printf(" max_raw_ipv6_qp=%d max_raw_ethy_qp=%d\n",
+				fprintf(out, " max_raw_ipv6_qp=%d max_raw_ethy_qp=%d\n",
 					       i->device_attr.max_raw_ipv6_qp,
 					       i->device_attr.max_raw_ethy_qp);
-				printf(" max_mcast_grp=%d max_mcast_qp_attach=%d max_total_mcast_qp_attach=%d\n",
+				fprintf(out, " max_mcast_grp=%d max_mcast_qp_attach=%d max_total_mcast_qp_attach=%d\n",
 					       i->device_attr.max_mcast_grp,
 					       i->device_attr.max_mcast_qp_attach,
 					       i->device_attr.max_total_mcast_qp_attach);
-				printf(" max_ah=%d max_fmr=%d max_map_per_fmr=%d max_srq=%d max_srq_wr=%d max_srq_sge=%d\n",
+				fprintf(out, " max_ah=%d max_fmr=%d max_map_per_fmr=%d max_srq=%d max_srq_wr=%d max_srq_sge=%d\n",
 						i->device_attr.max_ah,
 						i->device_attr.max_fmr,
 					       i->device_attr.max_map_per_fmr,
 					       i->device_attr.max_srq,
 					       i->device_attr.max_srq_wr,
 					       i->device_attr.max_srq_sge);
-				printf(" max_pkeys=%d local_ca_ack_delay=%d phys_port_cnt=%d\n",
+				fprintf(out, " max_pkeys=%d local_ca_ack_delay=%d phys_port_cnt=%d\n",
 					       i->device_attr.max_pkeys,
 					       i->device_attr.local_ca_ack_delay,
 					       i->device_attr.phys_port_cnt);
 
-				printf("Port Attributes\n");
-				printf(" state=%s MTU=%s Active MTU=%s git_dbl_len=%d port_cap_flags=%x max_msg_sz=%d\n",
+				fprintf(out, "Port Attributes\n");
+				fprintf(out, " state=%s MTU=%s Active MTU=%s git_dbl_len=%d port_cap_flags=%x max_msg_sz=%d\n",
 					port_state_text[i->port_attr.state],
 					mtu_text[i->port_attr.max_mtu],
 					mtu_text[i->port_attr.active_mtu],
 					i->port_attr.gid_tbl_len,
 					i->port_attr.port_cap_flags,
 					i->port_attr.max_msg_sz);
-				printf(" bad_pkey_cntr=%d qkey_viol_cntr=%d pkey_tbl_len=%d\n",
+				fprintf(out, " bad_pkey_cntr=%d qkey_viol_cntr=%d pkey_tbl_len=%d\n",
 					i->port_attr.bad_pkey_cntr,
 					i->port_attr.qkey_viol_cntr,
 					i->port_attr.pkey_tbl_len);
-				printf(" lid=%d sm_lid=%d lmc=%d max_vl_num=%d sm_sl=%d\n",
+				fprintf(out, " lid=%d sm_lid=%d lmc=%d max_vl_num=%d sm_sl=%d\n",
 					i->port_attr.lid,
 					i->port_attr.sm_lid,
 					i->port_attr.lmc,
 					i->port_attr.max_vl_num,
 					i->port_attr.sm_sl);
-				printf(" subnet_timeout=%d init_type_reply=%d active_width=%d active_speed=%d\n",
+				fprintf(out, " subnet_timeout=%d init_type_reply=%d active_width=%d active_speed=%d\n",
 					i->port_attr.subnet_timeout,
 					i->port_attr.init_type_reply,
 					i->port_attr.active_width,
 					i->port_attr.active_speed);
-				printf(" phys_state=%d link_layer=%s flags=%x port_cap_flags2=%x\n",
+				fprintf(out, " phys_state=%d link_layer=%s flags=%x port_cap_flags2=%x\n",
 					i->port_attr.phys_state,
 					link_layer_text[i->port_attr.link_layer],
 					i->port_attr.flags,
@@ -1209,13 +1209,13 @@ static void interfaces_cmd(char *parameters)
 				return;
 			}
 
-		printf("Unknown interface \"%s\".\n", parameters);
+		fprintf(out, "Unknown interface \"%s\".\n", parameters);
 		return;
 	}
 
 	n = show_interfaces(b);
 	b[n] = 0;
-	puts(b);
+	fputs(b, out);
 }
 
 static void device_set(char *optarg)

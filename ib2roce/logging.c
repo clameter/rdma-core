@@ -154,7 +154,7 @@ char *hexbytes(uint8_t *q, unsigned len, char separator)
 	return __hexbytes(b, q, len, separator);
 }
 
-static void brief_status(void)
+static void brief_status(FILE *out)
 {
 	char buf[4000];
 	char buf2[4200];
@@ -206,7 +206,10 @@ static void brief_status(void)
 		n+= sprintf(counts + n, ") ");
 	}
 
-	logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
+	if (out == stdout)
+		logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
+	else
+		fprintf(out, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
 
 	list_endpoints(i2r + INFINIBAND);
 	list_endpoints(i2r + ROCE);
@@ -243,31 +246,33 @@ static void verbose_set(char *optarg)
 
 static void continous(void *private)
 {
-	printf("\n");
-	brief_status();
+	FILE *out = private;
+
+	fprintf(out, "\n");
+	brief_status(out);
 
 	if (log_interval)
 		add_event(timestamp() + seconds(log_interval),
-				continous, NULL, "Continous Logging");
+				continous, private, "Continous Logging");
 }
 
-static void continous_cmd(char *parameters)
+static void continous_cmd(FILE *out, char *parameters)
 {
 	int old_interval = log_interval;
 
 	if (!parameters) {
-		printf("Continuous logging interval is %d seconds.\n", log_interval);
+		fprintf(out, "Continuous logging interval is %d seconds.\n", log_interval);
 		return;
 	}
 
 	log_interval = atoi(parameters);
 
 	if (!old_interval && log_interval)
-		continous(NULL);
+		continous(out);
 }
 
-static void statuscmd(char *parameters) {
-	brief_status();
+static void statuscmd(FILE *out, char *parameters) {
+	brief_status(out);
 }
 
 __attribute__((constructor))

@@ -43,7 +43,7 @@
 #define VERSION "2022.0512"
 
 /* Command registration for the CLI */
-void register_concom(const char *name, bool prompt, int parameters, const char *text, void (*callback)(char *parameters));
+void register_concom(const char *name, bool prompt, int parameters, const char *text, void (*callback)(FILE *out, char *parameters));
 
 /* Register options that can be enabled via the "enable" command on the CLI or on the command line */
 void register_enable(const char *name, bool runtime, bool  *bool_flag, int *int_flag, const char *on_value, const char *off_value, void (*callback)(void), const char *description);
@@ -51,7 +51,7 @@ void register_enable(const char *name, bool runtime, bool  *bool_flag, int *int_
 /* Register commandline options */
 void register_option(const char  *name, int has_arg, const char x, void (*callback)(char *optarg), const char *pardesc, const char *description);
 
-void enable(char *option, bool enable);
+void enable(FILE *out, char *option, bool enable);
 
 void parse_options(int argc, char **argv);
 
