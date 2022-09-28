@@ -103,6 +103,25 @@ void register_callback(event_callback *callback, int fd, void *private)
 	poll_items++;
 }
 
+void unregister_callback(int fd)
+{
+	int i;
+
+	for(i = 0; i < poll_items; i++)
+		if (pfd[i].fd == fd)
+			break;
+
+	if (i == poll_items)
+		panic("Cannot find fd %d on unregister_callback", fd);
+
+	poll_items--;
+	while (i < poll_items - 1) {
+		pfd[i] = pfd[i+1];
+		i++;
+	}
+
+}
+
 /* Events are timed according to nanoseconds in the current epoch */
 struct timed_event {
 	uint64_t time;          /* When should it occur */
