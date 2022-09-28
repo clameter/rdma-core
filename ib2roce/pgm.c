@@ -493,10 +493,10 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 	return ret;
 }
 
-static void tsi_cmd(char *parameters)
+static void tsi_cmd(FILE *out, char *parameters)
 {
 	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++) {
-		printf("%s: TSIs=%d\n", i->text, i->nr_tsi);
+		fprintf(out, "%s: TSIs=%d\n", i->text, i->nr_tsi);
 		/* Retrieve TSI streams */
 		struct pgm_stream *t[10];
 		unsigned nr;
@@ -509,7 +509,7 @@ static void tsi_cmd(char *parameters)
 
 				format_tsi(buf, &ps->tsi);
 
-				printf("%s: lead=%d trail=%d last=%d lastRepairData=%d oldest=%d\n",
+				fprintf(out, "%s: lead=%d trail=%d last=%d lastRepairData=%d oldest=%d\n",
 					buf, ps->lead, ps->trail, ps->last, ps->rlast, ps->oldest);
 
 			}

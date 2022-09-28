@@ -555,34 +555,34 @@ void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce)
 }
 
 
-static void multicast_cmd(char *parameters)
+static void multicast_cmd(FILE *out, char *parameters)
 {
 	struct mc *m;
 
 	now = timestamp();
 
-	printf("Multicast: Active=%u NR=%u Max=%u\n", active_mc, nr_mc, MAX_MC);
+	fprintf(out, "Multicast: Active=%u NR=%u Max=%u\n", active_mc, nr_mc, MAX_MC);
 
 	for(m = mcs; m < mcs + nr_mc; m++) {
 
 		for(enum interfaces in = INFINIBAND; in <= ROCE; in++) {
 			struct mc_interface *mi = m->interface + in;
 
-			printf("%s %s %s %s %s ", interfaces_text[in], m->text,
+			fprintf(out, "%s %s %s %s %s ", interfaces_text[in], m->text,
 				mc_text[mi->status],
 				mi->sendonly ? "Sendonly " : "",
 				in == INFINIBAND ? mgid_text(m) : "");
 
 			if (!m->enabled)
-				printf("disabled ");
+				fprintf(out, "disabled ");
 
 			if (m->admin)
-				printf("admin ");
+				fprintf(out, "admin ");
 
 			if (mi->channel != i2r[in].multicast)
-				printf("remote ");
+				fprintf(out, "remote ");
 
-			printf("packet_time=%dns, max_burst=%d packets, delayed=%ld packets, last_sent=%ldms ago, last_delayed=%ldms ago, pending=%u packets, burst=%d\n",
+			fprintf(out, "packet_time=%dns, max_burst=%d packets, delayed=%ld packets, last_sent=%ldms ago, last_delayed=%ldms ago, pending=%u packets, burst=%d\n",
 				mi->packet_time,
 				mi->max_burst,
 				mi->delayed,

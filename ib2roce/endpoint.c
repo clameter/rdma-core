@@ -461,7 +461,6 @@ static unsigned show_endpoints(char *b)
 {
 	struct i2r_interface *i;
 	int n = 0;
-	struct buf *buf;
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++)
 		if (i->context && i->ep) {
@@ -469,7 +468,7 @@ static unsigned show_endpoints(char *b)
 		unsigned nr;
 		unsigned offset = 0;
 
-		printf("\nEndpoints on %s", i->text);
+		n = sprintf(b, "\nEndpoints on %s", i->text);
 		while ((nr = hash_get_objects(i->ep, offset, 20, (void **)e))) {
 			int j;
 
@@ -477,17 +476,17 @@ static unsigned show_endpoints(char *b)
 				struct endpoint *ep = e[j];
 				struct forward *f;
 
-				n += snprintf(b + n, sizeof(buf) - n, "\n%3d. %s", offset + j + 1, inet_ntoa(e[j]->addr));
+				n += sprintf(b + n, "\n%3d. %s", offset + j + 1, inet_ntoa(e[j]->addr));
 
 				if (ep->lid)
-					n += snprintf(b + n, sizeof(buf) - n, " LID=%x", ep->lid);
+					n += sprintf(b + n, " LID=%x", ep->lid);
 
 				if (ep->gid.global.interface_id)
-					n += snprintf(b + n, sizeof(buf) - n, " GID=%s",
+					n += sprintf(b + n, " GID=%s",
 						inet6_ntoa(&ep->gid));
 
 				for (f = ep->forwards; f; f = f->next) {
-					n += snprintf(b + n, sizeof(buf) - n, " Q%d->%sQ%d",
+					n += sprintf(b + n, " Q%d->%sQ%d",
 					      f->source_qp, inet_ntoa(f->dest->addr), f->dest_qp);
 				}
 			}
@@ -572,14 +571,14 @@ void resolve(struct rdma_unicast *ru)
 		resolve_start(ru);
 }
 
-static void endpoints_cmd(char *parameters)
+static void endpoints_cmd(FILE *out,char *parameters)
 {
 	int n;
 	char b[5000];
 
 	n = show_endpoints(b);
 	b[n] = 0;
-	puts(b);
+	fputs(b, out);
 }
 
 struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin)

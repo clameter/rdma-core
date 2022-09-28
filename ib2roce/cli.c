@@ -53,12 +53,12 @@ static struct concom {
 	bool prompt;
 	int parameters;
 	const char *description;
-	void (*callback)(char *parameters);
+	void (*callback)(FILE *out, char *parameters);
 } concoms[MAX_CONCOMS];
 
 static int nr_concoms;
 
-void register_concom(const char *name, bool prompt, int parameters, const char *text, void (*callback)(char *parameters))
+void register_concom(const char *name, bool prompt, int parameters, const char *text, void (*callback)(FILE *out, char *parameters))
 {
 	struct concom *c = concoms + nr_concoms;
 
@@ -74,20 +74,20 @@ void register_concom(const char *name, bool prompt, int parameters, const char *
 	nr_concoms++;
 }
 
-static void help(char *parameters)
+static void help(FILE *out, char *parameters)
 {
 	struct concom * cc;
 
-	printf("List of ib2roce console commands:\n");
-	printf("Command		Description\n");
-	printf("----------------------------------------\n");
+	fprintf(out, "List of ib2roce console commands:\n");
+	fprintf(out, "Command		Description\n");
+	fprintf(out, "----------------------------------------\n");
 
 	for(cc = concoms; cc->name; cc++) {
-		printf("%-16s%s\n", cc->name, cc->description);
+		fprintf(out, "%-16s%s\n", cc->name, cc->description);
 	}
 }
 
-static void exitcmd(char *parameters)
+static void exitcmd(FILE *out, char *parameters)
 {
 	terminate(0);
 }
@@ -105,6 +105,7 @@ static void console_input(void *private)
 	int ret;
 	char *p;
 	unsigned len;
+	FILE *out = stdout;
 
 	ret = read(STDIN_FILENO, in, sizeof(in));
 
@@ -143,11 +144,11 @@ static void console_input(void *private)
 		if (strncasecmp(in, cc->name, len) == 0) {
 
 			if (p && !cc->parameters) {
-				printf("Command does not allow parameters\n");
+				fprintf(out, "Command does not allow parameters\n");
 				goto out;
 			}
 
-			cc->callback(p);
+			cc->callback(out, p);
 
 			if (!cc->prompt)
 				return;
@@ -327,12 +328,12 @@ static void help_opt(char *optarg)
 
 static void enable_opt(char *optarg)
 {
-	enable(optarg, true);
+	enable(stdout, optarg, true);
 }
 
 static void disable_opt(char *optarg)
 {
-	enable(optarg, false);
+	enable(stdout, optarg, false);
 }
 
 __attribute__((constructor))
@@ -368,7 +369,7 @@ struct enable_option {
 
 static int nr_enable_options;
 
-void enable(char *option, bool enable)
+void enable(FILE *out, char *option, bool enable)
 {
 	char *name;
 	const char *value = NULL;
@@ -377,9 +378,9 @@ void enable(char *option, bool enable)
 	struct enable_option *eo;
 
 	if (!option || !option[0]) {
-		printf("List of available options that can be enabled\n");
-		printf("Setting\t\tType\tActive\tDescription\n");
-		printf("----------------------------------------------------------------\n");
+		fprintf(out, "List of available options that can be enabled\n");
+		fprintf(out, "Setting\t\tType\tActive\tDescription\n");
+		fprintf(out, "----------------------------------------------------------------\n");
 		for(i = 0; enable_table[i].id; i++) {
 			char state[10];
 
@@ -393,7 +394,7 @@ void enable(char *option, bool enable)
 			} else
 				snprintf(state, 10, "%d", *eo->int_flag);
 
-			printf("%-14s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->description);
+			fprintf(out, "%-14s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->description);
 		}
 		return;
 	}
@@ -414,13 +415,13 @@ void enable(char *option, bool enable)
 		if (strncasecmp(name, enable_table[i].id, strlen(name)) == 0)
 			goto got_it;
 	}
-	printf("Unknown option %s\n", name);
+	fprintf(out, "Unknown option %s\n", name);
 	return;
 
 got_it:
 	eo = enable_table + i;
 	if (!eo->runtime && (i2r[ROCE].context || i2r[INFINIBAND].context)) {
-		printf("Cannot change option \"%s\" at runtime\n", option);
+		fprintf(out, "Cannot change option \"%s\" at runtime\n", option);
 		return;
 	}
 	if (!value) {
@@ -441,7 +442,7 @@ got_it:
 			strcasecmp(value, "0") == 0)
 				*eo->bool_flag = false;
 		else {
-			fprintf(stderr, "Unknown bool value %s for option %s\n", value, name);
+			fprintf(out, "Unknown bool value %s for option %s\n", value, name);
 			return;
 		}
 	} else
@@ -473,12 +474,12 @@ void register_enable(const char *id, bool runtime, bool  *bool_flag, int *int_fl
 	nr_enable_options++;
 }
 
-static void enablecmd(char *parameters) {
-	enable(parameters, true);
+static void enablecmd(FILE *out, char *parameters) {
+	enable(out, parameters, true);
 }
 
-static void disablecmd(char *parameters) {
-	enable(parameters, false);
+static void disablecmd(FILE *out, char *parameters) {
+	enable(out, parameters, false);
 }
 
 __attribute__((constructor))

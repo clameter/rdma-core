@@ -1560,13 +1560,15 @@ int main(int argc, char **argv)
 	parse_options(argc, argv);
 
 	if (debug || !bridging) {
+
 		openlog("ib2roce", LOG_PERROR, LOG_USER);
-		concom_init();
+
 	} else {
 		background = true;
 		daemonize();
 		pid_open();
 	}
+	concom_init();
 
 	setup_termination_signals();
 

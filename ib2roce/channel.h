@@ -143,7 +143,7 @@ extern struct channel_info {
 } channel_infos[nr_channel_types];
 
 int channel_stats(char *b, struct rdma_channel *c, const char *interface, const char *type);
-void channel_stat(struct rdma_channel *c);
+void channel_stat(FILE *out, struct rdma_channel *c);
 
 void start_channel(struct rdma_channel *c);
 void stop_channel(struct rdma_channel *c);
@@ -154,7 +154,7 @@ void arm_channels(struct core_info *core);
 void arm_channel(struct rdma_channel *);
 void channel_destroy(struct rdma_channel *c);
 
-void all_channels(void (*func)(struct rdma_channel *));
+void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *));
 
 void calculate_pps(void *private);
 
