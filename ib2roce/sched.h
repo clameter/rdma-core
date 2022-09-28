@@ -104,7 +104,7 @@ void add_event(uint64_t when, event_callback *callback, void *private, const cha
 
 /* Callback when data on a filedescriptor becomes available */
 void register_callback(event_callback *callback, int fd, void *private);
-
+void unregister_callback(int fd);
 
 int64_t time_to_next_event(void);	/* Time till next event */
 
