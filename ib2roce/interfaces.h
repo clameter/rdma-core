@@ -124,11 +124,6 @@ void handle_async_event(void *private);
 
 void handle_receive_packet(void *private);
 
-static inline struct rdma_cm_id *id(enum interfaces i)
-{
-	return i2r[i].multicast->id;
-}
-
 const char *inet6_ntoa(void *x);
 void set_rate(struct mc *m);
 void set_rates(void);
