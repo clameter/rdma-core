@@ -87,8 +87,6 @@
 #include "ibraw.h"
 #include "cma-hdr.h"
 
-#define MIN(a,b) (((a)<(b))?(a):(b))
-
 /* Globals */
 
 static bool debug = false;		/* Stay in foreground, print more details */
@@ -96,44 +94,10 @@ static bool update_requested = false;	/* Received SIGUSR1. Dump all MC data deta
 static bool testing = false;		/* Run some tests on startup */
 static int drop_packets = 0;		/* Packet dropper */
 
-
-/*
- * Basic RDMA interface management
- */
-
-#define MAX_INLINE_DATA 64
-
-#ifdef UNICAST
-static setup_callback setup_channel, setup_raw, setup_packet, setup_incoming;
-#endif
-
 static char *payload_dump(uint8_t *p)
 {
 	return _hexbytes(p, 48);
 }
-
-#if 0
-static char *w_str(struct ibv_wc *w)
-{
-	static char buf[200];
-
-	sprintf(buf, "WC(PKEY_INDEX=%d SLID=%d SL=%d DLID_PATH=%d SRC_QP=%d QP_NUM=%d)",
-			w->pkey_index, w->slid, w->sl, w->dlid_path_bits, w->src_qp, w->qp_num);
-	return buf;
-}
-
-static char *global_r_str(struct ibv_global_route *g)
-{
-	char xbuf[INET6_ADDRSTRLEN];
-	static char buf[200];
-
-	sprintf(buf, "GlobalRoute(flow=%u SGIDINDEX=%u hop_limit=%u TrClass=%x  DGID:%s)",
-			ntohl(g->flow_label), g->sgid_index, g->hop_limit, g->traffic_class,
-			inet_ntop(AF_INET6, &g->dgid, xbuf, INET6_ADDRSTRLEN));
-	return buf;
-}
-
-#endif
 
 static char *grh_str(struct ibv_grh *g)
 {
@@ -159,19 +123,6 @@ static char *grh_str(struct ibv_grh *g)
 	return buf;
 }
 
-/* Dump GRH and the beginning of the packet */
-static void dump_buf_grh(struct buf *buf)
-{
-	char xbuf[INET6_ADDRSTRLEN];
-	char xbuf2[INET6_ADDRSTRLEN];
-
-	logg(LOG_NOTICE, "Unicast GRH flow=%u Len=%u next_hdr=%u hop_limit=%u SGID=%s DGID:%s Packet=%s\n",
-			ntohl(buf->grh.version_tclass_flow), ntohs(buf->grh.paylen), buf->grh.next_hdr, buf->grh.hop_limit,
-			inet_ntop(AF_INET6, &buf->grh.sgid, xbuf2, INET6_ADDRSTRLEN),
-			inet_ntop(AF_INET6, &buf->grh.dgid, xbuf, INET6_ADDRSTRLEN),
-			payload_dump(buf->cur));
-}
-
 #ifdef HAVE_MSTFLINT
 static void shutdown_sniffer(int arg) {
 	struct i2r_interface *i = i2r + INFINIBAND;
@@ -182,19 +133,6 @@ static void shutdown_sniffer(int arg) {
 		logg(LOG_NOTICE, "ABORT handler cleared the sniffer mode on Infiniband\n");
 }
 #endif
-
-static void unicast_packet(struct rdma_channel *c, struct buf *buf, struct in_addr dest_addr)
-{
-	unsigned long l;
-
-	memcpy(&l, buf->cur, sizeof(long));
-//	if (l == BEACON_SIGNATURE) {
-//		beacon_received(buf);
-//		return;
-//	}
-
-	dump_buf_grh(buf);
-}
 
 /* Delayed packet send due to traffic shaping */
 static void delayed_send(void *private)
@@ -392,43 +330,6 @@ discardit:
 	logg(LOG_WARNING, "%s on multicast channel %s: GRH=%s %s\n", reason, c->text, grh_str(&buf->grh), payload_dump(buf->cur));
 
 invalid_packet:
-	st(c, packets_invalid);
-}
-
-/*
- * We have an GRH header so the packet has been processed by the RDMA
- * Subsystem and we can take care of it using the RDMA calls
- */
-static void recv_buf_grh(struct rdma_channel *c, struct buf *buf)
-{
-	enum interfaces in = c->i - i2r;
-	struct in_addr dest_addr;
-
-	if (unicast &&
-		((in == INFINIBAND && buf->grh.dgid.raw[0] != 0xff) ||
-		((in == ROCE && (buf->grh.dgid.raw[13] & 0x1))))) {
-
-		unicast_packet(c, buf, dest_addr);
-		return;
-	}
-
-	logg(LOG_WARNING, "Multicast packet on Unicast QP %s:%s\n", c->text, payload_dump(buf->cur));
-
-	st(c, packets_invalid);
-}
-
-/* Figure out what to do with the packet we got */
-void receive_main(struct buf *buf)
-{
-	struct rdma_channel *c = buf->c;
-
-	if (buf->grh_valid) {
-		recv_buf_grh(c, buf);
-		return;
-	}
-
-	logg(LOG_INFO, "No GRH on %s. Packet discarded: %s.\n", c->text, payload_dump(buf->cur));
-
 	st(c, packets_invalid);
 }
 
