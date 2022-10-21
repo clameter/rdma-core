@@ -1200,25 +1200,6 @@ discard:
 
 static int status_fd;
 
-static unsigned show_interfaces(char *b)
-{
-	struct i2r_interface *i;
-	int n = 0;
-
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
-
-		if (i->multicast)
-			n += channel_stats(b + n, i->multicast, i->text, "Multicast");
-		if (i->ud)
-			n += channel_stats(b + n, i->ud, i->text, "UD");
-		if (i->raw)
-			n += channel_stats(b + n, i->raw, i->text, "Raw");
-
-	}
-	return n;
-}
-
 static unsigned show_multicast(char *b)
 {
 	int n = 0;

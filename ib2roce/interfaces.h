@@ -151,4 +151,6 @@ void setup_interface(enum interfaces);
 void shutdown_ib(void);
 void shutdown_roce(void);
 
+unsigned show_interfaces(char *b);
+
 #endif

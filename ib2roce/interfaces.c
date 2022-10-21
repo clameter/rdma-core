@@ -1083,7 +1083,7 @@ struct i2r_interface *find_interface(struct sockaddr_in *sin)
 	return NULL;
 }
 
-static unsigned show_interfaces(char *b)
+unsigned show_interfaces(char *b)
 {
 	struct i2r_interface *i;
 	int n = 0;
