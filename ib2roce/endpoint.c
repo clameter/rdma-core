@@ -457,7 +457,7 @@ void learn_source_address(struct buf *buf)
 	buf->source_ep = buf_to_ep(buf, addr);
 }
 
-static unsigned show_endpoints(char *b)
+unsigned show_endpoints(char *b)
 {
 	struct i2r_interface *i;
 	int n = 0;

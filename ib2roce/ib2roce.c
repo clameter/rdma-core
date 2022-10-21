@@ -1228,46 +1228,6 @@ static unsigned show_multicast(char *b)
 	return n;
 }
 
-static unsigned show_endpoints(char *b)
-{
-	struct i2r_interface *i;
-	int n = 0;
-	struct buf *buf;
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-		if (i->context && i->ep) {
-		struct endpoint *e[20];
-		unsigned nr;
-		unsigned offset = 0;
-
-		n += snprintf(b + n, sizeof(buf) -  n, "\nEndpoints on %s", i->text);
-		while ((nr = hash_get_objects(i->ep, offset, 20, (void **)e))) {
-			int j;
-
-			for (j = 0; j < nr; j++) {
-				struct endpoint *ep = e[j];
-				struct forward *f;
-
-				n += snprintf(b + n, sizeof(buf) - n, "\n%3d. %s", offset + j + 1, inet_ntoa(e[j]->addr));
-
-				if (ep->lid)
-					n += snprintf(b + n, sizeof(buf) - n, " LID=%x", ep->lid);
-
-				if (ep->gid.global.interface_id)
-					n += snprintf(b + n, sizeof(buf) - n, " GID=%s",
-						inet6_ntoa(&ep->gid));
-
-				for (f = ep->forwards; f; f = f->next) {
-					n += snprintf(b + n, sizeof(buf) - n, " Q%d->%sQ%d",
-					      f->source_qp, inet_ntoa(f->dest->addr), f->dest_qp);
-				}
-			}
-			offset += 20;
-		}
-	}
-	return n;
-}
-
 static void status_write(void *private)
 {
 	static char b[10000];
