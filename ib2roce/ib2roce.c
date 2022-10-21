@@ -1324,68 +1324,9 @@ static void status_write(void *private)
 	add_event(timestamp() + seconds(60), status_write, NULL,  "Status File Write");
 }
 
-static void brief_status(void)
-{
-	char buf[4000];
-	char buf2[4200];
-	char counts[200];
-
-	unsigned n = 0;
-	const char *events;
-
-	n = get_timer_list(buf, ',');
-
-	if (n > 0)
-		buf[n -1] = 0;
-	else
-		buf[0] = 0;
-
-	if (n == 0) {
-		events = "No upcoming events";
-	} else {
-		snprintf(buf2, sizeof(buf2), "Events in %s", buf);
-		events = buf2;
-	}
-
-	n = 0;
-	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES;i++)
-      	   if (i->context)	{
-		n+= sprintf(counts + n, "%s(MC %d/%d",
-			i->text,
-			i->multicast->stats[packets_received],
-			i->multicast->stats[packets_sent]);
-
-		if (i->mc_rate_limited)
-			n+= sprintf(counts + n, " R%d", i->mc_rate_limited);
-
-		if (pgm_mode > pgm_basic && (i->multicast->stats[pgm_spm] || i->multicast->stats[pgm_odata]))
-			n+= sprintf(counts + n, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
-				i->nr_tsi,
-				i->multicast->stats[pgm_spm],
-				i->multicast->stats[pgm_odata],
-				i->multicast->stats[pgm_rdata],
-				i->multicast->stats[pgm_nak]);
-#ifdef UNICAST
-		if (i->ud && i->ud->stats[packets_received])
-			n+= sprintf(counts + n, ", UD %d/%d",
-				i->ud->stats[packets_received],
-				i->ud->stats[packets_sent]);
-		if (i->raw && i->raw->stats[packets_received])
-			n+= sprintf(counts + n, ", RAW %d", i->raw->stats[packets_received]);
-#endif
-		n+= sprintf(counts + n, ") ");
-	}
-
-	logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
-
-	list_endpoints(i2r + INFINIBAND);
-	list_endpoints(i2r + ROCE);
-
-}
-
 static void logging(void *private)
 {
-	brief_status();
+	brief_status(stdout);
 	add_event(timestamp() + seconds(10), logging, NULL, "Brief Status");
 }
 

@@ -154,7 +154,7 @@ char *hexbytes(uint8_t *q, unsigned len, char separator)
 	return __hexbytes(b, q, len, separator);
 }
 
-static void brief_status(FILE *out)
+void brief_status(FILE *out)
 {
 	char buf[4000];
 	char buf2[4200];
