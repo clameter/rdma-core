@@ -13,6 +13,7 @@ rdma_executable(ib2roce
   locking.c
   buffers.c
   multicast.c
+  unicast.c
   interfaces.c
   beacon.c
   cli.c
