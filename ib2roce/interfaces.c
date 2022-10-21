@@ -588,6 +588,7 @@ void handle_rdma_event(void *private)
 				struct rdma_ud_param *param = &event->param.ud;
 				struct mc *m = (struct mc *)param->private_data;
 				struct ah_info *a = &m->interface[in].ai;
+				struct rdma_channel *c = m->interface[in].channel;
 
 				a->remote_qpn = param->qp_num;
 				a->remote_qkey = param->qkey;
@@ -605,7 +606,7 @@ void handle_rdma_event(void *private)
 				 */
 				param->ah_attr.grh.hop_limit = 1;
 
-				a->ah = ibv_create_ah(i->multicast->pd, &param->ah_attr);
+				a->ah = ibv_create_ah(c->pd, &param->ah_attr);
 				if (!a->ah) {
 					logg(LOG_ERR, "Failed to create AH for Multicast group %s on %s \n",
 						m->text, i->text);
@@ -619,8 +620,8 @@ void handle_rdma_event(void *private)
 					param->ah_attr.dlid,
 					m->tos_mode,
 					param->ah_attr.sl,
-					i->text);
-				st(i->multicast, join_success);
+					c->text);
+				st(c, join_success);
 				set_rate(m);
 
 				/* Things actually work if both multicast groups are joined */
@@ -634,6 +635,7 @@ void handle_rdma_event(void *private)
 			{
 				struct rdma_ud_param *param = &event->param.ud;
 				struct mc *m = (struct mc *)param->private_data;
+				struct rdma_channel *c = m->interface[in].channel;
 
 				logg(LOG_ERR, "Multicast Error. Group %s on %s\n",
 					m->text, i->text);
@@ -643,7 +645,7 @@ void handle_rdma_event(void *private)
 				       active_mc--;
 
 				m->interface[in].status = MC_ERROR;
-				st(i->multicast, join_failure);
+				st(c, join_failure);
 			}
 			break;
 
