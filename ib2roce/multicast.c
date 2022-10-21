@@ -555,6 +555,34 @@ void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce)
 }
 
 
+unsigned show_multicast(char *b)
+{
+	int n = 0;
+	int free = 0;
+	struct buf *buf;
+	struct mc *m;
+
+	for(buf = buffers; buf < buffers + nr_buffers; buf++)
+		if (buf->free)
+		       free++;
+
+	n+= sprintf(b + n, "Multicast: Active=%u NR=%u Max=%u\nBuffers: Active=%u Total=%u\n\n",
+		active_mc, nr_mc, MAX_MC, nr_buffers-free , nr_buffers);
+
+	for(m = mcs; m < mcs + nr_mc; m++)
+
+		n += sprintf(n + b, "%s INFINIBAND: %s %s%s P%d ROCE: %s %s P%d\n",
+			inet_ntoa(m->addr),
+			mc_text[m->interface[INFINIBAND].status],
+			m->interface[INFINIBAND].sendonly ? "Sendonly " : "",
+			mgid_text(m),
+			m->interface[INFINIBAND].pending,
+			mc_text[m->interface[ROCE].status],
+			m->interface[ROCE].sendonly ? "Sendonly" : "",
+			m->interface[ROCE].pending);
+	return n;
+}
+
 static void multicast_cmd(FILE *out, char *parameters)
 {
 	struct mc *m;
