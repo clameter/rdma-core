@@ -153,4 +153,25 @@ void shutdown_roce(void);
 
 unsigned show_interfaces(char *b);
 
+static inline struct rdma_channel *find_channel(struct i2r_interface *i, enum channel_type type)
+{
+	switch (type) {
+		case channel_rdmacm:
+			return i->multicast;
+
+		case channel_ud:
+			return i->ud;
+
+		case channel_qp1:
+			return i->qp1;
+
+		case channel_raw:
+		case channel_ibraw:
+			return i->raw;
+
+		default:
+			abort();
+	}
+}
+
 #endif
