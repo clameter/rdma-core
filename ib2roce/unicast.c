@@ -271,10 +271,12 @@ static void sidr_state_init(void)
  */
 static void send_mad(struct endpoint *e, struct buf *buf, void *mad_pos)
 {
+	struct rdma_channel *qp1 = find_channel(e->i, channel_qp1);
+
 	buf->cur = mad_pos;
 	buf->end = mad_pos + 256;
 
-	send_ud(e->i->qp1, buf, e->ah, 1, IB_DEFAULT_QP1_QKEY);
+	send_ud(qp1, buf, e->ah, 1, IB_DEFAULT_QP1_QKEY);
 }
 
 static const char *sidr_req(struct buf *buf, void *mad_pos)
@@ -378,14 +380,16 @@ no_cma:
 	}
 
 	if (bridging) {
+		struct rdma_channel *qp1 = find_channel(dest_i, channel_qp1);
+		struct rdma_channel *ud = find_channel(dest_i, channel_ud);
 
 		hash_add(sidrs, ss);
 		unlock();
 
 		/* Source QPN is not valid for target network use the QP number of the UD QP */
-		ch->src_addr.ip4.sess_qpn = htonl(dest_i->ud->qp->qp_num);
+		ch->src_addr.ip4.sess_qpn = htonl(ud->qp->qp_num);
 		/* Ensure the SIDR_REP gets back to our QP1 */
-		ch->src_addr.ip4.sidr_qpn = ntohl(dest_i->qp1->qp->qp_num);
+		ch->src_addr.ip4.sidr_qpn = ntohl(qp1->qp->qp_num);
 
 		send_mad(ss->dest, buf, mad_pos);
 		
@@ -467,7 +471,7 @@ static const char * sidr_rep(struct buf *buf, void *mad_pos, struct umad_hdr *um
 
 	unlock();
 
-	qpn_word = (ss->source->i->ud->qp->qp_num << 8) | (qpn_word & 0xff);
+	qpn_word = (find_channel(ss->source->i, channel_ud)->qp->qp_num << 8) | (qpn_word & 0xff);
 	sr->qpn = htonl(qpn_word);
 
 	if (bridging)
@@ -786,12 +790,13 @@ void receive_ud(struct buf *buf)
 	 * if the value in immm matches the src_qp.... Maybe we should not do this by default ?
 	 */
 	if (ntohl(buf->imm) == w->src_qp)
-		buf->imm = htonl(f->dest->i->ud->qp->qp_num);
+		buf->imm = htonl(find_channel(f->dest->i, channel_ud)->qp->qp_num);
 
 	logg(LOG_NOTICE, "receive_ud %s Packet len=%u 0x%x lid=%d forwarded to %s %s:0x%x lid=%d qkey=%x\n", c->text,
-			w->byte_len, w->src_qp, e->lid, dest_i->ud->text, inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
+			w->byte_len, w->src_qp, e->lid, find_channel(dest_i, channel_ud)->text,
+				inet_ntoa(f->dest->addr), f->dest_qp, f->dest->lid, f->dest_qkey);
 
-	send_ud(dest_i->ud, buf, f->dest->ah, f->dest_qp, f->dest_qkey);
+	send_ud(find_channel(dest_i, channel_ud), buf, f->dest->ah, f->dest_qp, f->dest_qkey);
  	return;
  
 discard:
