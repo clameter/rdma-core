@@ -42,6 +42,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <syslog.h>
+#include <stdio.h>
 
 __attribute__ ((format (printf, 2, 3)))
 void logg(int prio, const char *fmt, ...);
@@ -61,6 +62,8 @@ static inline char *_hexbytes(uint8_t *q, unsigned len)
 }
 
 void get_core_logs(void *private);
+
+void brief_status(FILE *out);
 
 #endif
 
