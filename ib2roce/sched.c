@@ -348,7 +348,7 @@ static void core_cmd(FILE *out, char *parameters) {
 						ci->max_latency, ci->min_latency);
 
 				for (j = 0; j < ci->nr_channels; j++)
-					channel_stat(out, ci->channel + j);
+					channel_stat(out, ci->channel[j]);
 			}
 		} else
 			fprintf(out, "No cores active. ib2roce operates in single threaded mode.\n");

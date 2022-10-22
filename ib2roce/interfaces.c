@@ -972,9 +972,9 @@ void scan_cqs(void *private)
 	struct ibv_wc wc[10];
 
 	for(i = 0; i < core->nr_channels; i++) {
-		cqs = ibv_poll_cq(core->channel[i].cq, 10, wc);
+		cqs = ibv_poll_cq(core->channel[i]->cq, 10, wc);
 		if (cqs) {
-			c = core->channel + i;
+			c = core->channel[i];
 
 			if (cqs > 0)
 				process_cqes(c, wc, cqs);

@@ -74,8 +74,8 @@ extern thread_local uint64_t now;
 enum core_state { core_off, core_init, core_running, core_err, nr_core_states };
 
 struct core_info {
+	struct rdma_channel *channel[MAX_CQS_PER_CORE];
 	unsigned nr_channels;
-	struct rdma_channel channel[MAX_CQS_PER_CORE];
 	/* Statistics */
 	unsigned samples;
 	long sum_latency;

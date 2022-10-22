@@ -109,7 +109,7 @@ void show_core_config(void)
 
 		if (ci->nr_channels) {
 			for (j = 0; j < ci->nr_channels; j++) {
-				n += sprintf(b + n, "%s ", ci->channel[j].text);
+				n += sprintf(b + n, "%s ", ci->channel[j]->text);
 			}
 		} else {
 			n += sprintf(b + n, "<not used>");
@@ -129,26 +129,27 @@ struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type
 	char *p;
 	short core;
 	int channel_nr;
+	unsigned rdma_channel_size = sizeof(struct rdma_channel);
+
 
 retry:
 	ci = channel_infos + type;
 	channel_nr = -1;
+	c = calloc(1, rdma_channel_size);
 
 	core = core_lookup(i, type);
 	if (core != NO_CORE) {
 		coi = core_infos + core;
 
 		channel_nr = coi->nr_channels;
-		c = coi->channel + channel_nr;
-		memset(c, 0, sizeof(struct rdma_channel));
+		coi->channel[channel_nr] = c;
 		coi->nr_channels++;
 		if (coi->nr_channels > MAX_CQS_PER_CORE)
 			panic("Too many RDMA channels per core. Max = %d\n", MAX_CQS_PER_CORE);
 
 		c->core = coi;
 
-	} else
-		c = calloc(1, sizeof(struct rdma_channel));
+	}
 
 	if (type == channel_err)
 		goto err;
