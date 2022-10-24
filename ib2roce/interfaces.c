@@ -513,12 +513,15 @@ void setup_interface(enum interfaces in)
 		panic("ibv_reg_mr failed for %s:%s.\n", i->text, errname());
 
 	/* Calculate number of required RDMA channels for multicast */
-	channels = 1 + nr_mc / i->device_attr.max_mcast_grp;
+	channels = 1 + nr_mc / i->device_attr.max_mcast_qp_attach;
+
+	if (channels > 0)
+		logg(LOG_INFO, "Multi RDMA group mode: %u multicast rdma channels to support %u multicast groups\n", channels, nr_mc);
 
 	for (int j = 0; j < channels; j++) {
 		char buf[5];
 
-		snprintf(buf, sizeof(buf), "%d", j);
+		snprintf(buf, sizeof(buf), "%d", j + 1);
 		i->channels.c[j] = multicast = new_rdma_channel(i, channel_rdmacm, buf);
 
 		if (!multicast)
