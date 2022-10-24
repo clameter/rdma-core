@@ -129,8 +129,7 @@ struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type
 	char *p;
 	short core;
 	int channel_nr;
-	unsigned rdma_channel_size = sizeof(struct rdma_channel);
-
+	unsigned rdma_channel_size = sizeof(struct rdma_channel) + i->device_attr.max_mcast_grp * sizeof(struct mc *);
 
 retry:
 	ci = channel_infos + type;

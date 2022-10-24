@@ -115,6 +115,8 @@ struct rdma_channel {
 	unsigned last_received, last_sent;
 	unsigned pps_in, pps_out;	/* Rate in the last interval */
 	unsigned max_pps_in, max_pps_out; /* Max Rate seen */
+	unsigned nr_mcs;		/* Number of multicast groups attached via this channel */
+	struct mc *mc[];		/* Dynamically sized structure depending on the number of allowed MC groups for an interface */
 };
 
 static inline void st(struct rdma_channel *c, enum stats s)

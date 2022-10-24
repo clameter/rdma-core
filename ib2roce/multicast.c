@@ -363,17 +363,29 @@ out:
 
 
 static int _join_mc(struct in_addr addr, struct sockaddr *sa,
-	unsigned port, uint8_t tos, struct rdma_channel *c, bool sendonly, void *private)
+	unsigned port, uint8_t tos, struct rdma_channel *c, bool sendonly, struct mc *m)
 {
+	int ret;
+	int i;
+	unsigned max_mc_per_qp = c->i->device_attr.max_mcast_grp;
 	struct rdma_cm_join_mc_attr_ex mc_attr = {
 		.comp_mask = RDMA_CM_JOIN_MC_ATTR_ADDRESS | RDMA_CM_JOIN_MC_ATTR_JOIN_FLAGS,
 		.join_flags = sendonly ? RDMA_MC_JOIN_FLAG_SENDONLY_FULLMEMBER
                                        : RDMA_MC_JOIN_FLAG_FULLMEMBER,
 		.addr = sa
 	};
-	int ret;
 
-	ret = rdma_join_multicast_ex(c->id, &mc_attr, private);
+	/* Find first free slot */
+	for(i = 0; i < max_mc_per_qp; i++)
+		if (!c->mc[i])
+			break;
+
+	if (i == max_mc_per_qp) {
+		logg(LOG_CRIT, "Can only join %u multicast groups on rdma_channel %s", max_mc_per_qp, c->text);
+		return 1;
+	}
+
+	ret = rdma_join_multicast_ex(c->id, &mc_attr, m);
 
 	if (ret) {
 		logg(LOG_CRIT, "Failed to create join request %s:%d on %s. Error %s\n",
@@ -387,12 +399,25 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 		inet_ntoa(addr), port,
 		c->i->text);
 	st(c, join_requests);
+
+	c->mc[i] = m;
+	c->nr_mcs++;
 	return 0;
 }
 
-static int _leave_mc(struct in_addr addr,struct sockaddr *si, struct rdma_channel *c)
+static int _leave_mc(struct in_addr addr,struct sockaddr *si, struct rdma_channel *c, struct mc *m)
 {
 	int ret;
+	int i;
+	unsigned max_mc_per_qp = c->i->device_attr.max_mcast_grp;
+
+	for(i = 0; i < max_mc_per_qp; i++) {
+		if (c->mc[i] == m) {
+			break;
+		}
+	}
+	if (i == max_mc_per_qp)
+		panic("Multicast structure not found in _leave_mc");
 
 	ret = rdma_leave_multicast(c->id, si);
 	if (ret) {
@@ -402,7 +427,10 @@ static int _leave_mc(struct in_addr addr,struct sockaddr *si, struct rdma_channe
 	logg(LOG_NOTICE, "Leaving MC group %s on %s .\n",
 		inet_ntoa(addr),
 		c->i->text);
+
 	st(c, leave_requests);
+	c->mc[i] = NULL;
+	c->nr_mcs--;
 	return 0;
 }
 
@@ -420,7 +448,7 @@ int leave_mc(enum interfaces i, struct rdma_channel *c)
 
 		m->enabled = false;
 		if (mi->channel) {
-			ret = _leave_mc(m->addr, mi->sa, c);
+			ret = _leave_mc(m->addr, mi->sa, c, m);
 			if (ret)
 				return 1;
 		}
@@ -480,7 +508,7 @@ static void send_joins(void)
 
 				case MC_ERROR:
 
-					_leave_mc(m->addr, mi->sa, mi->channel);
+					_leave_mc(m->addr, mi->sa, mi->channel, m);
 					mi->status = MC_OFF;
 					mi->channel = NULL;
 					logg(LOG_WARNING, "Left Multicast group %s on %s due to MC_ERROR\n",
