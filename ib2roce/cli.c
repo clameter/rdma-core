@@ -132,9 +132,8 @@ static void console_input(void *private)
 			printf("\n");
 			terminate(0);
 		} else {
-			fclose(out);
-			unregister_callback(cp->in_fd);
-			free(cp);
+			logg(LOG_INFO, "EOF: Closing console\n");
+			goto out2;
 		}
 		return;
 	}
@@ -183,10 +182,14 @@ static void console_input(void *private)
 	fprintf(out, "Command \"%s\" not found. Try \"help\".\n", in);
 
 out:
-	if (cp->in_fd == STDIN_FILENO)
+	if (cp->in_fd == STDIN_FILENO) {
 		prompt(NULL);
-	else
-		fflush(out);
+		return;
+	}
+out2:
+	fclose(out);
+	unregister_callback(cp->in_fd);
+	free(cp);
 }
 
 struct conn_req_info {

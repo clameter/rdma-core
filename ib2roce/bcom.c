@@ -35,7 +35,7 @@ int main(int argc, char *argv[])
 	}
 
 	if (argc > 1) {
-		n = strlen (argv[1]);
+		n = strlen(argv[1]);
 		strcpy(buff, argv[1]);
 	} else {
 		strcpy(buff, "help");
@@ -54,12 +54,10 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	if (read(fd, buff, sizeof(buff)) < 0) {
-		perror("Cannot read from socket");
-		return 1;
+	while (read(fd, buff, sizeof(buff)) > 0) {
+		puts(buff);
 	}
 
-	puts(buff);
 	close(fd);
 	return 0;
 }
