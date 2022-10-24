@@ -56,7 +56,7 @@
 #include "buffers.h"
 
 
-#define MAX_MC 240
+#define MAX_MC 1000
 
 extern unsigned nr_mc;		/* Multicast groups entries */
 extern unsigned active_mc;	/* MC groups active */
