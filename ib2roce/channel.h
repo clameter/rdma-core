@@ -46,7 +46,6 @@
 #include "buffers.h"
 #include "fifo.h"
 
-
 #define ROCE_PORT 4791
 #define ETHERTYPE_ROCE 0x8915
 

@@ -90,7 +90,7 @@ struct bridge_state {
 	unsigned beacons_missed;
 	unsigned beacons_received;
 	long  distance[3];
-	struct rdma_channel *channel[NR_INTERFACES];
+	struct channel_list *channels[NR_INTERFACES];
 	struct beacon_info last;
 };
 
@@ -120,8 +120,11 @@ void run_bridge_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel 
 	for(i = 0; i < nr_bridges; i++) {
 		struct bridge_state *br = remote_bridge + i;
 
-		func(out, br->channel[INFINIBAND]);
-		func(out, br->channel[ROCE]);
+		channel_foreach(c, br->channels[INFINIBAND])
+			func(out, c);
+
+		channel_foreach(c, br->channels[ROCE])
+			func(out,c );
 	}
 }
 
@@ -136,7 +139,8 @@ static void enable_bridge(struct bridge_state *b)
 
 	/* Create new MC channels */
 	for (i = 0; i < NR_INTERFACES; i++) {
-		b->channel[i] = new_rdma_channel(i2r + i, channel_rdmacm, "beacon");
+		/* XXX Needs to be fixed to support multiple rdma channels */
+		b->channels[i]->c[0] = new_rdma_channel(i2r + i, channel_rdmacm, "beacon");
 	}
 
 
@@ -178,11 +182,18 @@ static void enable_bridge(struct bridge_state *b)
 
 		m->enabled = true;
 	}
-	post_receive(b->channel[INFINIBAND]);
-	post_receive(b->channel[ROCE]);
-	arm_channel(b->channel[INFINIBAND]);
-	arm_channel(b->channel[ROCE]);
-	check_joins(b->channel[INFINIBAND], b->channel[ROCE]);
+
+	channel_foreach(c, b->channels[INFINIBAND])
+		post_receive(c);
+	channel_foreach(c, b->channels[ROCE])
+		post_receive(c);
+
+	channel_foreach(c, b->channels[INFINIBAND])
+		arm_channel(c);
+	channel_foreach(c, b->channels[ROCE])
+		arm_channel(c);
+
+	check_joins(b->channels[INFINIBAND], b->channels[ROCE]);
 	b->active = true;
 }
 
@@ -195,11 +206,15 @@ static void disable_bridge(struct bridge_state *b)
  * If there are errors: Do not worry. Destroying the
  * QP is also an implied leave
  */
-	leave_mc(INFINIBAND, b->channel[INFINIBAND]);
-	leave_mc(ROCE, b->channel[ROCE]);
+	channel_foreach(c, b->channels[INFINIBAND])
+		leave_mc(INFINIBAND, c);
+	channel_foreach(c, b->channels[ROCE])
+		leave_mc(ROCE, c);
 
-	channel_destroy(b->channel[INFINIBAND]);
-	channel_destroy(b->channel[ROCE]);
+	channel_foreach(c, b->channels[INFINIBAND])
+		channel_destroy(c);
+	channel_foreach(c, b->channels[ROCE])
+		channel_destroy(c);
 }
 
 static void check_remote_bridges(void)
@@ -239,7 +254,7 @@ static void prep_beacon_struct(struct i2r_interface *i, struct buf *buf)
 	for(m = mcs; m < mcs + nr_mc; m++) {
 		struct beacon_multicast *bm = b->mc + groups;
 
-		if (m->admin || !m->enabled || m->interface[i - i2r].channel != i->multicast)
+		if (m->admin || !m->enabled || !is_a_channel_of(m->interface[i - i2r].channel, &i->channels))
 			continue;
 
 		bm->group = m->addr;
@@ -352,12 +367,13 @@ static void beacon_send(void *private)
 		if (beacon_mc) {
 			enum interfaces in = last_interface;
 			struct i2r_interface *i = i2r + in;
+			struct rdma_channel *c = beacon_mc->interface[in].channel;
 
 			if (i->context && beacon_mc->interface[in].status == MC_JOINED) {
 
-				buf = alloc_buffer(i->multicast);
+				buf = alloc_buffer(c);
 				prep_beacon_struct(i, buf);
-				send_to(i->multicast, buf->raw, buf->end - buf->raw, &beacon_mc->interface[in].ai, false, 0, buf);
+				send_to(c, buf->raw, buf->end - buf->raw, &beacon_mc->interface[in].ai, false, 0, buf);
 			}
 
 		} else { /* Unicast */
@@ -368,7 +384,8 @@ static void beacon_send(void *private)
 				beacon = false;
 				return;
 			}
-			buf = alloc_buffer(i->multicast);
+			/* Just some channel. This is unicast and will be handled differently */
+			buf = alloc_buffer(i->channels.c[0]);
 			prep_beacon_struct(i, buf);
 
 			reset_flags(buf);

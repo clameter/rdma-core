@@ -126,9 +126,6 @@ struct sockaddr_in *parse_addr(const char *arg, int port,
 
 int leave_mc(enum interfaces i, struct rdma_channel *);
 
-void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce);
-void next_join_complete(void);
-
 /* MGID format related functions */
 const char *mgid_text(struct mc *m);
 void mgids_out(void);

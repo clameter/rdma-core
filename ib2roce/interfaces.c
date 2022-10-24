@@ -292,17 +292,12 @@ static void qp_destroy(struct i2r_interface *i)
 	}
 #endif
 
-	channel_destroy(i->multicast);
-	i->multicast = NULL;
-
-	channel_destroy(i->raw);
-	i->raw = NULL;
-
-	channel_destroy(i->ud);
-	i->ud = NULL;
-
-	channel_destroy(i->qp1);
-	i->qp1 = NULL;
+	channelp_foreach(c, &i->channels) {
+		if (*c) {
+			channel_destroy(*c);
+			*c = NULL;
+		}
+	}
 }
 
 /* Retrieve Kernel Stack info about the interface */
@@ -412,10 +407,28 @@ void check_out_of_buffer(void *private)
 	add_event(now + ONE_SECOND, check_out_of_buffer, i, "Check out of buffers");
 }
 
+/* Find an RDMA channel by type */
+struct rdma_channel *find_channel(struct i2r_interface *i, enum channel_type type)
+{
+	channel_foreach(c, &i->channels) {
+
+		if (c->type == type)
+			return c;
+	}
+
+	panic("Cannot find channel type %u on interface %s\n", type, i->text);
+	return NULL;
+}
+
 void setup_interface(enum interfaces in)
 {
 	struct i2r_interface *i = i2r + in;
 	struct ibv_gid_entry *e;
+	struct rdma_channel *multicast= NULL;
+	struct rdma_channel *qp1 = NULL;
+	struct rdma_channel *raw_channel = NULL;
+	struct rdma_channel *ud = NULL;
+	unsigned channels;
 
 	if (in == INFINIBAND)
 		i->maclen = 20;
@@ -477,7 +490,6 @@ void setup_interface(enum interfaces in)
 
 
 	/* Create RDMA elements that are interface wide */
-
 	i->rdma_events = rdma_create_event_channel();
 	if (!i->rdma_events)
 		panic("rdma_create_event_channel() for %s failed (%s).\n",
@@ -500,31 +512,43 @@ void setup_interface(enum interfaces in)
 	if (!i->mr)
 		panic("ibv_reg_mr failed for %s:%s.\n", i->text, errname());
 
-	i->multicast = new_rdma_channel(i, channel_rdmacm, NULL);
+	/* Calculate number of required RDMA channels for multicast */
+	channels = 1 + nr_mc / i->device_attr.max_mcast_grp;
 
-	if (!i->multicast)
-		abort();
+	for (int j = 0; j < channels; j++) {
+		char buf[5];
+
+		snprintf(buf, sizeof(buf), "%d", j);
+		i->channels.c[j] = multicast = new_rdma_channel(i, channel_rdmacm, buf);
+
+		if (!multicast)
+			panic("Cannot create %d rdma channels required for multicast\n", channels);
+
+	}
 
 	if (unicast) {
 
-		i->ud = new_rdma_channel(i, channel_ud, NULL);
-		i->qp1 = new_rdma_channel(i, channel_qp1, NULL);
+		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, NULL);
+		i->channels.c[channels++] = qp1 = new_rdma_channel(i, channel_qp1, NULL);
 
-		if (raw) {
-			if (i == i2r + INFINIBAND) {
-				i->raw = new_rdma_channel(i, channel_ibraw, NULL);
-				/* Sadly fallback is not working here */
-			} else {
-				if (packet_socket)
-					i->raw = new_rdma_channel(i, channel_packet, NULL);
-				else
-					i->raw = new_rdma_channel(i, channel_raw, NULL);
-			}
-		}
-	}
+ 		if (raw) {
+ 			if (i == i2r + INFINIBAND) {
+				i->channels.c[channels++] = raw_channel = new_rdma_channel(i, channel_ibraw, NULL);
+ 				/* Sadly fallback is not working here */
+ 			} else {
+ 				if (packet_socket)
+					i->channels.c[channels++] = new_rdma_channel(i, channel_packet, NULL);
+ 				else
+					i->channels.c[channels++] = new_rdma_channel(i, channel_raw, NULL);
+ 			}
+ 		}
+ 	}
 
-	check_out_of_buffer(i);
-	numa_run_on_node(-1);
+	if (channels > MAX_CHANNELS_PER_INTERFACE)
+		panic("Too many channels for interface %s\n", i->text);
+
+ 	check_out_of_buffer(i);
+ 	numa_run_on_node(-1);
 
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u"
 		"/%u/%u"
@@ -535,9 +559,9 @@ void setup_interface(enum interfaces in)
 		i->port,
 		inet6_ntoa(e->gid.raw), i->gid_index,
 		inet_ntoa(i->if_addr.sin_addr), default_port,
-		i->multicast ? i->multicast->nr_cq: 0,
-		i->ud ? i->ud->nr_cq : 0,
-		i->raw ? i->raw->nr_cq : 0,
+		multicast ? multicast->nr_cq: 0,
+		ud ? ud->nr_cq : 0,
+		raw_channel ? raw_channel->nr_cq : 0,
 		i->mtu,
 		i->numa_node
 	);
@@ -548,7 +572,10 @@ void shutdown_ib(void)
 	if (!i2r[INFINIBAND].context)
 		return;
 
-	leave_mc(INFINIBAND, i2r[INFINIBAND].multicast);
+	channel_foreach(c, &i2r[INFINIBAND].channels) {
+		if (c->type == channel_rdmacm)
+			leave_mc(INFINIBAND, c);
+	}
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + INFINIBAND);
@@ -559,7 +586,10 @@ void shutdown_roce(void)
 	if (!i2r[ROCE].context)
 		return;
 
-	leave_mc(ROCE, i2r[ROCE].multicast);
+	channel_foreach(c, &i2r[ROCE].channels) {
+		if (c->type == channel_rdmacm)
+			leave_mc(ROCE, c);
+	}
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + ROCE);
@@ -864,14 +894,10 @@ void post_receive(struct rdma_channel *c)
 
 void post_receive_buffers(void)
 {
-	interface_foreach(i) {
-		post_receive(i->multicast);
-		post_receive(i->raw);
-		post_receive(i->qp1);
-		post_receive(i->ud);
-	}
+	interface_foreach(i)
+		channel_foreach(c, &i->channels)
+			post_receive(c);
 }
-
 
 void reset_flags(struct buf *buf)
 {
@@ -1084,18 +1110,10 @@ unsigned show_interfaces(char *b)
 {
 	int n = 0;
 
-	interface_foreach(i) {
+	interface_foreach(i)
+		channel_foreach(c, &i->channels)
+			n += channel_stats(b + n, c, i->text, c->type == channel_rdmacm ? "Multicast" : c->text);
 
-		if (i->multicast)
-			n += channel_stats(b + n, i->multicast, i->text, "Multicast");
-#ifdef UNICAST
-		if (i->ud)
-			n += channel_stats(b + n, i->ud, i->text, "UD");
-		if (i->raw)
-			n += channel_stats(b + n, i->raw, i->text, "Raw");
-#endif
-
-	}
 	return n;
 }
 

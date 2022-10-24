@@ -203,7 +203,7 @@ void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
  * Parse an address with port number [:xxx] and/or mgid format [/YYYY]
  */
 struct sockaddr_in *parse_addr(const char *arg, int port,
-	uint8_t *p_mgid_mode, uint8_t *p_tos_mode, bool mc_only)
+		uint8_t *p_mgid_mode, uint8_t *p_tos_mode, bool mc_only)
 {
 	struct addrinfo *res;
 	char *service;
@@ -306,8 +306,8 @@ void mgids_out(void)
 	for (n = 0; n < nr_mgid_signatures; n++) {
 		struct mgid_signature *m = mgid_signatures + n;
 
-			printf("%7s|    0x%04x | %s\n",
-					m->id, m->signature, m->port ? "true" : "false");
+		printf("%7s|    0x%04x | %s\n",
+				m->id, m->signature, m->port ? "true" : "false");
 	}
 }
 
@@ -324,8 +324,8 @@ bool mgid_check(struct mc *m, unsigned short signature)
 
 /* Multicast group specifications on the command line */
 int new_mc_addr(char *arg,
-	bool sendonly_infiniband,
-	bool sendonly_roce)
+		bool sendonly_infiniband,
+		bool sendonly_roce)
 {
 	struct sockaddr_in *si;
 	struct mc *m = mcs + nr_mc;
@@ -363,7 +363,7 @@ out:
 
 
 static int _join_mc(struct in_addr addr, struct sockaddr *sa,
-	unsigned port, uint8_t tos, struct rdma_channel *c, bool sendonly, struct mc *m)
+		unsigned port, uint8_t tos, struct rdma_channel *c, bool sendonly, struct mc *m)
 {
 	int ret;
 	int i;
@@ -371,7 +371,7 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 	struct rdma_cm_join_mc_attr_ex mc_attr = {
 		.comp_mask = RDMA_CM_JOIN_MC_ATTR_ADDRESS | RDMA_CM_JOIN_MC_ATTR_JOIN_FLAGS,
 		.join_flags = sendonly ? RDMA_MC_JOIN_FLAG_SENDONLY_FULLMEMBER
-                                       : RDMA_MC_JOIN_FLAG_FULLMEMBER,
+			: RDMA_MC_JOIN_FLAG_FULLMEMBER,
 		.addr = sa
 	};
 
@@ -462,7 +462,7 @@ int leave_mc(enum interfaces i, struct rdma_channel *c)
  * List the two rdma channels for bridging MC traffic on which joins are currently processed
  */
 static struct global_join_state {
-	struct rdma_channel *channels[2];
+	struct channel_list *channels[NR_INTERFACES];
 } gjs;
 
 /*
@@ -488,45 +488,53 @@ static void send_joins(void)
 			struct mc_interface *mi = m->interface + in;
 			uint8_t tos = in == ROCE ? m->tos_mode : 0;
 
-			if (mi->channel && mi->channel != gjs.channels[in]) {
-				logg(LOG_INFO, "Not joning multicast group %s which is not on rdma channel %s but on %s\n",
-						m->text, gjs.channels[in]->text, mi->channel->text);
+			if (mi->channel && !is_a_channel_of(mi->channel, gjs.channels[in])) {
+				logg(LOG_INFO, "Not joining multicast group %s which is not on rdma channel %s but on %s\n",
+						m->text, gjs.channels[in]->c[0]->text, mi->channel->text);
 				continue;
 			}
 
 			if (i2r[in].context) {
 				switch(mi->status) {
 
-				case MC_OFF:
-					if (_join_mc(m->addr, mi->sa, port, tos, gjs.channels[in], mi->sendonly, m) == 0) {
-						mi->status = MC_JOINING;
-						mi->channel = gjs.channels[in];
-					} else
-						/* Error during join... Lets retry this in awhile */
-						return;
-					break;
+					case MC_OFF:
+						/* Find rdma channel with available multicast slots  */
+						channel_foreach(c, gjs.channels[in]) {
+							if (c->type == channel_rdmacm && c->nr_mcs < c->i->device_attr.max_mcast_grp) {
+								if (_join_mc(m->addr, mi->sa, port, tos, c, mi->sendonly, m) == 0) {
+									mi->status = MC_JOINING;
+									mi->channel = c;
+									goto next;
+								} else
+									/* Error during join... Lets retry this in awhile */
+									return;
+							}
+						}
+						panic("Not enough rdma channels for multicast channels\n");
+						break;
 
-				case MC_ERROR:
+					case MC_ERROR:
 
-					_leave_mc(m->addr, mi->sa, mi->channel, m);
-					mi->status = MC_OFF;
-					mi->channel = NULL;
-					logg(LOG_WARNING, "Left Multicast group %s on %s due to MC_ERROR\n",
-						m->text, interfaces_text[in]);
-					break;
+						_leave_mc(m->addr, mi->sa, mi->channel, m);
+						mi->status = MC_OFF;
+						mi->channel = NULL;
+						logg(LOG_WARNING, "Left Multicast group %s on %s due to MC_ERROR\n",
+								m->text, interfaces_text[in]);
+						break;
 
-				case MC_JOINED:
-					break;
+					case MC_JOINED:
+						break;
 
-				case MC_JOINING:
-					/* Join is still being processed */
-					break;
+					case MC_JOINING:
+						/* Join is still being processed */
+						break;
 
-				default:
-					logg(LOG_ERR, "Bad MC status %d MC %s on %s\n",
-					       mi->status, m->text, interfaces_text[in]);
-					break;
+					default:
+						logg(LOG_ERR, "Bad MC status %d MC %s on %s\n",
+								mi->status, m->text, interfaces_text[in]);
+						break;
 				}
+				next: ;
 			}
 		}
 	}
@@ -550,17 +558,20 @@ void next_join_complete(void)
 	 */
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-	   if (i->context)	{
-		struct rdma_channel *c = gjs.channels[i - i2r];
+		if (i->context)	{
+			channel_foreach(c, gjs.channels[i - i2r]) {
+				if (c->type != channel_rdmacm)
+					continue;
 
-		if (c->listening)
-			continue;
+				if (c->listening)
+					continue;
 
-		if (rdma_listen(c->id, 50))
-			logg(LOG_ERR, "rdma_listen on %s error %s\n", c->text, errname());
+				if (rdma_listen(c->id, 50))
+					logg(LOG_ERR, "rdma_listen on %s error %s\n", c->text, errname());
 
-		c->listening = true;
-	}
+				c->listening = true;
+			}
+		}
 }
 
 static void __check_joins(void *private)
@@ -574,14 +585,13 @@ static void __check_joins(void *private)
 	}
 }
 
-void check_joins(struct rdma_channel *infiniband, struct rdma_channel *roce)
+void check_joins(struct channel_list *infiniband,
+		struct channel_list *roce)
 {
 	gjs.channels[INFINIBAND] = infiniband;
 	gjs.channels[ROCE] = roce;
-
-	__check_joins(NULL);
+	 __check_joins(NULL);
 }
-
 
 unsigned show_multicast(char *b)
 {
@@ -635,7 +645,7 @@ static void multicast_cmd(FILE *out, char *parameters)
 			if (m->admin)
 				fprintf(out, "admin ");
 
-			if (mi->channel != i2r[in].multicast)
+			if (!is_a_channel_of(mi->channel, &i2r[in].channels))
 				fprintf(out, "remote ");
 
 			fprintf(out, "packet_time=%dns, max_burst=%d packets, delayed=%ld packets, last_sent=%ldms ago, last_delayed=%ldms ago, pending=%u packets, burst=%d\n",

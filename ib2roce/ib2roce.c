@@ -389,7 +389,7 @@ static void setup_timed_events(void)
 
 	calculate_pps(NULL);
 
-	check_joins(i2r[INFINIBAND].multicast, i2r[ROCE].multicast);
+	check_joins(&i2r[INFINIBAND].channels, &i2r[ROCE].channels);
 }
 
 static void update_status(int x)

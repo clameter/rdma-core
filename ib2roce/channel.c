@@ -317,6 +317,7 @@ static bool setup_multicast(struct rdma_channel *c)
 
 	register_callback(handle_async_event, i->context->async_fd, i);
 
+	/* XXX This is not going to work for multi channel RDMA */
 	ret = rdma_bind_addr(c->id, c->bindaddr);
 	if (ret) {
 		logg(LOG_CRIT, "Failed to bind %s interface. Error %s\n",
@@ -597,17 +598,19 @@ void stop_channel(struct rdma_channel *c)
 
 void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *))
 {
-	interface_foreach(i) {
-		if (i->multicast)
-			func(out, i->multicast);
-		if (i->ud)
-			func(out, i->ud);
-		if (i->raw)
-			func(out, i->raw);
-		if (i->qp1)
-			func(out, i->qp1);
-	}
-	run_bridge_channels(NULL, func);
+ 	interface_foreach(i)
+		channel_foreach(c, &i->channels)
+				func(out, c);
+
+ 	run_bridge_channels(NULL, func);
+}
+
+bool is_a_channel_of(struct rdma_channel *c, struct channel_list *cl)
+{
+	channel_foreach(c2, cl)
+		if (c2 == c)
+			return true;
+	return false;
 }
 
 void arm_channel(struct rdma_channel *c)
@@ -617,30 +620,34 @@ void arm_channel(struct rdma_channel *c)
 
 void arm_channels(struct core_info *core)
 {
-	interface_foreach(i) {
-		/* And request notifications if something happens */
-		if (i->multicast && core == i->multicast->core) {
-			ibv_req_notify_cq(i->multicast->cq, 0);
-		}
-		if (i->raw && core == i->raw->core &&
-			       (i->raw->type == channel_raw || i->raw->type == channel_ibraw)) {
-			start_channel(i->raw);
-			ibv_req_notify_cq(i->raw->cq, 0);
+	interface_foreach(i)
+		channel_foreach(c, &i->channels) {
 
-			setup_flow(i->raw);
-		}
+			switch (c->type) {
+		   		case  channel_rdmacm:
+		  			if (core == c->core) {
+						ibv_req_notify_cq(c->cq, 0);
+					}
+					break;
 
-		if (i->ud && core == i->ud->core) {
-			start_channel(i->ud);
-			ibv_req_notify_cq(i->ud->cq, 0);
-		}
+				case channel_raw:
+				case channel_ibraw:
+					start_channel(c);
+					ibv_req_notify_cq(c->cq, 0);
+					setup_flow(c);
+					break;
 
-		if (i->qp1 && core == i->qp1->core) {
-			start_channel(i->qp1);
-			ibv_req_notify_cq(i->qp1->cq, 0);
-		}
-	}
-
+				case channel_ud:
+				case channel_qp1:
+ 					if (core == c->core) {
+						start_channel(c);
+						ibv_req_notify_cq(c->cq, 0);
+					}
+					break;
+				default:
+					break;
+			}
+ 		}
 }
 
 static int stat_interval = 10;		/* Interval for statistics */

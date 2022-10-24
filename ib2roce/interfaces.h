@@ -64,16 +64,31 @@ extern int irate;	/* Software delay per message for Infiniband */
 extern int max_rburst;	/* Dont delay until # of packets for ROCE */
 extern int max_iburst;	/* Dont delay until # of packets for Infiniband */
 
+#define MAX_CHANNELS_PER_INTERFACE 10
+
+struct channel_list {
+	struct rdma_channel *c[MAX_CHANNELS_PER_INTERFACE];
+};
+
+bool is_a_channel_of(struct rdma_channel *, struct channel_list *);
+
+/* Iterators for channel array */
+
+/* Iterator is a pointer to pointer to the object */
+#define channelp_foreach(_channel, _channel_list)					\
+	for(struct rdma_channel **_channel = ((struct rdma_channel **)&((_channel_list)->c));				\
+		_channel < ((struct rdma_channel **)&((_channel_list)->c)) + MAX_CHANNELS_PER_INTERFACE; _channel++)
+
+/* Iterator that is a pointer to the object */
+#define channel_foreach(_channel, _channel_list)						\
+	channelp_foreach(_ch2, _channel_list) for(struct rdma_channel *_channel = *_ch2; _channel; _channel = NULL)
 
 struct i2r_interface {
 	/* Not changed when multithreading */
 	struct ibv_context *context;		/* Not for RDMA CM use */
-	struct rdma_event_channel *rdma_events;
-	struct rdma_channel *multicast;
-	struct rdma_channel *qp1;		/* Channel for QP1 communications but not QP1 (userspace) */
-	struct rdma_channel *ud;		/* Regular data */
-	struct rdma_channel *raw;
 	struct ibv_comp_channel *comp_events;
+	struct rdma_event_channel *rdma_events;
+	struct channel_list channels;
 	struct ibv_cq *cq;
 	struct ibv_pd *pd;
 	struct ibv_mr *mr;
@@ -144,6 +159,10 @@ int check_rdma_device(enum interfaces i, int port, char *name,
 int find_rdma_devices(void);
 /* Find the interface that allows us to reach a certain IP address */
 struct i2r_interface *find_interface(struct sockaddr_in *sin);
+struct rdma_channel *find_channel(struct i2r_interface *i, enum channel_type type);
+
+void check_joins(struct channel_list *infiniband, struct channel_list *roce);
+void next_join_complete(void);
 
 void check_out_of_buffer(void *);
 
@@ -156,26 +175,5 @@ void shutdown_ib(void);
 void shutdown_roce(void);
 
 unsigned show_interfaces(char *b);
-
-static inline struct rdma_channel *find_channel(struct i2r_interface *i, enum channel_type type)
-{
-	switch (type) {
-		case channel_rdmacm:
-			return i->multicast;
-
-		case channel_ud:
-			return i->ud;
-
-		case channel_qp1:
-			return i->qp1;
-
-		case channel_raw:
-		case channel_ibraw:
-			return i->raw;
-
-		default:
-			abort();
-	}
-}
 
 #endif

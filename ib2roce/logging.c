@@ -154,6 +154,27 @@ char *hexbytes(uint8_t *q, unsigned len, char separator)
 	return __hexbytes(b, q, len, separator);
 }
 
+static bool sum_stats(unsigned *stats, struct i2r_interface  *i, enum channel_type type)
+{
+	bool r = false;
+
+	memset(stats, 0, nr_stats * sizeof(unsigned));
+
+	channel_foreach(c, &i->channels) {
+		int j;
+
+		if (type != nr_channel_types && c->type != type)
+			continue;
+
+		for(j = 0; j < nr_stats; j++)
+			if (c->stats[j]) {
+				stats[j] += c->stats[j];
+				r = true;
+			}
+	}
+	return r;
+}
+
 void brief_status(FILE *out)
 {
 	char buf[4000];
@@ -178,31 +199,36 @@ void brief_status(FILE *out)
 	}
 
 	n = 0;
-	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES;i++)
-      	   if (i->context)	{
+	interface_foreach(i) {
+		unsigned stats[nr_stats];
+
+		sum_stats(stats, i, channel_rdmacm);
+
 		n+= sprintf(counts + n, "%s(MC %d/%d",
 			i->text,
-			i->multicast->stats[packets_received],
-			i->multicast->stats[packets_sent]);
+			stats[packets_received],
+			stats[packets_sent]);
 
 		if (i->mc_rate_limited)
 			n+= sprintf(counts + n, " R%d", i->mc_rate_limited);
 
-		if (pgm_mode != pgm_none && (i->multicast->stats[pgm_spm] || i->multicast->stats[pgm_odata]))
+		if (pgm_mode != pgm_none && (stats[pgm_spm] || stats[pgm_odata]))
 			n+= sprintf(counts + n, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
 				i->nr_tsi,
-				i->multicast->stats[pgm_spm],
-				i->multicast->stats[pgm_odata],
-				i->multicast->stats[pgm_rdata],
-				i->multicast->stats[pgm_nak]);
-#ifdef UNICAST
-		if (i->ud && i->ud->stats[packets_received])
-			n+= sprintf(counts + n, ", UD %d/%d",
-				i->ud->stats[packets_received],
-				i->ud->stats[packets_sent]);
-		if (i->raw && i->raw->stats[packets_received])
-			n+= sprintf(counts + n, ", RAW %d", i->raw->stats[packets_received]);
-#endif
+				stats[pgm_spm],
+				stats[pgm_odata],
+				stats[pgm_rdata],
+				stats[pgm_nak]);
+		if (sum_stats(stats, i, channel_ud) && stats[packets_received]) {
+				n+= sprintf(counts + n, ", UD %d/%d",
+					stats[packets_received],
+					stats[packets_sent]);
+		}
+
+		if (sum_stats(stats, i, channel_raw) && stats[packets_received]) {
+			n+= sprintf(counts + n, ", RAW %d", stats[packets_received]);
+		}
+
 		n+= sprintf(counts + n, ") ");
 	}
 
