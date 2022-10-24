@@ -121,7 +121,7 @@ void show_core_config(void)
 	}
 }
 
-struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type)
+struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type, const char *user_suffix)
 {
 	struct rdma_channel *c;
 	struct channel_info *ci;
@@ -157,10 +157,14 @@ retry:
 	c->type = type;
 	c->receive = ci->receive;
 
-	p = malloc(strlen(i->text) + strlen(ci->suffix) + 2);
+	p = malloc(strlen(i->text) + strlen(ci->suffix) + 2 + (user_suffix ? 1 + strlen(user_suffix) : 0));
 	strcpy(p, i->text);
 	strcat(p, "-");
 	strcat(p, ci->suffix);
+	if (user_suffix) {
+		strcat(p, "-");
+		strcat(p, user_suffix);
+	}
 	c->text = p;
 
 	c->nr_cq = ci->nr_cq;

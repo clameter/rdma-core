@@ -546,7 +546,7 @@ static void resolve_start(struct rdma_unicast *ru)
 		sin->sin_family = AF_INET;
 		sin->sin_addr = i->if_addr.sin_addr;
 		sin->sin_port = 0;
-		ru->c = new_rdma_channel(i, channel_incoming);
+		ru->c = new_rdma_channel(i, channel_incoming, "in");
 		ru->c->ru = ru;
 	}
 

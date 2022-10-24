@@ -500,25 +500,25 @@ void setup_interface(enum interfaces in)
 	if (!i->mr)
 		panic("ibv_reg_mr failed for %s:%s.\n", i->text, errname());
 
-	i->multicast = new_rdma_channel(i, channel_rdmacm);
+	i->multicast = new_rdma_channel(i, channel_rdmacm, NULL);
 
 	if (!i->multicast)
 		abort();
 
 	if (unicast) {
 
-		i->ud = new_rdma_channel(i, channel_ud);
-		i->qp1 = new_rdma_channel(i, channel_qp1);
+		i->ud = new_rdma_channel(i, channel_ud, NULL);
+		i->qp1 = new_rdma_channel(i, channel_qp1, NULL);
 
 		if (raw) {
 			if (i == i2r + INFINIBAND) {
-				i->raw = new_rdma_channel(i, channel_ibraw);
+				i->raw = new_rdma_channel(i, channel_ibraw, NULL);
 				/* Sadly fallback is not working here */
 			} else {
 				if (packet_socket)
-					i->raw = new_rdma_channel(i, channel_packet);
+					i->raw = new_rdma_channel(i, channel_packet, NULL);
 				else
-					i->raw = new_rdma_channel(i, channel_raw);
+					i->raw = new_rdma_channel(i, channel_raw, NULL);
 			}
 		}
 	}

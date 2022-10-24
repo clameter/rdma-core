@@ -150,7 +150,7 @@ void channel_stat(FILE *out, struct rdma_channel *c);
 void start_channel(struct rdma_channel *c);
 void stop_channel(struct rdma_channel *c);
 
-struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type);
+struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type, const char *suffix);
 
 void arm_channels(struct core_info *core);
 void arm_channel(struct rdma_channel *);
