@@ -129,7 +129,7 @@ struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type
 	char *p;
 	short core;
 	int channel_nr;
-	unsigned rdma_channel_size = sizeof(struct rdma_channel) + i->device_attr.max_mcast_qp_attach * sizeof(struct mc *);
+	unsigned rdma_channel_size = sizeof(struct rdma_channel) + i->mc_per_qp * sizeof(struct mc *);
 
 retry:
 	ci = channel_infos + type;
@@ -715,7 +715,7 @@ int channel_stats(char *b, struct rdma_channel *c, const char *interface, const 
 	int n = 0;
 	int j;
 
-	n += sprintf(b + n, "\nChannel %s(%s):\n", interface, type);
+	n += sprintf(b + n, "\nChannel %s:\n", type);
 
 	for(j =0; j < nr_stats; j++)
 		if (c->stats[j]) {

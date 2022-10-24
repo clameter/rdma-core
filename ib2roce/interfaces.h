@@ -102,6 +102,7 @@ struct i2r_interface {
 	struct sockaddr_in if_addr;
 	struct sockaddr_in if_netmask;
 	unsigned ifindex;
+	unsigned mc_per_qp;			/* How many MCs per QP */
 	unsigned numa_node;			/* NUMA Affinity of the interface */
 	unsigned gid_index;
 	union ibv_gid gid;

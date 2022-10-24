@@ -367,7 +367,6 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 {
 	int ret;
 	int i;
-	unsigned max_mc_per_qp = c->i->device_attr.max_mcast_qp_attach;
 	struct rdma_cm_join_mc_attr_ex mc_attr = {
 		.comp_mask = RDMA_CM_JOIN_MC_ATTR_ADDRESS | RDMA_CM_JOIN_MC_ATTR_JOIN_FLAGS,
 		.join_flags = sendonly ? RDMA_MC_JOIN_FLAG_SENDONLY_FULLMEMBER
@@ -376,12 +375,12 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 	};
 
 	/* Find first free slot */
-	for(i = 0; i < max_mc_per_qp; i++)
+	for(i = 0; i < c->i->mc_per_qp; i++)
 		if (!c->mc[i])
 			break;
 
-	if (i == max_mc_per_qp) {
-		logg(LOG_CRIT, "Can only join %u multicast groups on rdma_channel %s\n", max_mc_per_qp, c->text);
+	if (i == c->i->mc_per_qp) {
+		logg(LOG_CRIT, "Can only join %u multicast groups on rdma_channel %s\n", c->i->mc_per_qp, c->text);
 		return 1;
 	}
 
@@ -409,14 +408,13 @@ static int _leave_mc(struct in_addr addr,struct sockaddr *si, struct rdma_channe
 {
 	int ret;
 	int i;
-	unsigned max_mc_per_qp = c->i->device_attr.max_mcast_qp_attach;
 
-	for(i = 0; i < max_mc_per_qp; i++) {
+	for(i = 0; i < c->i->mc_per_qp; i++) {
 		if (c->mc[i] == m) {
 			break;
 		}
 	}
-	if (i == max_mc_per_qp)
+	if (i == c->i->mc_per_qp)
 		panic("Multicast structure not found in _leave_mc");
 
 	ret = rdma_leave_multicast(c->id, si);
@@ -500,7 +498,7 @@ static void send_joins(void)
 					case MC_OFF:
 						/* Find rdma channel with available multicast slots  */
 						channel_foreach(c, gjs.channels[in]) {
-							if (c->type == channel_rdmacm && c->nr_mcs < c->i->device_attr.max_mcast_qp_attach) {
+							if (c->type == channel_rdmacm && c->nr_mcs < c->i->mc_per_qp) {
 								if (_join_mc(m->addr, mi->sa, port, tos, c, mi->sendonly, m) == 0) {
 									mi->status = MC_JOINING;
 									mi->channel = c;

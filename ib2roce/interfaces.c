@@ -80,9 +80,10 @@ int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 
 bool bridging = true;		/* Allow briding */
 bool unicast = false;		/* Bridge unicast packets */
-static bool raw = false;		/* Use raw channels */
+static bool raw = false;	/* Use raw channels */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 
+static int mc_per_qp = 0;	/* 0 = Unlimited */
 
 struct i2r_interface i2r[NR_INTERFACES];
 
@@ -512,11 +513,19 @@ void setup_interface(enum interfaces in)
 	if (!i->mr)
 		panic("ibv_reg_mr failed for %s:%s.\n", i->text, errname());
 
-	/* Calculate number of required RDMA channels for multicast */
-	channels = 1 + nr_mc / i->device_attr.max_mcast_qp_attach;
+	i->mc_per_qp = i->device_attr.max_mcast_qp_attach;
+	if (mc_per_qp && mc_per_qp < i->mc_per_qp)
+		i->mc_per_qp = mc_per_qp;
 
-	if (channels > 0)
-		logg(LOG_INFO, "Multi RDMA group mode: %u multicast rdma channels to support %u multicast groups\n", channels, nr_mc);
+	/* Calculate number of required RDMA channels for multicast */
+	channels = 1 + nr_mc / i->mc_per_qp;
+
+	if (channels > 1)
+		logg(LOG_INFO, "Multi RDMA group mode: %u multicast groups on %d channels. Maximum %d multicast groups per qp\n", nr_mc, channels, i->mc_per_qp);
+
+
+	if (channels > MAX_CHANNELS_PER_INTERFACE)
+		panic("Too many channels for interface %s\n", i->text);
 
 	for (int j = 0; j < channels; j++) {
 		char buf[5];
@@ -1115,7 +1124,7 @@ unsigned show_interfaces(char *b)
 
 	interface_foreach(i)
 		channel_foreach(c, &i->channels)
-			n += channel_stats(b + n, c, i->text, c->type == channel_rdmacm ? "Multicast" : c->text);
+			n += channel_stats(b + n, c, i->text, c->text);
 
 	return n;
 }
@@ -1259,5 +1268,6 @@ static void interfaces_init(void)
 		"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel");
 	register_enable("unicast", false, &unicast, NULL, "on", "off",	NULL,
 		"Processing of unicast packets with QP1 handling of SIDR REQ/REP");
+	register_enable("mcqp", true, NULL, &mc_per_qp, "0", "10", NULL, "Max # of MCs per QP");
 }
 
