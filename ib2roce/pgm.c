@@ -495,7 +495,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 static void tsi_cmd(FILE *out, char *parameters)
 {
-	for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++) {
+	interface_foreach(i) {
 		fprintf(out, "%s: TSIs=%d\n", i->text, i->nr_tsi);
 		/* Retrieve TSI streams */
 		struct pgm_stream *t[10];

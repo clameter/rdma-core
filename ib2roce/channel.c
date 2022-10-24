@@ -593,7 +593,7 @@ void stop_channel(struct rdma_channel *c)
 
 void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *))
 {
-	for(struct i2r_interface *i = i2r; i <i2r + NR_INTERFACES; i++) if (i->context) {
+	interface_foreach(i) {
 		if (i->multicast)
 			func(out, i->multicast);
 		if (i->ud)
@@ -613,11 +613,7 @@ void arm_channel(struct rdma_channel *c)
 
 void arm_channels(struct core_info *core)
 {
-	struct i2r_interface *i;
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-	   if (i->context) {
-
+	interface_foreach(i) {
 		/* And request notifications if something happens */
 		if (i->multicast && core == i->multicast->core) {
 			ibv_req_notify_cq(i->multicast->cq, 0);

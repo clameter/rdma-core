@@ -864,9 +864,7 @@ void post_receive(struct rdma_channel *c)
 
 void post_receive_buffers(void)
 {
-	struct i2r_interface *i;
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
+	interface_foreach(i) {
 		post_receive(i->multicast);
 		post_receive(i->raw);
 		post_receive(i->qp1);
@@ -1072,10 +1070,7 @@ void handle_receive_packet(void *private)
 /* A mini router follows */
 struct i2r_interface *find_interface(struct sockaddr_in *sin)
 {
-	struct i2r_interface *i;
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-	    if (i->context) {
+	interface_foreach(i) {
 		unsigned netmask = i->if_netmask.sin_addr.s_addr;
 
 		if ((sin->sin_addr.s_addr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask))
@@ -1087,11 +1082,9 @@ struct i2r_interface *find_interface(struct sockaddr_in *sin)
 
 unsigned show_interfaces(char *b)
 {
-	struct i2r_interface *i;
 	int n = 0;
 
-
-	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
+	interface_foreach(i) {
 
 		if (i->multicast)
 			n += channel_stats(b + n, i->multicast, i->text, "Multicast");
@@ -1117,8 +1110,8 @@ static void interfaces_cmd(FILE *out,char *parameters)
 	char b[5000];
 
 	if (parameters) {
-		for(struct i2r_interface *i = i2r; i < i2r + NR_INTERFACES; i++)
-			if (i->context && strncasecmp(i->text, parameters, strlen(parameters)) == 0) {
+		interface_foreach(i)
+			if (strncasecmp(i->text, parameters, strlen(parameters)) == 0) {
 				fprintf(out, "Interface %s\n", i->text);
 				fprintf(out, "-------------------------------------\n");
 				fprintf(out, "RDMA device=%s Port=%d MTU=%d\n", i->rdma_name, i->port, i->mtu);

@@ -116,6 +116,10 @@ struct i2r_interface {
 
 extern struct i2r_interface i2r[];
 
+/* Interator for the Interfaces */
+#define interface_foreach(_interface)								\
+	for(struct i2r_interface *_interface = i2r; _interface < i2r + NR_INTERFACES;_interface++) \
+	if (_interface->context)
 
 /* Event handlers */
 void handle_comp_event(void *private);

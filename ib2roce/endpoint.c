@@ -459,11 +459,10 @@ void learn_source_address(struct buf *buf)
 
 unsigned show_endpoints(char *b)
 {
-	struct i2r_interface *i;
 	int n = 0;
 
-	for(i = i2r; i < i2r + NR_INTERFACES; i++)
-		if (i->context && i->ep) {
+	interface_foreach(i)
+		if (i->ep) {
 		struct endpoint *e[20];
 		unsigned nr;
 		unsigned offset = 0;
