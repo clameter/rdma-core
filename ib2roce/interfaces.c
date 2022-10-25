@@ -843,20 +843,97 @@ void handle_async_event(void *private)
 	struct i2r_interface *i = private;
 	struct ibv_async_event event;
 
-	if (!ibv_get_async_event(i->context, &event))
-		logg(LOG_ALERT, "Async event retrieval failed on %s.\n", i->text);
-	else
-		logg(LOG_ALERT, "Async RDMA EVENT %d on %s\n", event.event_type, i->text);
+	while (!ibv_get_async_event(i->context, &event)) {
+		switch (event.event_type) {
+			case IBV_EVENT_QP_FATAL:
+				logg(LOG_INFO, "Async RDMA EVENT: QP transitioned to error state on %s\n", i->text);
+				break;
 
-	/*
-	 * Regardless of what the cause is the first approach here
-	 * is to simply terminate the program.
-	 * We can make exceptions later.
-	 */
+			case IBV_EVENT_QP_REQ_ERR:
+				logg(LOG_INFO, "Async RDMA EVENT: QP Invalid Request on Work Queue on %s\n", i->text);
+				break;
 
-	terminate(0);
+			case IBV_EVENT_QP_ACCESS_ERR:
+				logg(LOG_INFO, "Async RDMA EVENT: QP Local Access Violation on %s\n", i->text);
+				break;
 
-        ibv_ack_async_event(&event);
+			case IBV_EVENT_COMM_EST:
+				logg(LOG_INFO, "Async RDMA EVENT: QP Communication Established on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_SQ_DRAINED:
+				logg(LOG_INFO, "Async RDMA EVENT: Send Queue Drained on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_PATH_MIG:
+				logg(LOG_INFO, "Async RDMA EVENT: Path Migration on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_PATH_MIG_ERR:
+				logg(LOG_INFO, "Async RDMA EVENT: Path Migration failed on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_QP_LAST_WQE_REACHED:
+				logg(LOG_INFO, "Async RDMA EVENT: SRQ Last WQE reched on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_CQ_ERR:
+				logg(LOG_INFO, "Async RDMA EVENT: CQ in Error state on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_SRQ_ERR:
+				logg(LOG_INFO, "Async RDMA EVENT: SRQ in error state on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_SRQ_LIMIT_REACHED:
+				logg(LOG_INFO, "Async RDMA EVENT: SRQ limit reached on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_PORT_ACTIVE:
+				logg(LOG_INFO, "Async RDMA EVENT: Link entered active state on %s\n", i->text);
+				break;
+
+			case IBV_EVENT_PORT_ERR:
+				logg(LOG_CRIT, "Async RDMA EVENT: Link entered error state on %s\n", i->text);\
+				terminate(0);
+				break;
+
+			case IBV_EVENT_LID_CHANGE:
+				logg(LOG_CRIT, "Async RDMA EVENT: LID Change on %s\n", i->text);
+				terminate(0);
+				break;
+
+			case IBV_EVENT_PKEY_CHANGE:
+				logg(LOG_CRIT, "Async RDMA EVENT: PKey change on %s\n", i->text);
+				terminate(0);
+				break;
+
+			case IBV_EVENT_SM_CHANGE:
+				logg(LOG_CRIT, "Async RDMA EVENT: SM change on %s\n", i->text);
+				terminate(0);
+				break;
+
+			case IBV_EVENT_CLIENT_REREGISTER:
+				logg(LOG_CRIT, "Async RDMA EVENT: Client REREG on %s\n", i->text);
+				terminate(0);
+				break;
+
+			case IBV_EVENT_GID_CHANGE:
+				logg(LOG_CRIT, "Async RDMA EVENT: GID Change on %s\n", i->text);
+				terminate(0);
+				break;
+
+			case IBV_EVENT_DEVICE_FATAL:
+				logg(LOG_CRIT, "Async RDMA EVENT: NIC in fatal state on %s\n", i->text);
+				terminate(0);
+				break;
+
+			default:
+				logg(LOG_INFO, "Unknown Async RDMA EVENT %d on %s\n", event.event_type, i->text);
+				break;
+		}
+		ibv_ack_async_event(&event);
+	}
 }
 
 /*
