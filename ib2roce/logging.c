@@ -47,6 +47,7 @@
 #include <sys/stat.h>
 #include <syslog.h>
 #include <execinfo.h>
+#include <systemd/sd-journal.h>
 
 #include "sched.h"
 #include "ring.h"
@@ -58,6 +59,7 @@
 
 int loglevel = LOG_INFO;
 bool background;
+bool systemd;
 
 static void __logg(int prio, const char *fmt, va_list valist)
 {
@@ -69,9 +71,13 @@ static void __logg(int prio, const char *fmt, va_list valist)
 		n = vsnprintf(b + 1, 149, fmt, valist);
 		ring_put(&current->ring, b, n);
 
-	} else if (background)
-		vsyslog(prio, fmt, valist);
-	else
+	} else if (background) {
+		if (systemd) {
+			sd_journal_printv(prio, fmt, valist);
+		} else
+			vsyslog(prio, fmt, valist);
+
+	} else
 		vprintf(fmt, valist);
 }
 
@@ -301,6 +307,11 @@ static void statuscmd(FILE *out, char *parameters) {
 	brief_status(out);
 }
 
+static void systemd_set(char *optarg)
+{
+	systemd = true;
+}
+
 __attribute__((constructor))
 static void logging_init(void)
 {
@@ -309,6 +320,6 @@ static void logging_init(void)
 	register_enable("loglevel", true, NULL, &loglevel, "5","3", NULL,
 		"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)");
 	register_option("verbose", no_argument, 'v', verbose_set, NULL, "Increase logging detail");
+	register_option("systemd", no_argument, 's', systemd_set, NULL, "Operate from systemd");
 }
-
 

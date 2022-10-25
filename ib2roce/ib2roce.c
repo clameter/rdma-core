@@ -45,30 +45,13 @@
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <syslog.h>
 #include <fcntl.h>
 #include <ctype.h>
-#include <pthread.h>
-#include <stdatomic.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
-#include <netdb.h>
-#include <getopt.h>
-#include <rdma/rdma_cma.h>
-#include <poll.h>
-#include <sys/mman.h>
 #include <numa.h>
-#include <infiniband/mad.h>
-#include <linux/if_arp.h>
+#include <systemd/sd-daemon.h>
 
-
-#include <linux/rtnetlink.h>
-#include <net/ethernet.h>
-#include <linux/ip.h>
-#include <linux/udp.h>
-#include <infiniband/umad_cm.h>
-#include <infiniband/umad_str.h>
-#include <execinfo.h>
 #include "errno.h"
 #include "fifo.h"
 #include "ring.h"
@@ -85,7 +68,6 @@
 #include "endpoint.h"
 #include "unicast.h"
 #include "ibraw.h"
-#include "cma-hdr.h"
 
 /* Globals */
 
@@ -539,7 +521,6 @@ static void options_init(void)
 	setup_enable();
 }
 
-
 int main(int argc, char **argv)
 {
 	int ret = 0;
@@ -552,8 +533,10 @@ int main(int argc, char **argv)
 
 	} else {
 		background = true;
-		daemonize();
-		pid_open();
+		if (!systemd) {
+			daemonize();
+			pid_open();
+		}
 	}
 	concom_init();
 
@@ -597,8 +580,14 @@ int main(int argc, char **argv)
 	arm_channels(NULL);
 	setup_timed_events();
 
-	if (event_loop() <0)
+	if (systemd)
+		sd_notify(0, "READY=1");
+
+	if (event_loop() < 0)
 		logg(LOG_ERR, "Event Loop failed with %s\n", errname());
+
+	if (systemd)
+		sd_notify(0, "STOPPING=1");
 
 	beacon_shutdown();
 	stop_cores();

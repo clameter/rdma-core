@@ -51,6 +51,7 @@ __attribute__ ((format (printf, 1, 2)))
 void panic(const char *fmt, ...);
 
 extern bool background;
+extern bool systemd;
 
 char *__hexbytes(char *b, uint8_t *q, unsigned len, char separator);
 
