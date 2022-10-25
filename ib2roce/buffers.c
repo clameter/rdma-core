@@ -53,7 +53,7 @@
  * Manage freelist using simple single linked list with the pointer
  * to the next free element at the beginning of the free buffer
  */
-int nr_buffers = 100000;
+int nr_buffers = 200000;
 static bool huge = false;
 
 struct buf *buffers;
