@@ -146,8 +146,9 @@ int get_timer_list(char *buf, char separator)
 {
 	int n = 0;
 
+	now = timestamp();
 	for(struct timed_event *z = next_event; z; z = z->next)
-		n += sprintf(buf + n, "%ldms%c", (z->time - timestamp()) / ONE_MILLISECOND, separator);
+		n += sprintf(buf + n, "%ldms%c", z->time > now ? (z->time - now) / ONE_MILLISECOND : 0,  separator);
 
 	return n;
 }
