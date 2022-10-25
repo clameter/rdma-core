@@ -82,7 +82,7 @@ static bool terminated = false;
 /*
  * Logic to support building a pollfd table for the event loop
  */
-#define MAX_POLL_ITEMS 20
+#define MAX_POLL_ITEMS 50
 
 unsigned poll_items = 0;
 
@@ -95,7 +95,7 @@ void register_callback(event_callback *callback, int fd, void *private)
 	struct pollfd e = { fd, POLLIN, 0};
 
 	if (poll_items == MAX_POLL_ITEMS)
-		abort();
+		panic("Too many poll callback items. Max=%d\n", MAX_POLL_ITEMS);
 
 	poll_callback[poll_items] = callback;
 	pfd[poll_items] = e;

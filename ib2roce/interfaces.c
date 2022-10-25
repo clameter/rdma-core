@@ -521,11 +521,11 @@ void setup_interface(enum interfaces in)
 	channels = 1 + nr_mc / i->mc_per_qp;
 
 	if (channels > 1)
-		logg(LOG_INFO, "Multi RDMA group mode: %u multicast groups on %d channels. Maximum %d multicast groups per qp\n", nr_mc, channels, i->mc_per_qp);
+		logg(LOG_INFO, "Multi RDMA group mode %s: %u multicast groups on %d channels. Maximum %d multicast groups per qp\n", i->text, nr_mc, channels, i->mc_per_qp);
 
 
 	if (channels > MAX_CHANNELS_PER_INTERFACE)
-		panic("Too many channels for interface %s\n", i->text);
+		panic("Too many channels for interface %s. Maximum supported = %u\n", i->text, MAX_CHANNELS_PER_INTERFACE);
 
 	for (int j = 0; j < channels; j++) {
 		char buf[5];
