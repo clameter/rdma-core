@@ -236,7 +236,7 @@ int event_loop(void)
 			unsigned t;
 
 			for(t = 0; t < poll_items; t++)
-				if (pfd[t].revents & POLLIN && !terminated)
+				if ((pfd[t].revents & POLLIN) && !terminated)
 					poll_callback[t](poll_private[t]);
 		}
 	}
