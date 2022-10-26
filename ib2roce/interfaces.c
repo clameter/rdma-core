@@ -949,12 +949,6 @@ void handle_async_event(void *private)
 				break;
 		}
 		ibv_ack_async_event(&event);
-		if (terminated) {
-			/* No further ASYNC events */
-			unregister_callback(i->context->async_fd);
-			logg(LOG_CRIT, "Disabled processing of future async events on %s\n", i->text);
-			return;
-		}
 	}
 }
 
