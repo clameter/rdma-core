@@ -377,6 +377,7 @@ static void beacon_send(void *private)
 			}
 
 		} else { /* Unicast */
+#ifdef UNICAST
 			struct i2r_interface *i = find_interface(beacon_sin);
 
 			if (!i) {
@@ -391,6 +392,9 @@ static void beacon_send(void *private)
 			reset_flags(buf);
 			buf->cur = buf->raw;
 			send_buf_to(i, buf, beacon_sin);
+#else
+			panic("Unicast Beacons not enabled\n");
+#endif
 
 		}
 		check_remote_bridges();

@@ -37,10 +37,19 @@
  *
  */
 
+#ifdef BEACON
 
 void run_bridge_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *));
 
 void beacon_setup(void);
 void beacon_shutdown(void);
+
+#else
+
+static inline void beacon_setup(void) {};
+static inline void beacon_shutdown(void) {};
+
+#endif
+
 #endif
 

@@ -15,7 +15,6 @@ rdma_executable(ib2roce
   multicast.c
   unicast.c
   interfaces.c
-  beacon.c
   cli.c
   endpoint.c
   pgm.c
