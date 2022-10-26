@@ -12,7 +12,7 @@ After=rdma-hw.target
 
 [Service]
 Type=notify
-ExecStart=@CMAKE_INSTALL_FULL_SBINDIR@/ibacm --systemd
+ExecStart=@CMAKE_INSTALL_FULL_SBINDIR@/ib2roce --systemd
 ProtectSystem=full
 ProtectHome=true
 ProtectHostname=true
