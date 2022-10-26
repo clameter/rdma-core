@@ -937,7 +937,6 @@ void handle_async_event(void *private)
 
 			case IBV_EVENT_GID_CHANGE:
 				logg(LOG_CRIT, "Async RDMA EVENT: GID Change on %s\n", i->text);
-				terminate(0);
 				break;
 
 			case IBV_EVENT_DEVICE_FATAL:
