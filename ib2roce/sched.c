@@ -77,7 +77,7 @@ thread_local uint64_t now;
 thread_local struct core_info *current = NULL;
 
 int cores = 0;
-static bool terminated = false;
+bool terminated = false;
 
 /*
  * Logic to support building a pollfd table for the event loop

@@ -579,15 +579,18 @@ void setup_interface(enum interfaces in)
 	);
 }
 
+extern int terminated;
+
 void shutdown_ib(void)
 {
 	if (!i2r[INFINIBAND].context)
 		return;
 
-	channel_foreach(c, &i2r[INFINIBAND].channels) {
-		if (c->type == channel_rdmacm)
-			leave_mc(INFINIBAND, c);
-	}
+	if (!terminated)
+		channel_foreach(c, &i2r[INFINIBAND].channels) {
+			if (c->type == channel_rdmacm)
+				leave_mc(INFINIBAND, c);
+		}
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + INFINIBAND);
@@ -598,10 +601,11 @@ void shutdown_roce(void)
 	if (!i2r[ROCE].context)
 		return;
 
-	channel_foreach(c, &i2r[ROCE].channels) {
-		if (c->type == channel_rdmacm)
-			leave_mc(ROCE, c);
-	}
+	if (!terminated)
+		channel_foreach(c, &i2r[ROCE].channels) {
+			if (c->type == channel_rdmacm)
+				leave_mc(ROCE, c);
+		}
 
 	/* Shutdown Interface */
 	qp_destroy(i2r + ROCE);
