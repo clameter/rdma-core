@@ -131,6 +131,4 @@ const char *mgid_text(struct mc *m);
 void mgids_out(void);
 bool mgid_check(struct mc *m, unsigned short signature);
 
-unsigned show_multicast(char *b);
-
 #endif

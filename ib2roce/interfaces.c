@@ -1212,7 +1212,7 @@ struct i2r_interface *find_interface(struct sockaddr_in *sin)
 	return NULL;
 }
 
-unsigned show_interfaces(char *b)
+static unsigned show_interfaces(char *b)
 {
 	int n = 0;
 

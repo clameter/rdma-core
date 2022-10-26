@@ -123,7 +123,5 @@ void add_forward(struct endpoint *source, uint32_t source_qp, struct endpoint *d
 struct forward *find_forward(struct endpoint *source, struct endpoint *dest, uint32_t source_qp);
 unsigned int remove_forwards(struct endpoint *source);
 
-unsigned show_endpoints(char *);
-
 #endif
 

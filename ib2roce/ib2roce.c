@@ -530,11 +530,6 @@ int main(int argc, char **argv)
 	if (cores)
 		show_core_config();
 
-#ifdef UNICAST
-	if (background)
-		status_fd = open("ib2roce-status", O_CREAT | O_RDWR | O_TRUNC,  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-#endif
-
 	beacon_setup();
 
 
@@ -557,11 +552,6 @@ int main(int argc, char **argv)
 
 	beacon_shutdown();
 	stop_cores();
-
-#ifdef UNICAST
-	if (background)
-		close(status_fd);
-#endif
 
 	shutdown_roce();
 	shutdown_ib();

@@ -175,8 +175,6 @@ void setup_interface(enum interfaces);
 void shutdown_ib(void);
 void shutdown_roce(void);
 
-unsigned show_interfaces(char *b);
-
 static inline bool __valid_addr(struct i2r_interface *i, __be32 saddr)
 {
 	unsigned netmask = i->if_netmask.sin_addr.s_addr;
