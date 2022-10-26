@@ -860,11 +860,6 @@ void handle_async_event(void *private)
 	struct i2r_interface *i = private;
 	struct ibv_async_event event;
 
-	if (terminated) {
-		ibv_ack_async_event(&event);
-		return;
-	}
-
 	while (!ibv_get_async_event(i->context, &event)) {
 		switch (event.event_type) {
 			case IBV_EVENT_QP_FATAL:
@@ -954,6 +949,11 @@ void handle_async_event(void *private)
 				break;
 		}
 		ibv_ack_async_event(&event);
+		if (terminated) {
+			/* No further ASYNC events */
+			unregister_callback(i->context->async_fd);
+			return;
+		}
 	}
 }
 
