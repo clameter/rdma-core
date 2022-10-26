@@ -230,7 +230,7 @@ int event_loop(void)
 	 	events = poll(pfd, poll_items, (timeout + ONE_MILLISECOND/2) / ONE_MILLISECOND);
 
 		if (events < 0)
-			return - 1;
+			return -1;
 
 		if (events > 0) {
 			unsigned t;

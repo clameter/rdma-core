@@ -104,6 +104,7 @@ struct rdma_channel {
 	enum channel_type type;
 	struct fifo send_queue;		/* Packets that were deferred for write */
 	bool listening;			/* rdmacm Channel is listening for connections */
+	unsigned instance;		/* If multuple instances exist */
 	const char *text;
 	struct rdma_unicast *ru;	/* Only rdmacm */
 	struct rdma_cm_id *id;		/* Only rdmacm */
@@ -149,7 +150,7 @@ void channel_stat(FILE *out, struct rdma_channel *c);
 void start_channel(struct rdma_channel *c);
 void stop_channel(struct rdma_channel *c);
 
-struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type, const char *suffix);
+struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type, unsigned instance);
 
 void arm_channels(struct core_info *core);
 void arm_channel(struct rdma_channel *);

@@ -72,9 +72,14 @@ bool latency = false;
 /*
  * Determine the core to be used for a channel
  */
-static short core_lookup(struct i2r_interface *i,  enum channel_type type)
+static short core_lookup(struct i2r_interface *i,  enum channel_type type, int instance)
 {
 	short core = channel_infos[type].core;
+
+	if (instance) {
+		core += (instance - 1);
+		core %= cores;
+	}
 
 	if (!cores)
 		goto nocore;
@@ -120,7 +125,7 @@ void show_core_config(void)
 	}
 }
 
-struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type, const char *user_suffix)
+struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type, unsigned instance)
 {
 	struct rdma_channel *c;
 	struct channel_info *ci;
@@ -135,7 +140,7 @@ retry:
 	channel_nr = -1;
 	c = calloc(1, rdma_channel_size);
 
-	core = core_lookup(i, type);
+	core = core_lookup(i, type, instance);
 	if (core != NO_CORE) {
 		coi = core_infos + core;
 
@@ -155,15 +160,15 @@ retry:
 	c->i = i;
 	c->type = type;
 	c->receive = ci->receive;
+	c->instance = instance;
 
-	p = malloc(strlen(i->text) + strlen(ci->suffix) + 2 + (user_suffix ? 1 + strlen(user_suffix) : 0));
-	strcpy(p, i->text);
-	strcat(p, "-");
-	strcat(p, ci->suffix);
-	if (user_suffix) {
-		strcat(p, "-");
-		strcat(p, user_suffix);
-	}
+	p = malloc(strlen(i->text) + strlen(ci->suffix) + 2 + 4);
+
+	if (instance)
+		sprintf(p, "%s-%s(%d)", i->text, ci->suffix, instance);
+	else
+		sprintf(p, "%s-%s", i->text, ci->suffix);
+
 	c->text = p;
 
 	c->nr_cq = ci->nr_cq;

@@ -535,10 +535,7 @@ void setup_interface(enum interfaces in)
 		panic("Too many channels for interface %s. Maximum supported = %u\n", i->text, MAX_CHANNELS_PER_INTERFACE);
 
 	for (int j = 0; j < channels; j++) {
-		char buf[5];
-
-		snprintf(buf, sizeof(buf), "%d", j + 1);
-		i->channels.c[j] = multicast = new_rdma_channel(i, channel_rdmacm, buf);
+		i->channels.c[j] = multicast = new_rdma_channel(i, channel_rdmacm, j + 1);
 
 		if (!multicast)
 			panic("Cannot create %d rdma channels required for multicast\n", channels);
@@ -548,18 +545,18 @@ void setup_interface(enum interfaces in)
 #ifdef UNICAST
 	if (unicast) {
 
-		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, NULL);
-		i->channels.c[channels++] = qp1 = new_rdma_channel(i, channel_qp1, NULL);
+		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, 0);
+		i->channels.c[channels++] = qp1 = new_rdma_channel(i, channel_qp1, 0);
 
  		if (raw) {
  			if (i == i2r + INFINIBAND) {
-				i->channels.c[channels++] = raw_channel = new_rdma_channel(i, channel_ibraw, NULL);
+				i->channels.c[channels++] = raw_channel = new_rdma_channel(i, channel_ibraw, 0);
  				/* Sadly fallback is not working here */
  			} else {
  				if (packet_socket)
-					i->channels.c[channels++] = new_rdma_channel(i, channel_packet, NULL);
+					i->channels.c[channels++] = new_rdma_channel(i, channel_packet, 0);
  				else
-					i->channels.c[channels++] = new_rdma_channel(i, channel_raw, NULL);
+					i->channels.c[channels++] = new_rdma_channel(i, channel_raw, 0);
  			}
  		}
  	}
