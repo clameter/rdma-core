@@ -115,18 +115,6 @@ static inline bool unicast_lid(uint16_t lid) {
 	return lid > 0 && lid < 0xc000;
 }
 
-static inline bool __valid_addr(struct i2r_interface *i, __be32 saddr)
-{
-	unsigned netmask = i->if_netmask.sin_addr.s_addr;
-
-	return ((saddr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask));
-}
-
-static inline bool valid_addr(struct i2r_interface *i, struct in_addr addr)
-{
-	return __valid_addr(i, addr.s_addr);
-}
-
 void learn_source_address(struct buf *buf);
 struct endpoint *ip_to_ep(struct i2r_interface *i, struct in_addr addr);
 struct endpoint *buf_to_ep(struct buf *buf, struct in_addr addr);

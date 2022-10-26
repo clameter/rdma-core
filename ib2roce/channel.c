@@ -41,7 +41,6 @@
 #include <linux/if_arp.h>
 #include <infiniband/mad.h>
 
-
 #include "fifo.h"
 #include "interfaces.h"
 #include "channel.h"
@@ -327,6 +326,7 @@ static bool setup_multicast(struct rdma_channel *c)
 	return allocate_rdmacm_qp(c, true);
 }
 
+#ifdef UNICAST
 static bool setup_incoming(struct rdma_channel *c)
 {
 	return allocate_rdmacm_qp(c, true);
@@ -454,18 +454,22 @@ static bool setup_packet(struct rdma_channel *c)
 	register_callback(handle_receive_packet, fh, c);
 	return true;
 }
+#endif
 
 struct channel_info channel_infos[nr_channel_types] = {
 	{ "multicast",	0, 0,	10000,	1000,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
+#ifdef UNICAST
 	{ "ud",		1, 1,	500,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err },
 	{ "qp1",	2, 1,	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
 	{ "raw",	3, 1,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
 	{ "ibraw",	3, 1,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
 	{ "packet",	-1, -1,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
 	{ "incoming",	-1, -1,	100,	50,	0,		0,			setup_incoming,	NULL,		channel_err },
+#endif
 	{ "error",	-1, -1,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
 };
 
+#ifdef UNICAST
 static bool flow_steering = false;	/* Use flow steering to filter packets */
 
 static void setup_flow(struct rdma_channel *c)
@@ -518,7 +522,7 @@ static void setup_flow(struct rdma_channel *c)
 	if (!c->flow)
 		logg(LOG_ERR, "Failure to create flow on %s. Errno %s\n", c->text, errname());
 }
-
+#endif
 
 void channel_destroy(struct rdma_channel *c)
 {
@@ -632,6 +636,7 @@ void arm_channels(struct core_info *core)
 					}
 					break;
 
+#ifdef UNICAST
 				case channel_raw:
 				case channel_ibraw:
 					start_channel(c);
@@ -646,6 +651,7 @@ void arm_channels(struct core_info *core)
 						ibv_req_notify_cq(c->cq, 0);
 					}
 					break;
+#endif
 				default:
 					break;
 			}
@@ -753,12 +759,13 @@ static void channel_init(void)
 	register_concom("zap", true, 0, "Clear counters", zap_cmd );
 	register_concom("channels", true, 0, "Print information about communication channels", channels_cmd);
 
-	register_enable("flow", false, &flow_steering, NULL, "on", "off", NULL,
-		"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]");
-
 	register_enable("loopbackprev", false, &loopback_blocking, NULL, "on", "off", NULL,
 		"Multicast loopback prevention of the NIC");
 
+#ifdef UNICAST
+	register_enable("flow", false, &flow_steering, NULL, "on", "off", NULL,
+		"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]");
+#endif
 	register_option("port", required_argument, 'p', port_set,
 		       "<number>", "Set default port number to use if none is specified");
 

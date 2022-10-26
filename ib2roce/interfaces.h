@@ -177,4 +177,16 @@ void shutdown_roce(void);
 
 unsigned show_interfaces(char *b);
 
+static inline bool __valid_addr(struct i2r_interface *i, __be32 saddr)
+{
+	unsigned netmask = i->if_netmask.sin_addr.s_addr;
+
+	return ((saddr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask));
+}
+
+static inline bool valid_addr(struct i2r_interface *i, struct in_addr addr)
+{
+	return __valid_addr(i, addr.s_addr);
+}
+
 #endif

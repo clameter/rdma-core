@@ -161,7 +161,11 @@ void calculate_pps(void *private);
 
 void show_core_config(void);
 
-receive_callback receive_multicast, receive_main, receive_raw, receive_ud, receive_qp1;
+receive_callback receive_multicast;
+
+#ifdef UNICAST
+receive_callback receive_main, receive_raw, receive_ud, receive_qp1;
+#endif
 
 #endif
 

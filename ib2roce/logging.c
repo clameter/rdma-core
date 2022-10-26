@@ -55,7 +55,9 @@
 #include "logging.h"
 #include "cli.h"
 #include "pgm.h"
+#ifdef UNICAST
 #include "endpoint.h"
+#endif
 
 int loglevel = LOG_INFO;
 bool background;
@@ -243,8 +245,10 @@ void brief_status(FILE *out)
 	else
 		fprintf(out, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
 
+#ifdef UNICAST
 	list_endpoints(i2r + INFINIBAND);
 	list_endpoints(i2r + ROCE);
+#endif
 }
 
 /*

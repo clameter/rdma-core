@@ -68,7 +68,9 @@
 #include "multicast.h"
 #include "interfaces.h"
 #include "cli.h"
+#ifdef UNICAST
 #include "endpoint.h"
+#endif
 
 char *ib_name, *roce_name;
 
@@ -79,9 +81,11 @@ int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
 int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 
 bool bridging = true;		/* Allow briding */
+#ifdef UNICAST
 bool unicast = false;		/* Bridge unicast packets */
 static bool raw = false;	/* Use raw channels */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
+#endif
 
 static int mc_per_qp = 0;	/* 0 = Unlimited */
 
@@ -426,9 +430,11 @@ void setup_interface(enum interfaces in)
 	struct i2r_interface *i = i2r + in;
 	struct ibv_gid_entry *e;
 	struct rdma_channel *multicast= NULL;
+#ifdef UNICAST
 	struct rdma_channel *qp1 = NULL;
 	struct rdma_channel *raw_channel = NULL;
 	struct rdma_channel *ud = NULL;
+#endif
 	unsigned channels;
 
 	if (in == INFINIBAND)
@@ -482,13 +488,14 @@ void setup_interface(enum interfaces in)
 
 	numa_run_on_node(i->numa_node);
 
+#ifdef UNICAST
 	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
 	i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
 	if (i == i2r + INFINIBAND)
 		i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
 	else
 		i->ep = i->ip_to_ep;;
-
+#endif
 
 	/* Create RDMA elements that are interface wide */
 	i->rdma_events = rdma_create_event_channel();
@@ -538,6 +545,7 @@ void setup_interface(enum interfaces in)
 
 	}
 
+#ifdef UNICAST
 	if (unicast) {
 
 		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, NULL);
@@ -558,12 +566,15 @@ void setup_interface(enum interfaces in)
 
 	if (channels > MAX_CHANNELS_PER_INTERFACE)
 		panic("Too many channels for interface %s\n", i->text);
+#endif
 
  	check_out_of_buffer(i);
  	numa_run_on_node(-1);
 
 	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u"
+#ifdef UNICAST
 		"/%u/%u"
+#endif
 			" MTU=%u NUMA=%d.\n",
 		i->text,
 		i->rdma_name,
@@ -572,8 +583,10 @@ void setup_interface(enum interfaces in)
 		inet6_ntoa(e->gid.raw), i->gid_index,
 		inet_ntoa(i->if_addr.sin_addr), default_port,
 		multicast ? multicast->nr_cq: 0,
+#ifdef UNICAST
 		ud ? ud->nr_cq : 0,
 		raw_channel ? raw_channel->nr_cq : 0,
+#endif
 		i->mtu,
 		i->numa_node
 	);
@@ -1342,13 +1355,15 @@ static void interfaces_init(void)
 		"<if[:portnumber][/<netdev>]", "Infiniband device. Uses the first available if not specified");
 	register_option("roce", required_argument, 'r', roce_set,
 	       "<if[:portnumber]>","ROCE device. Uses the first available if not specified.");
+	register_enable("mcqp", true, NULL, &mc_per_qp, "0", "10", NULL, "Max # of MCs per QP");
 
+#ifdef UNICAST
 	register_enable("packetsocket", false, &packet_socket, NULL, "on", "off", NULL,
 		"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic");
 	register_enable("raw", false, &raw, NULL, "on", "off",	NULL,
 		"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel");
 	register_enable("unicast", false, &unicast, NULL, "on", "off",	NULL,
 		"Processing of unicast packets with QP1 handling of SIDR REQ/REP");
-	register_enable("mcqp", true, NULL, &mc_per_qp, "0", "10", NULL, "Max # of MCs per QP");
+#endif
 }
 

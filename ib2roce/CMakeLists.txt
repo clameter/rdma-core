@@ -13,10 +13,8 @@ rdma_executable(ib2roce
   locking.c
   buffers.c
   multicast.c
-  unicast.c
   interfaces.c
   cli.c
-  endpoint.c
   pgm.c
 )
 target_link_libraries(ib2roce LINK_PRIVATE

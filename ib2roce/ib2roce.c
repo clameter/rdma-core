@@ -65,9 +65,12 @@
 #include "beacon.h"
 #include "cli.h"
 #include "pgm.h"
+
+#ifdef UNICAST
 #include "endpoint.h"
 #include "unicast.h"
 #include "ibraw.h"
+#endif
 
 /* Globals */
 
@@ -155,7 +158,9 @@ void receive_multicast(struct buf *buf)
 	int ret;
 	const char *reason = NULL;
 
+#ifdef UNICAST
 	learn_source_address(buf);
+#endif
 
 	if (!buf->grh_valid) {
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",
@@ -315,59 +320,18 @@ invalid_packet:
 	st(c, packets_invalid);
 }
 
-static int status_fd;
-
-static void status_write(void *private)
-{
-	static char b[10000];
-	int n = 0;
-	int fd = status_fd;
-
-	if (update_requested) {
-
-		char name[40];
-		time_t t = time(NULL);
-		struct tm *tm;
-
-		tm = localtime(&t);
-
-		snprintf(name, 40, "ib2roce-%d%02d%02dT%02d%02d%02d",
-				tm->tm_year + 1900, tm->tm_mon +1, tm->tm_mday,
-				tm->tm_hour, tm->tm_min, tm->tm_sec);
-		fd = open(name, O_CREAT | O_RDWR,  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-
-	} else
-		lseek(fd, SEEK_SET, 0);
-
-	n+= show_multicast(n + b);
-	n+= show_interfaces(n + b);
-	n+= show_endpoints(n+b);
-	
-	n += sprintf(n + b, "\n\n\n\n\n\n\n\n");
-	if (write(fd, b, n) < 0)
-		logg(LOG_ERR, "Status write failed with %s\n", errname());
-
-	if (update_requested) {
-		close(fd);
-		update_requested = false;
-	}
-	add_event(timestamp() + seconds(60), status_write, NULL,  "Status File Write");
-}
-
 static void logging(void *private)
 {
 	brief_status(stdout);
-	add_event(timestamp() + seconds(10), logging, NULL, "Brief Status");
+	add_event(timestamp() + seconds(60), logging, NULL, "Brief Status");
 }
 
 static void setup_timed_events(void)
 {
 	now = timestamp();
 
-	if (background) {
-		add_event(now + seconds(30), status_write, NULL, "Write Status File");
+	if (background)
 		logging(NULL);
-	}
 
 	calculate_pps(NULL);
 
@@ -566,8 +530,10 @@ int main(int argc, char **argv)
 	if (cores)
 		show_core_config();
 
+#ifdef UNICAST
 	if (background)
 		status_fd = open("ib2roce-status", O_CREAT | O_RDWR | O_TRUNC,  S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+#endif
 
 	beacon_setup();
 
@@ -592,8 +558,10 @@ int main(int argc, char **argv)
 	beacon_shutdown();
 	stop_cores();
 
+#ifdef UNICAST
 	if (background)
 		close(status_fd);
+#endif
 
 	shutdown_roce();
 	shutdown_ib();
