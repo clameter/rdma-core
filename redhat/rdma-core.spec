@@ -228,6 +228,18 @@ a roce interface providing the ability to share traffic between
 both types of RDMA architectures. The primary focus is on multicast
 support.
 
+%package -n ib2roce
+Summary: InfiniBand to ROCE bridging tool
+Requires(post): systemd-units
+Requires(preun): systemd-units
+Requires(postun): systemd-units
+
+%description -n ib2roce
+The ib2roce daemon bridges between an infiniband interface and
+a roce interface providing the ability to share traffic between
+both types of RDMA architectures. The primary focus is on multicast
+support.
+
 %package -n iwpmd
 Summary: iWarp Port Mapper userspace daemon
 Requires(post): systemd-units
@@ -383,6 +395,13 @@ fi
 %systemd_preun ibacm.service
 %postun -n ibacm
 %systemd_postun_with_restart ibacm.service
+
+%post -n ib2roce
+%systemd_post ib2roce.service
+%preun -n ib2roce
+%systemd_preun ib2roce.service
+%postun -n ib2roce
+%systemd_postun_with_restart ib2roce.service
 
 %post -n ib2roce
 %systemd_post ib2roce.service
@@ -607,6 +626,15 @@ fi
 %dir %{_libdir}/ibacm
 %{_libdir}/ibacm/*
 %doc %{_docdir}/%{name}/ibacm.md
+
+%files -n ib2roce
+%{_sbindir}/ib2roce
+%{_mandir}/man1/ib2roce.*
+%{_mandir}/man7/ib2roce.*
+%{_unitdir}/ib2roce.service
+%dir %{_libdir}/ib2roce
+%{_libdir}/ib2roce/*
+%doc %{_docdir}/%{name}/ib2roce.md
 
 %files -n ib2roce
 %{_sbindir}/ib2roce

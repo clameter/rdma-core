@@ -1,0 +1,24 @@
+[Unit]
+Description=Infiniband to ROCE Bridge
+Documentation=man:ib2roce
+# Ensure required kernel modules are loaded before starting
+Wants=rdma-load-modules@rdma.service
+After=rdma-load-modules@rdma.service
+# Order ibacm startup after basic RDMA hw setup.
+After=rdma-hw.target
+
+# Implicitly after basic.target, note that ib2roce writes to /var/log directly
+# and thus needs writable filesystems setup.
+
+[Service]
+Type=notify
+ExecStart=@CMAKE_INSTALL_FULL_SBINDIR@/ibacm --systemd
+ProtectSystem=full
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+
+[Install]
+# Only want ib2roce if RDMA hardware is present (or the socket is touched)
+WantedBy=rdma-hw.target
+
