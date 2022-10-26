@@ -860,7 +860,7 @@ void handle_async_event(void *private)
 	struct i2r_interface *i = private;
 	struct ibv_async_event event;
 
-	while (!ibv_get_async_event(i->context, &event)) {
+	while (!terminated && !ibv_get_async_event(i->context, &event)) {
 		switch (event.event_type) {
 			case IBV_EVENT_QP_FATAL:
 				logg(LOG_INFO, "Async RDMA EVENT: QP transitioned to error state on %s\n", i->text);
