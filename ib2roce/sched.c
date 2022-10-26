@@ -115,8 +115,8 @@ void unregister_callback(int fd)
 		panic("Cannot find fd %d on unregister_callback", fd);
 
 	poll_items--;
-	while (i < poll_items - 1) {
-		pfd[i] = pfd[i+1];
+	while (i < poll_items) {
+		pfd[i] = pfd[i + 1];
 		i++;
 	}
 
