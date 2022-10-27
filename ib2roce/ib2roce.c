@@ -75,7 +75,6 @@
 /* Globals */
 
 static bool debug = false;		/* Stay in foreground, print more details */
-static bool update_requested = false;	/* Received SIGUSR1. Dump all MC data details */
 static bool testing = false;		/* Run some tests on startup */
 static int drop_packets = 0;		/* Packet dropper */
 
@@ -338,11 +337,6 @@ static void setup_timed_events(void)
 	check_joins(&i2r[INFINIBAND].channels, &i2r[ROCE].channels);
 }
 
-static void update_status(int x)
-{
-	update_requested = true;
-}
-
 static void setup_termination_signals(void)
 {
 	signal(SIGINT, terminate);
@@ -393,8 +387,6 @@ static void daemonize(void)
 	close(0);
 
 	openlog ("ib2roce", LOG_PID, LOG_DAEMON);
-
-	signal(SIGUSR1, update_status);
 }
 
 static int pid_fd;
