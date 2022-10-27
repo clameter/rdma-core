@@ -488,6 +488,8 @@ void setup_interface(enum interfaces in)
 
 	numa_run_on_node(i->numa_node);
 
+	register_callback(handle_async_event, i->context->async_fd, i);
+
 #ifdef UNICAST
 	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
 	i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));

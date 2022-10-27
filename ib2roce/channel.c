@@ -319,8 +319,6 @@ static bool setup_multicast(struct rdma_channel *c)
 		return false;
 	}
 
-	register_callback(handle_async_event, i->context->async_fd, i);
-
 	/* XXX This is not going to work for multi channel RDMA */
 	ret = rdma_bind_addr(c->id, c->bindaddr);
 	if (ret) {
