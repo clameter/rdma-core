@@ -132,6 +132,8 @@ struct i2r_interface {
 
 extern struct i2r_interface i2r[];
 
+bool sum_stats(unsigned *stats, struct i2r_interface *i, enum channel_type type);
+
 /* Interator for the Interfaces */
 #define interface_foreach(_interface)								\
 	for(struct i2r_interface *_interface = i2r; _interface < i2r + NR_INTERFACES;_interface++) \

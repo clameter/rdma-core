@@ -162,7 +162,7 @@ char *hexbytes(uint8_t *q, unsigned len, char separator)
 	return __hexbytes(b, q, len, separator);
 }
 
-static bool sum_stats(unsigned *stats, struct i2r_interface  *i, enum channel_type type)
+bool sum_stats(unsigned *stats, struct i2r_interface  *i, enum channel_type type)
 {
 	bool r = false;
 
