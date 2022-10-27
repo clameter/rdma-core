@@ -76,13 +76,13 @@ static short core_lookup(struct i2r_interface *i,  enum channel_type type, int i
 {
 	short core = channel_infos[type].core;
 
+	if (!cores)
+		goto nocore;
+
 	if (instance) {
 		core += (instance - 1);
 		core %= cores;
 	}
-
-	if (!cores)
-		goto nocore;
 
 	if (core == NO_CORE)
 		goto nocore;
