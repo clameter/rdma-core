@@ -214,21 +214,26 @@ int find_rdma_devices(void)
 
 		c = ibv_open_device(d);
 		if (!c) {
-			logg(LOG_EMERG, "Cannot open device %s\n", name);
-			return 1;
+			logg(LOG_INFO, "Cannot open device %s\n", name);
+			continue;
 		}
 
 		if (ibv_query_device(c, &dattr)) {
-			logg(LOG_EMERG, "Cannot query device %s\n", name);
-			return 1;
+			logg(LOG_INFO, "Cannot query device %s\n", name);
+			goto skip;
 		}
 
 		for (port = 1; port <= dattr.phys_port_cnt; port++) {
 			struct ibv_port_attr attr;
 
 			if (ibv_query_port(c, port, &attr)) {
-				logg(LOG_CRIT, "Cannot query port %s:%d\n", name, port);
-				return 1;
+				logg(LOG_INFO, "Cannot query port %s:%d\n", name, port);
+				goto skip;
+			}
+
+			if (attr.state != IBV_PORT_ACTIVE) {
+				logg(LOG_INFO, "Port %s:%d is not active", name, port);
+				goto skip;
 			}
 
 			if (attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
@@ -243,6 +248,7 @@ int find_rdma_devices(void)
 			}
 		}
 
+	skip:
 		if (!found)
 			ibv_close_device(c);
 	}
