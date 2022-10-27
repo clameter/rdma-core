@@ -1,7 +1,7 @@
 include_directories("linux")
 include_directories(${NL_INCLUDE_DIRS})
 
-rdma_executable(ib2roce
+rdma_sbin_executable(ib2roce
   ib2roce.c
   fifo.c
   hash.c

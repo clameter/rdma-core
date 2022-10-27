@@ -353,6 +353,8 @@ install -D -m0644 redhat/rdma.conf %{buildroot}%{_sysconfdir}/rdma/modules/rdma.
 (if [ -d %{__cmake_builddir} ]; then cd %{__cmake_builddir}; fi
  ./bin/ib_acme -D . -O &&
  install -D -m0644 ibacm_opts.cfg %{buildroot}%{_sysconfdir}/rdma/)
+# ib2roce
+install -D -m0644 ib2roce/ib2roce.cfg  %{buildroot}%{_sysconfdir}/rdma/
 
 # Delete the package's init.d scripts
 rm -rf %{buildroot}/%{_initrddir}/
@@ -615,9 +617,6 @@ fi
 %{_mandir}/man1/ib2roce.*
 %{_mandir}/man7/ib2roce.*
 %{_unitdir}/ib2roce.service
-%dir %{_libdir}/ib2roce
-%{_libdir}/ib2roce/*
-%doc %{_docdir}/%{name}/ib2roce.md
 
 %files -n iwpmd
 %{_sbindir}/iwpmd
