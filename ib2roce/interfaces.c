@@ -535,10 +535,6 @@ void setup_interface(enum interfaces in)
 	/* Calculate number of required RDMA channels for multicast */
 	channels = 1 + nr_mc / i->mc_per_qp;
 
-	if (channels > 1)
-		logg(LOG_INFO, "Multi RDMA group mode %s: %u multicast groups on %d channels. Maximum %d multicast groups per qp\n", i->text, nr_mc, channels, i->mc_per_qp);
-
-
 	if (channels > MAX_CHANNELS_PER_INTERFACE)
 		panic("Too many channels for interface %s. Maximum supported = %u\n", i->text, MAX_CHANNELS_PER_INTERFACE);
 
@@ -576,24 +572,14 @@ void setup_interface(enum interfaces in)
  	check_out_of_buffer(i);
  	numa_run_on_node(-1);
 
-	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d CQs=%u"
-#ifdef UNICAST
-		"/%u/%u"
-#endif
-			" MTU=%u NUMA=%d.\n",
+	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d QPs=%u MTU=%u NUMA=%d.\n",
 		i->text,
 		i->rdma_name,
 		i->if_name, i->ifindex,
 		i->port,
 		inet6_ntoa(e->gid.raw), i->gid_index,
 		inet_ntoa(i->if_addr.sin_addr), default_port,
-		multicast ? multicast->nr_cq: 0,
-#ifdef UNICAST
-		ud ? ud->nr_cq : 0,
-		raw_channel ? raw_channel->nr_cq : 0,
-#endif
-		i->mtu,
-		i->numa_node
+		channels, i->mtu, i->numa_node
 	);
 }
 

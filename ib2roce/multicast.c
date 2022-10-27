@@ -393,7 +393,7 @@ static int _join_mc(struct in_addr addr, struct sockaddr *sa,
 			errname());
 		return 1;
 	}
-	logg(LOG_NOTICE, "Join Request %sMC group %s:%d on %s.\n",
+	logg(LOG_DEBUG, "Join Request %sMC group %s:%d on %s.\n",
 		sendonly ? "Sendonly " : "",
 		inet_ntoa(addr), port,
 		c->i->text);
@@ -422,7 +422,7 @@ static int _leave_mc(struct in_addr addr,struct sockaddr *si, struct rdma_channe
 		logg(LOG_ERR, "Failure rdma_leave_multicast on %s:%s %s\n", c->i->text, inet_ntoa(addr), errname());
 		return 1;
 	}
-	logg(LOG_NOTICE, "Leaving MC group %s on %s .\n",
+	logg(LOG_DEBUG, "Leaving MC group %s on %s .\n",
 		inet_ntoa(addr),
 		c->i->text);
 

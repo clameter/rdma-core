@@ -313,7 +313,7 @@ delayed_packet:
 	return;
 
 discardit:    
-	logg(LOG_WARNING, "%s on multicast channel %s: GRH=%s %s\n", reason, c->text, grh_str(&buf->grh), payload_dump(buf->cur));
+	logg(LOG_DEBUG, "%s on multicast channel %s: GRH=%s %s\n", reason, c->text, grh_str(&buf->grh), payload_dump(buf->cur));
 
 invalid_packet:
 	st(c, packets_invalid);
