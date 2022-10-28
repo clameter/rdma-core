@@ -851,7 +851,7 @@ void handle_async_event(void *private)
 	struct i2r_interface *i = private;
 	struct ibv_async_event event;
 
-	if (!terminated && !ibv_get_async_event(i->context, &event)) {
+	if (!ibv_get_async_event(i->context, &event)) {
 		switch (event.event_type) {
 			case IBV_EVENT_QP_FATAL:
 				logg(LOG_INFO, "Async RDMA EVENT: QP transitioned to error state on %s\n", i->text);
@@ -1140,6 +1140,8 @@ void handle_comp_event(void *private)
 		process_cqes(c, wc, cqs);
 }
 
+#ifdef UNICAST
+
 /* Special handling using raw socket */
 void handle_receive_packet(void *private)
 {
@@ -1188,6 +1190,8 @@ void handle_receive_packet(void *private)
 	c->receive(buf);
 	put_buf(buf);
 }
+
+#endif
 
 /* A mini router follows */
 struct i2r_interface *find_interface(struct sockaddr_in *sin)
