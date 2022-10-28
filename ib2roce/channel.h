@@ -162,6 +162,8 @@ void calculate_pps(void *private);
 
 void show_core_config(void);
 
+int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast);
+
 receive_callback receive_multicast;
 
 #ifdef UNICAST

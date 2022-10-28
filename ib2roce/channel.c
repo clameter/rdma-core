@@ -213,7 +213,7 @@ err:
 
 static bool loopback_blocking = true;	/* Ask for loopback blocking on Multicast QPs */
 
-static int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
+int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 {
 	struct ibv_qp_init_attr_ex init_qp_attr_ex;
 	int ret;

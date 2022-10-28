@@ -102,9 +102,11 @@ struct rdma_unicast {
 	struct hash_item hash[nr_hashes];
 };
 
-struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
 
+struct rdma_unicast *new_rdma_unicast(struct i2r_interface *i, struct sockaddr_in *sin);
+void resolve_end(struct rdma_unicast *);
 void resolve(struct rdma_unicast *ru);
+void zap_channel(struct rdma_unicast *ru);
 
 
 static inline bool multicast_lid(uint16_t lid) {
@@ -116,6 +118,9 @@ static inline bool unicast_lid(uint16_t lid) {
 }
 
 void learn_source_address(struct buf *buf);
+
+int send_buf(struct buf *buf, struct rdma_unicast *ra);
+
 struct endpoint *ip_to_ep(struct i2r_interface *i, struct in_addr addr);
 struct endpoint *buf_to_ep(struct buf *buf, struct in_addr addr);
 

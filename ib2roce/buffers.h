@@ -113,10 +113,6 @@ static inline void pull(struct buf *buf, void *dest, unsigned length)
 
 #define PULL(__BUF, __VAR) pull(__BUF, &(__VAR), sizeof(__VAR))
 
-#ifdef UNICAST
-static int send_buf(struct buf *buf, struct rdma_unicast *ra);
-#endif
-
 extern struct buf *buffers;
 
 extern struct buf *nextbuffer;	/* Pointer to next available RDMA buffer */
@@ -168,10 +164,8 @@ int send_to(struct rdma_channel *c,
 	bool imm_used, unsigned imm,
 	struct buf *buf);
 
-struct rdma_unicast;
 struct i2r_interface;
 
-int send_buf(struct buf *buf, struct rdma_unicast *ra);
 void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *sin);
 
 int send_pending_buffers(struct rdma_channel *c);

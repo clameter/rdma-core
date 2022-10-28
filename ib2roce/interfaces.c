@@ -760,7 +760,7 @@ void handle_rdma_event(void *private)
 		case RDMA_CM_EVENT_CONNECT_REQUEST:
 			{
 				struct rdma_conn_param rcp = { };
-				struct rdma_channel *c = new_rdma_channel(i, channel_rdmacm);
+				struct rdma_channel *c = new_rdma_channel(i, channel_rdmacm, 0);
 
 				logg(LOG_NOTICE, "RDMA_CM_CONNECT_REQUEST id=%p listen_id=%p\n",
 					event->id, event->listen_id);
