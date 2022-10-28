@@ -140,7 +140,7 @@ static void enable_bridge(struct bridge_state *b)
 	/* Create new MC channels */
 	for (i = 0; i < NR_INTERFACES; i++) {
 		/* XXX Needs to be fixed to support multiple rdma channels */
-		b->channels[i]->c[0] = new_rdma_channel(i2r + i, channel_rdmacm, "beacon");
+		b->channels[i]->c[0] = new_rdma_channel(i2r + i, channel_rdmacm, 0);
 	}
 
 

@@ -38,6 +38,7 @@
  */
 
 #define _GNU_SOURCE
+#define BEACON
 
 #include <stdint.h>
 #include <sys/types.h>
