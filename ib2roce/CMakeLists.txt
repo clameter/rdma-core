@@ -17,6 +17,8 @@ rdma_sbin_executable(ib2roce
   cli.c
   pgm.c
   beacon.c
+  endpoint.c
+  unicast.c
 )
 target_link_libraries(ib2roce LINK_PRIVATE
   ibverbs

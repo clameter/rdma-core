@@ -39,6 +39,7 @@
 
 #define _GNU_SOURCE
 #define BEACON
+#define UNICAST
 
 #include <stdint.h>
 #include <sys/types.h>
