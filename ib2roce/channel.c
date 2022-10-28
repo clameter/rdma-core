@@ -737,7 +737,7 @@ int channel_stats(char *b, struct rdma_channel *c, const char *interface, const 
 
 void channel_stat(FILE *out, struct rdma_channel *c)
 {
-	fprintf(out, " Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", c->text,
+	fprintf(out, "Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", c->text,
 		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_send, c->cq_high, fifo_items(&c->send_queue));
 
 	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))

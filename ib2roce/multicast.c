@@ -604,28 +604,39 @@ static void multicast_cmd(FILE *out, char *parameters)
 		for(enum interfaces in = INFINIBAND; in <= ROCE; in++) {
 			struct mc_interface *mi = m->interface + in;
 
-			fprintf(out, "%s %s %s %s %s ", interfaces_text[in], m->text,
+			fprintf(out, "%s %s %s %s %s ", mi->channel ? mi->channel->text : interfaces_text[in], m->text,
 				mc_text[mi->status],
-				mi->sendonly ? "Sendonly " : "",
+				mi->sendonly ? "Sendonly" : "",
 				in == INFINIBAND ? mgid_text(m) : "");
 
 			if (!m->enabled)
-				fprintf(out, "disabled ");
+				fprintf(out, " disabled");
 
 			if (m->admin)
-				fprintf(out, "admin ");
+				fprintf(out, " admin");
 
 			if (!is_a_channel_of(mi->channel, &i2r[in].channels))
-				fprintf(out, "remote ");
+				fprintf(out, " remote");
 
-			fprintf(out, "packet_time=%dns, max_burst=%d packets, delayed=%ld packets, last_sent=%ldms ago, last_delayed=%ldms ago, pending=%u packets, burst=%d\n",
+			if (!mi->packet_time) {
+				fprintf(out, " No rate limitations\n");
+				continue;
+			}
+
+			fprintf(out, " packet_time=%dns max_burst=%d",
 				mi->packet_time,
-				mi->max_burst,
-				mi->delayed,
-				mi->last_sent ? (now - mi->last_sent) / ONE_MILLISECOND : -999,
-				mi->last_delayed ? (now - mi->last_delayed) / ONE_MILLISECOND : -999,
-				mi->pending,
-				mi->burst);
+				mi->max_burst);
+
+			if (mi->last_sent)
+			   fprintf(out, " last_sent=%ldms ago, pending=%u packets",
+				(now - mi->last_sent) / ONE_MILLISECOND,
+				mi->pending);
+
+			if (mi->last_delayed)
+			   fprintf(out, " delayed=%ld packets last_delayed=%ldms ago",
+				mi->delayed, (now - mi->last_delayed) / ONE_MILLISECOND);
+
+			fprintf(out, "\n");
 		}
 	}
 }
