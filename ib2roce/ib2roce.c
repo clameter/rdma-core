@@ -352,13 +352,14 @@ static void setup_timed_events(void)
 
 	x = atoi(t);
 
-	if (x < 10000)
-		panic("Watchdog timer less than 10 milliseconds not supported\n");
+	if (x < 100000)
+		panic("Watchdog timer less than 100 milliseconds not supported\n");
 
 	if (!systemd)
 		panic("Watchdog only supported in --systemd mode\n");
 
-	watchdog_nsec = x * ONE_MICROSECOND;
+	/* Systemd recommends to send watchdog notifications in half the requested time interval */
+	watchdog_nsec = x * ONE_MICROSECOND /2;
 	run_watchdog(NULL);
 }
 
