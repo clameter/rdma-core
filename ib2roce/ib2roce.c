@@ -334,8 +334,8 @@ static void run_watchdog(void *private)
 
 static void setup_timed_events(void)
 {
-	char *t;
-	unsigned x;
+	uint64_t x;
+	int ret;
 
 	now = timestamp();
 
@@ -346,11 +346,12 @@ static void setup_timed_events(void)
 
 	check_joins(&i2r[INFINIBAND].channels, &i2r[ROCE].channels);
 
-	t = getenv("WATCHDOG_USEC");
-	if (!t)
-		return;
+	ret = sd_watchdog_enabled(0, &x);
+	if (ret < 0)
+		panic("Watchdog check failed. errname())\n");
 
-	x = atoi(t);
+	if (!ret)
+		return;
 
 	if (x < 100000)
 		panic("Watchdog timer less than 100 milliseconds not supported\n");
