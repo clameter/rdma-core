@@ -76,6 +76,7 @@
 
 static bool debug = false;		/* Stay in foreground, print more details */
 static bool testing = false;		/* Run some tests on startup */
+static uint64_t watchdog_nsec;
 static int drop_packets = 0;		/* Packet dropper */
 
 static char *payload_dump(uint8_t *p)
@@ -325,8 +326,17 @@ static void logging(void *private)
 	add_event(timestamp() + seconds(60), logging, NULL, "Brief Status");
 }
 
+static void run_watchdog(void *private)
+{
+	sd_notify(0, "WATCHDOG=1");
+	add_event(timestamp() + watchdog_nsec, run_watchdog, NULL, "Watchdog");
+}
+
 static void setup_timed_events(void)
 {
+	char *t;
+	unsigned x;
+
 	now = timestamp();
 
 	if (background)
@@ -335,6 +345,21 @@ static void setup_timed_events(void)
 	calculate_pps(NULL);
 
 	check_joins(&i2r[INFINIBAND].channels, &i2r[ROCE].channels);
+
+	t = getenv("WATCHDOG_USEC");
+	if (!t)
+		return;
+
+	x = atoi(t);
+
+	if (x < 10000)
+		panic("Watchdog timer less than 10 milliseconds not supported\n");
+
+	if (!systemd)
+		panic("Watchdog only supported in --systemd mode\n");
+
+	watchdog_nsec = x * ONE_MICROSECOND;
+	run_watchdog(NULL);
 }
 
 static void setup_termination_signals(void)
