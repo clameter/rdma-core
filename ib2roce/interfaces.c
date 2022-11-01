@@ -1088,7 +1088,6 @@ void scan_cqs(void *private)
 	struct core_info *core = private;
 	int i;
 	int cqs;
-	struct rdma_channel *c;
 	struct ibv_wc wc[10];
 
 	for(i = 0; i < core->nr_channels; i++) {
