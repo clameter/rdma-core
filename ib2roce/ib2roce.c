@@ -264,6 +264,12 @@ void receive_multicast(struct buf *buf)
 	struct mc_interface *mi = m->interface  + (in ^ 1);
 	struct rdma_channel *ch_out = mi->channel;
 
+	if (!m->same_core) {
+		/* Ok we need to queue on another core */
+		fifo_put(&ch_out->send_queue, buf);
+		goto success;
+	}
+
 	if (mi->packet_time) {
 		uint64_t t;
 
@@ -310,6 +316,7 @@ delayed_packet:
  	if (ret)
 		return;
 
+success:
 	st(c, packets_bridged);
 	return;
 
