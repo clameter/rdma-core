@@ -554,8 +554,6 @@ int main(int argc, char **argv)
 
 	post_receive_buffers();
 
-	send_queue_monitor(NULL);
-
 	start_cores();
 	arm_channels(NULL);
 	setup_timed_events();

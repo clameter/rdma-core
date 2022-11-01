@@ -169,7 +169,6 @@ struct i2r_interface;
 void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *sin);
 
 int send_pending_buffers(struct rdma_channel *c);
-void send_queue_monitor(void *private);
 
 #endif
 
