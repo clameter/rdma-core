@@ -325,34 +325,51 @@ int send_pending_buffers(struct rdma_channel *c)
 	return false;
 }
 
+static void send_queue_monitor(void *private);
+
 #define SEND_QUEUE_MAX 20
 
 struct rdma_channel *send_queue_table[SEND_QUEUE_MAX];
+
+static void sched_send_queue_monitor(void)
+{
+	add_event(now + milliseconds(10),
+		send_queue_monitor, NULL, "SendQueue");
+}
 
 static void send_queue_add(struct rdma_channel *c)
 {
 	int free = -1;
 	int i;
+	bool inuse = false;
 
 	for( i = 0; i < SEND_QUEUE_MAX; i++) {
 		struct rdma_channel *r = send_queue_table[i];
 
-		if (!r && free < 0)
-			free = i;
-		else if (r == c)
-			return;
+		if (r) {
+			if (r == c)
+				return;
+
+			inuse = true;
+		} else {
+			if (free < 0)
+				free = i;
+		}
         }
 
         if (free >= 0)
                 send_queue_table[free] = c;
         else
                 panic("No slots left in send_queue\n");
+
+	if (!inuse)
+		sched_send_queue_monitor();
 }
 
 void send_queue_monitor(void *private)
 {
 	int i;
-	bool active;
+	bool active = false;
 
 	for(i = 0; i < SEND_QUEUE_MAX; i++) {
 		struct rdma_channel *c = send_queue_table[i];
@@ -368,9 +385,8 @@ void send_queue_monitor(void *private)
 
 	}
 
-	add_event(now + milliseconds(active ? 10: 100),
-		send_queue_monitor, NULL, "SendQueue");
-
+	if (active)
+		sched_send_queue_monitor();
 }
 
 /*

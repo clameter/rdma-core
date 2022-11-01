@@ -102,6 +102,7 @@ struct mc {
 	uint8_t mgid_mode;
 	bool enabled;				/* Are we handling traffic? */
 	bool admin;				/* Administrative group */
+	bool same_core;				/* both interfaces on the same core */
 	uint16_t port;
 	const char *text;
 };

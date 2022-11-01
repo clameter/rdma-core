@@ -676,7 +676,7 @@ void handle_rdma_event(void *private)
 
 				/* Things actually work if both multicast groups are joined */
 				if (!bridging || m->interface[in^1].status == MC_JOINED)
-			       		next_join_complete();
+					next_join_complete(m);
 
 			}
 			break;
@@ -1092,10 +1092,10 @@ void scan_cqs(void *private)
 	struct ibv_wc wc[10];
 
 	for(i = 0; i < core->nr_channels; i++) {
-		cqs = ibv_poll_cq(core->channel[i]->cq, 10, wc);
-		if (cqs) {
-			c = core->channel[i];
+		struct rdma_channel *c = core->channel[i];
 
+		cqs = ibv_poll_cq(c->cq, 10, wc);
+		if (cqs) {
 			if (cqs > 0)
 				process_cqes(c, wc, cqs);
 			else {
@@ -1105,6 +1105,8 @@ void scan_cqs(void *private)
 				continue;
 			}
 		}
+		if (!fifo_empty(&c->send_queue))
+			send_pending_buffers(c);
 	}
 }
 

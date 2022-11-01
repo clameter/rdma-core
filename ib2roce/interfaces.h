@@ -165,7 +165,7 @@ struct i2r_interface *find_interface(struct sockaddr_in *sin);
 struct rdma_channel *find_channel(struct i2r_interface *i, enum channel_type type);
 
 void check_joins(struct channel_list *infiniband, struct channel_list *roce);
-void next_join_complete(void);
+void next_join_complete(struct mc *);
 
 void check_out_of_buffer(void *);
 
