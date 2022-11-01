@@ -145,7 +145,7 @@ extern struct channel_info {
 } channel_infos[nr_channel_types];
 
 int channel_stats(char *b, struct rdma_channel *c, const char *interface, const char *type);
-void channel_stat(FILE *out, struct rdma_channel *c);
+void channel_stat(int ident, FILE *out, struct rdma_channel *c);
 
 void start_channel(struct rdma_channel *c);
 void stop_channel(struct rdma_channel *c);

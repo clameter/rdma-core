@@ -342,14 +342,14 @@ static void core_cmd(FILE *out, char *parameters) {
 				unsigned j;
 				struct core_info *ci = core_infos + i;
 
-				fprintf(out, "Core %d: NUMA=%d", i, ci->numa_node);
+				fprintf(out, "Core %d: NUMA=%d\n", i, ci->numa_node);
 				if (latency)
 					fprintf(out, " Loops over 5usecs=%u Average=%luns, Max=%uns, Min=%uns\n",
 						ci->samples, ci->samples ? ci->sum_latency / ci->samples : 0,
 						ci->max_latency, ci->min_latency);
 
 				for (j = 0; j < ci->nr_channels; j++)
-					channel_stat(out, ci->channel[j]);
+					channel_stat(1, out, ci->channel[j]);
 			}
 		} else
 			fprintf(out, "No cores active. ib2roce operates in single threaded mode.\n");

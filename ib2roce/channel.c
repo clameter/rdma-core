@@ -735,14 +735,24 @@ int channel_stats(char *b, struct rdma_channel *c, const char *interface, const 
 	return n;
 }
 
-void channel_stat(FILE *out, struct rdma_channel *c)
+void channel_stat(int indent, FILE *out, struct rdma_channel *c)
 {
-	fprintf(out, "Channel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", c->text,
+	char indent_str[10];
+
+	if (indent > sizeof(indent_str) - 1)
+		panic("indent too high");
+
+	memset(indent_str, ' ', indent);
+	indent_str[indent] = 0;
+
+	fprintf(out, "%sChannel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", indent_str, c->text,
 		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_send, c->cq_high, fifo_items(&c->send_queue));
 
 	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))
-		fprintf(out, " pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n",
-				c->pps_in, c->pps_out, c->max_pps_in, c->max_pps_out);
+		fprintf(out, "%s pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n",
+			indent_str, c->pps_in, c->pps_out, c->max_pps_in, c->max_pps_out);
+
+	fprintf(out, "%s", indent_str);
 
 	for(int k = 0; k < nr_stats; k++)
 		if (c->stats[k])
@@ -751,9 +761,14 @@ void channel_stat(FILE *out, struct rdma_channel *c)
 	fprintf(out, "\n");
 }
 
+static void channel_stat_indent_0(FILE *f, struct rdma_channel *c)
+{
+	channel_stat(0, f, c);
+}
+
 static void channels_cmd(FILE *out, char *parameters)
 {
-	all_channels(out, channel_stat);
+	all_channels(out, channel_stat_indent_0);
 }
 
 __attribute__((constructor))
@@ -774,4 +789,6 @@ static void channel_init(void)
 
 	register_enable("statint", true, NULL, &stat_interval, "60", "1", NULL,
 		"Sampling interval to calculate pps values");
+	register_enable("latency", true, &latency, NULL, "on", "off", NULL,
+		"Collect latency statistics for cores busy polling");
 }

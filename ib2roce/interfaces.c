@@ -1215,7 +1215,7 @@ static unsigned show_interfaces(char *b)
 		unsigned stats[nr_stats];
 
 		if (sum_stats(stats, i, channel_rdmacm)) {
-			n = sprintf(b, "Interface %s:", i->text);
+			n += sprintf(b + n, "Interface %s:", i->text);
 
 			for(int j = 0; j < nr_stats; j++) {
 				if (stats[j])
@@ -1224,7 +1224,7 @@ static unsigned show_interfaces(char *b)
 			n += sprintf(b + n, "\n");
 
 		} else
-			n = sprintf(b, "Interface %s: No Traffic\n", i->text);
+			n += sprintf(b + n, "Interface %s: No Traffic\n", i->text);
 	}
 	return n;
 }
