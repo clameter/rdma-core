@@ -13,6 +13,7 @@ After=rdma-hw.target
 [Service]
 Type=notify
 ExecStart=@CMAKE_INSTALL_FULL_SBINDIR@/ib2roce --systemd --config /etc/rdma/ib2roce.cfg
+WatchdogSec=5
 ProtectSystem=full
 ProtectHome=true
 ProtectHostname=true
