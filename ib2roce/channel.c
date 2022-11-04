@@ -45,7 +45,6 @@
 #include "interfaces.h"
 #include "channel.h"
 #include "cli.h"
-#include "beacon.h"
 
 const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 

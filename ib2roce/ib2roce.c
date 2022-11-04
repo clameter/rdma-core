@@ -62,7 +62,6 @@
 #include "buffers.h"
 #include "multicast.h"
 #include "interfaces.h"
-#include "beacon.h"
 #include "cli.h"
 #include "pgm.h"
 
@@ -556,9 +555,6 @@ int main(int argc, char **argv)
 	if (cores)
 		show_core_config();
 
-	beacon_setup();
-
-
 	post_receive_buffers();
 
 	start_cores();
@@ -574,7 +570,6 @@ int main(int argc, char **argv)
 	if (systemd)
 		sd_notify(0, "STOPPING=1");
 
-	beacon_shutdown();
 	stop_cores();
 
 	shutdown_roce();

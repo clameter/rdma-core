@@ -66,7 +66,6 @@
 #include "interfaces.h"
 #include "multicast.h"
 #include "cli.h"
-#include "beacon.h"
 
 unsigned default_mc_port = 4711;	/* Port for MC groups that do not have a port (if a port is required) */
 uint8_t tos_mode = 0;
