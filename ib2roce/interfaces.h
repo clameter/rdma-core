@@ -111,16 +111,6 @@ struct i2r_interface {
 	int iges;
 	struct ibv_gid_entry ige[MAX_GID];
 
-	/* The following may be updated in a multithreaded environment
-	 * from the multicast thread running for each interface.
- 	 *
-         * Serialization is required but we generally are a bit loose
-	 * by allowing read access without locks.
-         */
-	struct hash *ru_hash;
-	struct fifo resolve_queue;		/* List of send buffers with unresolved addresses */
-	struct hash *ep;			/* Hash of all endpoints reachable here */
-	struct hash *ip_to_ep;			/* Hash based on IP address */
 	unsigned mc_rate_limited;		/* Number of MC groups where rate limiting is ongoing */
 	unsigned long out_of_buffer;		/* Last state of /sys/class/infiniband .../overrun */
 
