@@ -328,203 +328,10 @@ static bool setup_multicast(struct rdma_channel *c)
 	return allocate_rdmacm_qp(c, true);
 }
 
-#ifdef UNICAST
-static bool setup_incoming(struct rdma_channel *c)
-{
-	return allocate_rdmacm_qp(c, true);
-}
-
-/* Not using rdmacm so this is easier on the callbacks */
-static bool setup_channel(struct rdma_channel *c)
-{
-	struct i2r_interface *i = c->i;
-	int ret;
-	struct ibv_qp_init_attr_ex init_qp_attr_ex;
-
-	c->mr = i->mr;
-	c->pd = i->pd;
-
-	if (!c->core)
-		c->comp_events = i->comp_events;
-
-	c->cq = ibv_create_cq(i->context, c->nr_cq, c, c->comp_events, 0);
-	if (!c->cq) {
-		logg(LOG_CRIT, "ibv_create_cq failed for %s.\n",
-			c->text);
-		return false;
-	}
-
-	memset(&init_qp_attr_ex, 0, sizeof(init_qp_attr_ex));
-	init_qp_attr_ex.cap.max_send_wr = c->nr_send;
-	init_qp_attr_ex.cap.max_recv_wr = c->nr_receive;
-	init_qp_attr_ex.cap.max_send_sge = 1;	/* Highly sensitive settings that can cause -EINVAL if too large (10 f.e.) */
-	init_qp_attr_ex.cap.max_recv_sge = 1;
-	init_qp_attr_ex.cap.max_inline_data = MAX_INLINE_DATA;
-	init_qp_attr_ex.qp_context = c;
-	init_qp_attr_ex.sq_sig_all = 0;
-	init_qp_attr_ex.qp_type = channel_infos[c->type].qp_type,
-	init_qp_attr_ex.send_cq = c->cq;
-	init_qp_attr_ex.recv_cq = c->cq;
-
-	init_qp_attr_ex.comp_mask = IBV_QP_INIT_ATTR_CREATE_FLAGS|IBV_QP_INIT_ATTR_PD;
-	init_qp_attr_ex.pd = i->pd;
-	init_qp_attr_ex.create_flags = 0;
-
-	c->qp = ibv_create_qp_ex(i->context, &init_qp_attr_ex);
-	if (!c->qp) {
-		logg(LOG_CRIT, "ibv_create_qp_ex failed for %s. Error %s. Port=%d #CQ=%d\n",
-				c->text, errname(), i->port, c->nr_cq);
-		return false;
-	}
-
-	c->attr.port_num = i->port;
-	c->attr.qp_state = IBV_QPS_INIT;
-	c->attr.pkey_index = 0;
-	c->attr.qkey = channel_infos[c->type].qkey;
-
-	ret = ibv_modify_qp(c->qp, &c->attr,
-	       (i == i2r + ROCE && c->type == channel_raw) ?
-			(IBV_QP_STATE | IBV_QP_PORT) :
-			( IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY)
-	);
-
-	if (ret) {
-		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to Init state. %s\n", c->text, errname());
-		ibv_destroy_qp(c->qp);
-		ibv_destroy_cq(c->cq);
-		c->qp = NULL;
-		return false;
-	}
-	return true;
-}
-
-static bool setup_raw(struct rdma_channel *c)
-{
-	if (!setup_channel(c))
-		return false;
-
-#ifdef HAVE_MSTFLINT
-	if (c->i == i2r + INFINIBAND) {
-		if (set_ib_sniffer(c->i->rdma_name, c->i->port, c->qp)) {
-
-			logg(LOG_ERR, "Failure to set sniffer mode on %s\n", c->text);
-			ibv_destroy_qp(c->qp);
-			ibv_destroy_cq(c->cq);
-			return false;
-
-		} else
-
-		/* Install abort handler so that we can be sure that the capture mode is switched off */
-		signal(SIGABRT, &shutdown_sniffer);
-		signal(SIGSEGV, &shutdown_sniffer);
-	}
-#endif
-	return true;
-}
-
-static bool setup_packet(struct rdma_channel *c)
-{
-	struct i2r_interface *i = c->i;
-	int fh;
-	struct sockaddr_ll ll  = {
-		.sll_family = AF_PACKET,
-		.sll_protocol = htons(ETH_P_ALL),
-		.sll_ifindex = i->ifindex,
-		.sll_hatype = ARPHRD_ETHER,
-		.sll_pkttype = PACKET_BROADCAST | PACKET_HOST | PACKET_OTHERHOST,
-		.sll_halen = sizeof(struct in_addr),
-	};
-
-	if (i == i2r + INFINIBAND) {
-		logg(LOG_ERR, "Packet Sockets do not work right on Infiniband\n");
-		return false;
-	}
-
-	fh = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-
-	if (fh < 0) {
-		logg(LOG_ERR, "Raw Socket creation failed for %s:%s\n", i->text, errname());
-		return false;
-	}
-
-	if (bind(fh, (struct sockaddr *)&ll, sizeof(struct sockaddr_ll))) {
-		logg(LOG_ERR, "Cannot bind raw socket for %s:%s\n", i->text, errname());
-		return false;
-	}
-
-	c->fh = fh;
-	register_callback(handle_receive_packet, fh, c);
-	return true;
-}
-#endif
-
 struct channel_info channel_infos[nr_channel_types] = {
 	{ "multicast",	0, 0,	10000,	1000,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
-#ifdef UNICAST
-	{ "ud",		1, 1,	500,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err },
-	{ "qp1",	2, 1,	10,	5,	IB_DEFAULT_QP1_QKEY, IBV_QPT_UD,	setup_channel,	receive_qp1,	channel_err },
-	{ "raw",	3, 1,	1000, 	5,	0x12345,	IBV_QPT_RAW_PACKET,	setup_raw,	receive_raw,	channel_packet },
-	{ "ibraw",	3, 1,	1000,	5,	0x12345,	IBV_QPT_UD,		setup_raw,	receive_raw,	channel_packet },
-	{ "packet",	-1, -1,	0,	0,	0,		0,			setup_packet,	receive_raw,	channel_err },
-	{ "incoming",	-1, -1,	100,	50,	0,		0,			setup_incoming,	NULL,		channel_err },
-#endif
 	{ "error",	-1, -1,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
 };
-
-#ifdef UNICAST
-static bool flow_steering = false;	/* Use flow steering to filter packets */
-
-static void setup_flow(struct rdma_channel *c)
-{
-	if (!c)
-		return;
-
-	/* Sadly flow steering is not supported on Infiniband */
-	if (c->i == i2r + INFINIBAND)
-		return;
-
-	if (flow_steering) {
-			struct i2r_interface *i = c->i;
-			enum interfaces in = i - i2r;
-			struct i2r_interface *di = i2r + (in ^ 1);
-			unsigned netmask = di->if_netmask.sin_addr.s_addr;
-			struct {
-				struct ibv_flow_attr attr;
-				struct ibv_flow_spec_ipv4 ipv4;
-				struct ibv_flow_spec_tcp_udp udp;
-			} flattr = {
-				{
-					0, IBV_FLOW_ATTR_SNIFFER, sizeof(flattr),
-					0, 2, i->port, 0
-				},
-				{
-					IBV_FLOW_SPEC_IPV4, sizeof(struct ibv_flow_spec_ipv4),
-					{ 0, di->if_addr.sin_addr.s_addr & netmask },
-					{ 0, netmask }
-				},
-				{
-					IBV_FLOW_SPEC_UDP, sizeof(struct ibv_flow_spec_tcp_udp),
-					{ ROCE_PORT, ROCE_PORT},
-					{ 0xffff, 0xffff}
-				}
-			};
-
-			c->flow = ibv_create_flow(c->qp, &flattr.attr);
-
-	} else {
-
-		struct ibv_flow_attr flattr = {
-				0, IBV_FLOW_ATTR_SNIFFER, sizeof(struct ibv_flow_spec),
-				0, 0, c->i->port, 0
-		};
-
-		c->flow = ibv_create_flow(c->qp, &flattr);
-	}
-
-	if (!c->flow)
-		logg(LOG_ERR, "Failure to create flow on %s. Errno %s\n", c->text, errname());
-}
-#endif
 
 void channel_destroy(struct rdma_channel *c)
 {
@@ -607,10 +414,6 @@ void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *))
  	interface_foreach(i)
 		channel_foreach(c, &i->channels)
 				func(out, c);
-
-#ifdef BEACON
- 	run_bridge_channels(NULL, func);
-#endif
 }
 
 bool is_a_channel_of(struct rdma_channel *c, struct channel_list *cl)
@@ -638,22 +441,6 @@ void arm_channels(struct core_info *core)
 					}
 					break;
 
-#ifdef UNICAST
-				case channel_raw:
-				case channel_ibraw:
-					start_channel(c);
-					ibv_req_notify_cq(c->cq, 0);
-					setup_flow(c);
-					break;
-
-				case channel_ud:
-				case channel_qp1:
- 					if (core == c->core) {
-						start_channel(c);
-						ibv_req_notify_cq(c->cq, 0);
-					}
-					break;
-#endif
 				default:
 					break;
 			}
@@ -779,10 +566,6 @@ static void channel_init(void)
 	register_enable("loopbackprev", false, &loopback_blocking, NULL, "on", "off", NULL,
 		"Multicast loopback prevention of the NIC");
 
-#ifdef UNICAST
-	register_enable("flow", false, &flow_steering, NULL, "on", "off", NULL,
-		"Enable flow steering to limit the traffic on the RAW sockets [Experimental, Broken]");
-#endif
 	register_option("port", required_argument, 'p', port_set,
 		       "<number>", "Set default port number to use if none is specified");
 

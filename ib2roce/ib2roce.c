@@ -65,12 +65,6 @@
 #include "cli.h"
 #include "pgm.h"
 
-#ifdef UNICAST
-#include "endpoint.h"
-#include "unicast.h"
-#include "ibraw.h"
-#endif
-
 /* Globals */
 
 static bool debug = false;		/* Stay in foreground, print more details */

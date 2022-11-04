@@ -38,9 +38,6 @@
 #include "interfaces.h"
 #include "pgm.h"
 #include "packet.h"
-#ifdef UNICAST
-#include "endpoint.h"
-#endif
 #include "cli.h"
 
 /*

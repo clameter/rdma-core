@@ -68,9 +68,6 @@
 #include "multicast.h"
 #include "interfaces.h"
 #include "cli.h"
-#ifdef UNICAST
-#include "endpoint.h"
-#endif
 
 char *ib_name, *roce_name;
 
@@ -81,12 +78,6 @@ int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
 int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 
 bool bridging = true;		/* Allow briding */
-#ifdef UNICAST
-bool unicast = false;		/* Bridge unicast packets */
-static bool raw = false;	/* Use raw channels */
-static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
-#endif
-
 static int mc_per_qp = 0;	/* 0 = Unlimited */
 
 struct i2r_interface i2r[NR_INTERFACES];
@@ -436,11 +427,6 @@ void setup_interface(enum interfaces in)
 	struct i2r_interface *i = i2r + in;
 	struct ibv_gid_entry *e;
 	struct rdma_channel *multicast= NULL;
-#ifdef UNICAST
-	struct rdma_channel *qp1 = NULL;
-	struct rdma_channel *raw_channel = NULL;
-	struct rdma_channel *ud = NULL;
-#endif
 	unsigned channels;
 
 	if (in == INFINIBAND)
@@ -496,15 +482,6 @@ void setup_interface(enum interfaces in)
 
 	register_callback(handle_async_event, i->context->async_fd, i);
 
-#ifdef UNICAST
-	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
-	i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
-	if (i == i2r + INFINIBAND)
-		i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
-	else
-		i->ep = i->ip_to_ep;;
-#endif
-
 	/* Create RDMA elements that are interface wide */
 	i->rdma_events = rdma_create_event_channel();
 	if (!i->rdma_events)
@@ -545,29 +522,6 @@ void setup_interface(enum interfaces in)
 			panic("Cannot create %d rdma channels required for multicast\n", channels);
 
 	}
-
-#ifdef UNICAST
-	if (unicast) {
-
-		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, 0);
-		i->channels.c[channels++] = qp1 = new_rdma_channel(i, channel_qp1, 0);
-
- 		if (raw) {
- 			if (i == i2r + INFINIBAND) {
-				i->channels.c[channels++] = raw_channel = new_rdma_channel(i, channel_ibraw, 0);
- 				/* Sadly fallback is not working here */
- 			} else {
- 				if (packet_socket)
-					i->channels.c[channels++] = new_rdma_channel(i, channel_packet, 0);
- 				else
-					i->channels.c[channels++] = new_rdma_channel(i, channel_raw, 0);
- 			}
- 		}
- 	}
-
-	if (channels > MAX_CHANNELS_PER_INTERFACE)
-		panic("Too many channels for interface %s\n", i->text);
-#endif
 
  	check_out_of_buffer(i);
  	numa_run_on_node(-1);
@@ -621,9 +575,6 @@ void handle_rdma_event(void *private)
 	struct rdma_cm_event *event;
 	int ret;
 	enum interfaces in = i - i2r;
-#ifdef UNICAST
-	struct rdma_unicast *ru = fifo_first(&i->resolve_queue);
-#endif
 
 	ret = rdma_get_cm_event(i->rdma_events, &event);
 	if (ret) {
@@ -699,136 +650,6 @@ void handle_rdma_event(void *private)
 			}
 			break;
 
-#ifdef UNICAST
-		case RDMA_CM_EVENT_ADDR_RESOLVED:
-			logg(LOG_NOTICE, "RDMA_CM_EVENT_ADDR_RESOLVED for %s:%d\n",
-				inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
-
-			if (rdma_resolve_route(ru->c->id, 2000) < 0) {
-
-				logg(LOG_ERR, "rdma_resolve_route error %s on %s  %s:%d. Packet dropped.\n",
-					errname(), ru->c->text,
-					inet_ntoa(ru->sin.sin_addr),
-					ntohs(ru->sin.sin_port));
-					goto err;
-			}
-			ru->state = UC_ROUTE_REQ;
-			break;
-
-		case RDMA_CM_EVENT_ADDR_ERROR:
-			logg(LOG_ERR, "Address resolution error %d on %s  %s:%d. Packet dropped.\n",
-				event->status, ru->c->text,
-				inet_ntoa(ru->sin.sin_addr),
-				ntohs(ru->sin.sin_port));
-
-			goto err;
-			break;
-
-		case RDMA_CM_EVENT_ROUTE_RESOLVED:
-			{
-				struct rdma_conn_param rcp = { };
-
-				logg(LOG_NOTICE, "RDMA_CM_EVENT_ROUTE_RESOLVED for %s:%d\n",
-					inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
-
-				allocate_rdmacm_qp(ru->c, false);
-
-				post_receive(ru->c);
-				ibv_req_notify_cq(ru->c->cq, 0);
-
-				if (rdma_connect(ru->c->id, &rcp) < 0) {
-					logg(LOG_ERR, "rdma_connecte error %s on %s  %s:%d. Packet dropped.\n",
-						errname(), ru->c->text,
-						inet_ntoa(ru->sin.sin_addr),
-						ntohs(ru->sin.sin_port));
-
-					goto err;
-				}
-				ru->state = UC_CONN_REQ;
-			}
-			break;
-
-		case RDMA_CM_EVENT_ROUTE_ERROR:
-			logg(LOG_ERR, "Route resolution error %d on %s  %s:%d. Packet dropped.\n",
-				event->status, ru->c->text,
-				inet_ntoa(ru->sin.sin_addr),
-				ntohs(ru->sin.sin_port));
-
-			goto err;
-			break;
-
-		case RDMA_CM_EVENT_CONNECT_REQUEST:
-			{
-				struct rdma_conn_param rcp = { };
-				struct rdma_channel *c = new_rdma_channel(i, channel_rdmacm, 0);
-
-				logg(LOG_NOTICE, "RDMA_CM_CONNECT_REQUEST id=%p listen_id=%p\n",
-					event->id, event->listen_id);
-
-				c->id->context = c;
-
-				if (!allocate_rdmacm_qp(c, false))
-					goto err;
-
-				post_receive(c);
-
-				ibv_req_notify_cq(c->cq, 0);
-
-				rcp.qp_num = c->id->qp->qp_num;
-				if (rdma_accept(c->id, &rcp)) {
-					logg(LOG_ERR, " rdma_accept error %s\n", errname());
-					channel_destroy(c);
-				}
-				/* Create a structure just for tracking buffers */
-				c->ru = new_rdma_unicast(i, NULL);
-				c->ru->c = c;
-				c->ru->state = UC_CONNECTED;
-
-			}
-			break;
-
-		case RDMA_CM_EVENT_DISCONNECTED:
-			{
-				struct rdma_channel *c = event->id->context;
-
-				logg(LOG_NOTICE, "RDMA_CM_EVENT_DISCONNECTED id=%p %s\n",
-					event->id, c->text);
-
-				if (c->ru)
-					zap_channel(c->ru);
-				else
-					channel_destroy(c);
-			}
-			break;
-
-		case RDMA_CM_EVENT_ESTABLISHED:
-			{
-				struct ah_info *ai = &ru->ai;
-
-				logg(LOG_NOTICE, "RDMA_CM_EVENT_ESTABLISHED for %s:%d\n",
-					inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
-
-				ai->ah = ibv_create_ah(ru->c->pd, &event->param.ud.ah_attr);
-				ai->remote_qpn = event->param.ud.qp_num;
-				ai->remote_qkey = event->param.ud.qkey;
-
-				rdma_ack_cm_event(event);
-				ru->state = UC_CONNECTED;
-				resolve_end(ru);
-				return;
-			}
-			break;
-
-		case RDMA_CM_EVENT_UNREACHABLE:
-			logg(LOG_ERR, "Unreachable Port error %d on %s  %s:%d. Packet dropped.\n",
-				event->status, ru->c->text,
-				inet_ntoa(ru->sin.sin_addr),
-				ntohs(ru->sin.sin_port));
-
-			goto err;
-			break;
-#endif
-
 		default:
 			logg(LOG_NOTICE, "RDMA Event handler:%s status: %d\n",
 				rdma_event_str(event->event), event->status);
@@ -837,13 +658,6 @@ void handle_rdma_event(void *private)
 
 	rdma_ack_cm_event(event);
 	return;
-
-#ifdef UNICAST
-err:
-	rdma_ack_cm_event(event);
-	ru->state = UC_ERROR;
-	resolve_end(ru);
-#endif
 }
 
 void handle_async_event(void *private)
@@ -1141,59 +955,6 @@ void handle_comp_event(void *private)
 		process_cqes(c, wc, cqs);
 }
 
-#ifdef UNICAST
-
-/* Special handling using raw socket */
-void handle_receive_packet(void *private)
-{
-	struct rdma_channel *c = private;
-	struct ibv_wc w = {};
-	unsigned ethertype;
-	ssize_t len;
-	struct buf *buf = alloc_buffer(c);
-	struct ether_header e;
-
-	len = recv(c->fh, buf->raw, DATA_SIZE, 0);
-
-	if (len < 0) {
-		logg(LOG_ERR, "recv error on %s:%s\n", c->text, errname());
-		return;
-	}
-
-	if (len < 10) {
-		logg(LOG_ERR, "Packet size below minimal %ld\n", len);
-		return;
-	}
-
-	st(c, packets_received);
-
-	w.byte_len = len;
-	buf->cur = buf->raw;
-	buf->end = buf->raw + w.byte_len;
-	buf->w = &w;
-	reset_flags(buf);
-	PULL(buf, e);
-
-	ethertype = ntohs(e.ether_type);
-	if (ethertype < 0x600)
-		ethertype = ETHERTYPE_IP;
-
-	if (ethertype == ETHERTYPE_IP) {
-		PULL(buf, buf->ip);
-		buf->ip_valid = true;
-
-		memcpy((void *)&buf->grh + 20, &buf->ip, 20);
-		buf->grh_valid = true;
-	}
-	buf->ip_csum_ok = true;
-	/* Reset scan to the beginning of the raw packet */
-	buf->cur = buf->raw;
-	c->receive(buf);
-	put_buf(buf);
-}
-
-#endif
-
 /* A mini router follows */
 struct i2r_interface *find_interface(struct sockaddr_in *sin)
 {
@@ -1363,13 +1124,5 @@ static void interfaces_init(void)
 	       "<if[:portnumber]>","ROCE device. Uses the first available if not specified.");
 	register_enable("mcqp", true, NULL, &mc_per_qp, "0", "10", NULL, "Max # of MCs per QP");
 
-#ifdef UNICAST
-	register_enable("packetsocket", false, &packet_socket, NULL, "on", "off", NULL,
-		"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic");
-	register_enable("raw", false, &raw, NULL, "on", "off",	NULL,
-		"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel");
-	register_enable("unicast", false, &unicast, NULL, "on", "off",	NULL,
-		"Processing of unicast packets with QP1 handling of SIDR REQ/REP");
-#endif
 }
 

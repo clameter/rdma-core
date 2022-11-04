@@ -166,9 +166,5 @@ int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast);
 
 receive_callback receive_multicast;
 
-#ifdef UNICAST
-receive_callback receive_main, receive_raw, receive_ud, receive_qp1;
-#endif
-
 #endif
 
