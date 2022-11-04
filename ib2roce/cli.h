@@ -40,7 +40,7 @@
 #include <stdbool.h>
 #include <getopt.h>
 
-#define VERSION "2022.0512"
+#define VERSION "2022.1104"
 
 /* Command registration for the CLI */
 void register_concom(const char *name, bool prompt, int parameters, const char *text, void (*callback)(FILE *out, char *parameters));
