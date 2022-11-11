@@ -109,6 +109,9 @@ struct mc {
 
 extern struct mc mcs[MAX_MC];
 
+#define mc_foreach(__m) for(int __i = 0; __i < nr_mc; __i++) for(struct mc *__m = mcs + __i; __m; __m = NULL)
+
+
 int hash_add_mc(struct mc *m);
 struct mc *hash_lookup_mc(struct in_addr addr);
 

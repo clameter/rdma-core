@@ -114,11 +114,7 @@ void set_rate(struct mc *m)
 
 void set_rates(void)
 {
-	int j;
-
-	for (j = 0; j < nr_mc; j++) {
-		struct mc *m = mcs + j;
-
+	mc_foreach(m) {
 		set_rate(m);
 		set_rate(m);
 	}

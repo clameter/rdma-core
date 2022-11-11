@@ -434,11 +434,9 @@ static int _leave_mc(struct in_addr addr,struct sockaddr *si, struct rdma_channe
 
 int leave_mc(enum interfaces i, struct rdma_channel *c)
 {
-	int j;
 	int ret;
 
-	for (j = 0; j < nr_mc; j++) {
-		struct mc *m = mcs + j;
+	mc_foreach(m) {
 		struct mc_interface *mi = m->interface + i;
 
 		if (mi->channel != c)
@@ -469,11 +467,9 @@ static struct global_join_state {
  */
 static void send_joins(void)
 {
-	int i;
 	enum interfaces in;
 
-	for (i = 0; i < nr_mc; i++) {
-		struct mc *m = mcs + i;
+	mc_foreach(m) {
 		unsigned port = m->port;
 
 		if (!m->enabled)
@@ -603,16 +599,16 @@ void check_joins(struct channel_list *infiniband,
 
 static void multicast_cmd(FILE *out, char *parameters)
 {
-	struct mc *m;
-
 	now = timestamp();
 
 	fprintf(out, "Multicast: Active=%u NR=%u Max=%u\n", active_mc, nr_mc, MAX_MC);
 
-	for(m = mcs; m < mcs + nr_mc; m++) {
-
+	mc_foreach(m) {
 		for(enum interfaces in = INFINIBAND; in <= ROCE; in++) {
 			struct mc_interface *mi = m->interface + in;
+
+			if (mi->status == MC_OFF)
+				continue;
 
 			fprintf(out, "%s %s %s %s %s ", mi->channel ? mi->channel->text : interfaces_text[in], m->text,
 				mc_text[mi->status],
