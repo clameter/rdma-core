@@ -339,15 +339,17 @@ void parse_options(int argc, char **argv)
 
 	while ((op = getopt_long(argc, argv, opt_string,
 					opts, NULL)) != -1) {
-		if (!optarg && argv[optind] && argv[optind][0] != '-') {
-			optarg = argv[optind];
-			optind++;
-		}
-		if (op != '?' && opts_datas[op].callback)
+		struct opts_data *od = opts_datas + op;
 
-			opts_datas[op].callback(optarg);
-		else
+		if (op != '?' && od->callback) {
+
+			od->callback(optarg);
+		} else
 			help_opt(NULL);
+	}
+	while (optind < argc) {
+		new_mc_addr(argv[optind], false, false);
+		optind++;
 	}
 }
 
