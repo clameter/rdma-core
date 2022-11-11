@@ -546,10 +546,15 @@ void next_join_complete(struct mc *m)
 {
 	struct i2r_interface *i;
 
-	if (m->interface[ROCE].channel->core == m->interface[INFINIBAND].channel->core)
-		m->same_core = true;
-	else
-		logg(LOG_WARNING, "MC %s in and out channel not on the same core\n", inet_ntoa(m->addr));
+	if (m->interface[ROCE].channel && m->interface[INFINIBAND].channel) {
+
+		if (m->interface[ROCE].channel->core == m->interface[INFINIBAND].channel->core)
+
+			m->same_core = true;
+
+		else
+			logg(LOG_WARNING, "MC %s in and out channel not on the same core\n", inet_ntoa(m->addr));
+	}
 
 	active_mc++;
 	if (active_mc < nr_mc)
