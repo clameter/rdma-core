@@ -1017,7 +1017,6 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 		if (w->status == IBV_WC_SUCCESS && w->opcode == IBV_WC_RECV) {
 
 			c->active_receive_buffers--;
-			st(c, packets_received);
 
 			if (c != buf->c) {
 				logg(LOG_CRIT, "%s: RDMA Channel mismatch CQE is from %s.\n", c->text, buf->c->text);
@@ -1057,14 +1056,28 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 
 			buf->ip_csum_ok = (w->wc_flags & IBV_WC_IP_CSUM_OK) != 0;
 
+			/* Update channel statistics */
+			st(c, packets_received);
+
+			c->bytes_received += w->byte_len;
+
+			if (w->byte_len < c->min_packet_size || c->min_packet_size == 0)
+				c->min_packet_size = w->byte_len;
+
+			if (w->byte_len > c->max_packet_size)
+				c->max_packet_size = w->byte_len;
+
 			c->receive(buf);
 			put_buf(buf);
 
 		} else {
 			if (w->status == IBV_WC_SUCCESS && w->opcode == IBV_WC_SEND) {
 				c->active_send_buffers--;
+
 				/* Completion entry */
 				st(c, packets_sent);
+				c->bytes_sent += w->byte_len;
+
 				put_buf(buf);
 			} else
 				logg(LOG_NOTICE, "Strange CQ Entry %d/%d: Status:%x Opcode:%x Len:%u QP=%x SRC_QP=%x Flags=%x\n",

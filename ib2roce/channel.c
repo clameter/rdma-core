@@ -712,6 +712,10 @@ static void channel_zap(FILE *out, struct rdma_channel *c)
 
 		}
 	}
+	c->bytes_received = 0;
+	c->bytes_sent = 0;
+	c->min_packet_size = 0;
+	c->max_packet_size = 0;
 }
 
 
@@ -732,6 +736,22 @@ int channel_stats(char *b, struct rdma_channel *c, const char *interface, const 
 		if (c->stats[j]) {
 			n += sprintf(b + n, "%s=%u\n", stats_text[j], c->stats[j]);
 	}
+	if (c->bytes_sent)
+		n += sprintf(b +n, "bytes sent=%lu\n", c->bytes_sent);
+
+	if (c->bytes_received)
+		n += sprintf(b +n, "bytes received=%lu\n", c->bytes_received);
+
+	if (c->min_packet_size)
+		n += sprintf(b + n, "MinPSize=%u\n", c->min_packet_size);
+
+	if (c->max_packet_size)
+		n += sprintf(b + n, "MaxPSize=%u\n", c->max_packet_size);
+
+	if (c->stats[packets_received]) {
+		n += sprintf(b +n, "AvgPsize=%lu\n", c->bytes_received / c->stats[packets_received]);
+	}
+
 	return n;
 }
 

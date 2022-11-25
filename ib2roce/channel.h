@@ -103,6 +103,10 @@ struct rdma_channel {
 	unsigned int nr_send;		/* Maximum number of write buffers to use */
 	unsigned int nr_receive;	/* Number of read buffer to post */
 	unsigned stats[nr_stats];
+	unsigned long bytes_sent;
+	unsigned long bytes_received;
+	unsigned min_packet_size;
+	unsigned max_packet_size;
 	enum channel_type type;
 	struct fifo send_queue;		/* Packets that were deferred for write */
 	bool listening;			/* rdmacm Channel is listening for connections */
