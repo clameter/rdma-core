@@ -536,10 +536,16 @@ int main(int argc, char **argv)
 	if (ret && !testing)
 		return ret;
 
-	logg (LOG_NOTICE, "%s device = %s:%d, %s device = %s:%d. Multicast Groups=%d MGIDs=%s Buffers=%u\n",
+	if (mode == mode_bridge)
+		logg (LOG_NOTICE, "%s device = %s:%d, %s device = %s:%d. Multicast Groups=%d MGIDs=%s Buffers=%u\n",
 			interfaces_text[INFINIBAND], i2r[INFINIBAND].rdma_name, i2r[INFINIBAND].port,
 			interfaces_text[ROCE], i2r[ROCE].rdma_name, i2r[ROCE].port,
 			nr_mc, mgid_text(NULL), nr_buffers);
+	else {
+		logg (LOG_NOTICE, "%s device = %s:%d. Multicast Groups=%d MGIDs=%s Buffers=%u\n",
+			interfaces_text[default_interface], i2r[default_interface].rdma_name, i2r[default_interface].port,
+			nr_mc, mgid_text(NULL), nr_buffers);
+	}
 
 	numa_run_on_node(i2r[INFINIBAND].context ? i2r[INFINIBAND].numa_node : i2r[ROCE].numa_node);
 	init_buf();	/* Setup interface registers memmory */

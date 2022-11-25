@@ -87,6 +87,8 @@ static bool raw = false;	/* Use raw channels */
 static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
 #endif
 
+enum interfaces default_interface;
+
 static int mc_per_qp = 0;	/* 0 = Unlimited */
 
 struct i2r_interface i2r[NR_INTERFACES];
@@ -247,11 +249,12 @@ int find_rdma_devices(void)
 	skip:
 		if (!found)
 			ibv_close_device(c);
+		else
+			if (mode != mode_bridge)
+				break;
 	}
 
-
 	ibv_free_device_list(list);
-
 
 	if (!i2r[ROCE].context) {
 
@@ -266,7 +269,9 @@ int find_rdma_devices(void)
 			/* There is no ROCE device so we cannot bridge */
 			bridging = false;
 		}
-	}
+	} else
+		if (mode != mode_bridge)
+			default_interface = ROCE;
 
 	if (!i2r[INFINIBAND].context) {
 
@@ -278,7 +283,7 @@ int find_rdma_devices(void)
 				/* User specd IB device */
 				logg(LOG_EMERG, "Infiniband device %s not found.\n", ib_name);
 			else {
-				if (!bridging) {
+				if (!bridging && mode == mode_bridge) {
 					logg(LOG_EMERG, "No RDMA Devices available.\n");
 					return 1;
 				}
@@ -286,7 +291,9 @@ int find_rdma_devices(void)
 				bridging = false;
 			}
 		}
-	}
+	} else
+		if (mode != mode_bridge)
+			default_interface = INFINIBAND;
 	return 0;
 }
 

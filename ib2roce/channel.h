@@ -64,6 +64,8 @@ enum stats { packets_received, packets_sent, packets_bridged, packets_invalid, p
 		nr_stats
 };
 
+extern enum interfaces default_interface;
+
 extern const char *stats_text[nr_stats];
 
 enum channel_type { channel_rdmacm, channel_ud, channel_qp1,
