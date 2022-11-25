@@ -59,9 +59,7 @@ extern const char *interfaces_text[NR_INTERFACES];
 
 enum stats { packets_received, packets_sent, packets_bridged, packets_invalid, packets_queued,
 		join_requests, join_failure, join_success,
-		leave_requests,
-		pgm_dup, pgm_odata, pgm_rdata, pgm_spm, pgm_nak, pgm_ack,
-		nr_stats
+		leave_requests, nr_stats
 };
 
 extern enum interfaces default_interface;

@@ -220,13 +220,9 @@ void brief_status(FILE *out)
 		if (i->mc_rate_limited)
 			n+= sprintf(counts + n, " R%d", i->mc_rate_limited);
 
-		if (pgm_mode != pgm_none && (stats[pgm_spm] || stats[pgm_odata]))
-			n+= sprintf(counts + n, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
-				i->nr_tsi,
-				stats[pgm_spm],
-				stats[pgm_odata],
-				stats[pgm_rdata],
-				stats[pgm_nak]);
+		if (pgm_mode != pgm_off)
+			n += pgm_brief_stats(counts + n, i);
+
 		if (sum_stats(stats, i, channel_ud) && stats[packets_received]) {
 				n+= sprintf(counts + n, ", UD %d/%d",
 					stats[packets_received],

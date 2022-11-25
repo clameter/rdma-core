@@ -47,7 +47,7 @@
  * PGM RFC3208 Support
  */
 
-enum pgm_mode pgm_mode = pgm_none;
+enum pgm_mode pgm_mode = pgm_off;
 
 struct nak {
 	struct pgm_nak *next;
@@ -75,7 +75,12 @@ struct pgm_stream {
 	unsigned rlast;			/* Last Repair data */
 	unsigned last_seq;		/* Last in sequence */
 	unsigned oldest;		/* The oldest message available locally */
-	struct nak *nak;
+	unsigned dup, odata, rdata, spm, ack, nak;
+	unsigned rdup;
+	unsigned first_sqn, last_sqn;
+	unsigned sqn_seq_errs;
+	unsigned last_missed_sqn, last_missed_sqns;
+//	struct nak *nak;
 	char text[60];
 };
 
@@ -204,7 +209,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 			if (!s)
 				break;
 
-			st(c, pgm_spm);
+			s->spm++;
 
 			s->trail = ntohl(spm.spm_trail);
 			s->lead = ntohl(spm.spm_lead);
@@ -253,19 +258,19 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 			}
 
 			if (header.pgm.pgm_type == PGM_RDATA)
-				st(c, pgm_rdata);
+				s->rdata++;
 			else
-				st(c, pgm_odata);
+				s->odata++;
 
 			if (sqn < s->last_seq) {
-				st(c, pgm_dup);
+				s->dup++;
 				ret = false;
 				logg(LOG_NOTICE, "%s: Repeated data out of Window\n", s->text);
 				break;
 			}
 
 			if (sqn == s->last) {
-				st(c, pgm_dup);
+				s->dup++;
 				ret = false;
 				logg(LOG_NOTICE, "%s: Sender is duplicating traffic %d\n", s->text, sqn);
 				break;
@@ -273,7 +278,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 
 			if (sqn < s->last && find_record(i, &tsi, sqn)) {
-				st(c, pgm_dup);
+				s->dup++;
 				ret = false;
 				logg(LOG_NOTICE, "%s: Repeated data in Window SQN=%d\n", s->text, sqn);
 				break;
@@ -346,7 +351,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 		case PGM_NCF:		/* Multicast downstream */
 		case PGM_NNAK:		/* Unicast upstream DLR ->source */
 			PULL(buf, nak);
-			st(c, pgm_nak);
+			s->nak++;
 			logg(LOG_NOTICE, "%s: NAK/NCF/NNAK SQN=%x NLA=%s GRP_NLA=%s\n",
 				text, nak.nak_sqn, inet_ntoa(nak.nak_src_nla),
 				inet_ntoa(nak.nak_grp_nla));
@@ -367,7 +372,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 		/* Not RFC compliant but it seems to be used sometimes */
 		case PGM_ACK:		/* Unicast upstream */
 			PULL(buf, ack);
-			st(c, pgm_ack);
+			s->ack++;
 			logg(LOG_NOTICE, "%s: ACK RX_MAX=%x BITMAP=%x\n", text, ntohl(ack.ack_rx_max), ack.ack_bitmap);
 			break;
 
@@ -514,7 +519,29 @@ static void tsi_cmd(FILE *out, char *parameters)
 				fprintf(out, "%s: lead=%d trail=%d last=%d lastRepairData=%d oldest=%d\n",
 					buf, ps->lead, ps->trail, ps->last, ps->rlast, ps->oldest);
 
-			}
+				if (ps->dup)
+					fprintf(out, "Dup(OData!)=%u", ps->dup);
+
+				if (ps->rdup)
+					fprintf(out, "Dup(Rdata!)=%u", ps->rdup);
+
+				if (ps->rdata)
+					fprintf(out, "rdata=%u", ps->rdata);
+
+				if (ps->ack)
+					fprintf(out, "ack=%u", ps->ack);
+
+				if (ps->nak)
+					fprintf(out, "nak=%u", ps->nak);
+
+				if (ps->first_sqn)
+					fprintf(out, "firstsqn=%u", ps->first_sqn);
+
+				if (ps->sqn_seq_errs) {
+					fprintf(out, "sqnerrs=%u lastmissed=%u nr_missed=%u",
+						ps->sqn_seq_errs, ps->last_missed_sqn, ps->last_missed_sqns);
+				}
+  			}
 			offset += nr;
 		}
 	}
@@ -529,4 +556,44 @@ static void pgm_init(void)
 
 	init_pgm_streams();
 }
+
+/* Summarize TSI stats for an interface */
+unsigned pgm_brief_stats(char *b, struct i2r_interface *i)
+{
+
+	struct pgm_stream *streams[10];
+	unsigned offset = 0;
+	unsigned nr;
+	unsigned nr_streams = 0;
+	unsigned spm = 0;
+	unsigned odata = 0;
+	unsigned rdata = 0;
+	unsigned nak = 0;
+
+	if (!i->context || !i->pgm_tsi_hash)
+		return 0;
+
+	while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, 10, (void **)streams))) {
+		int j;
+
+		for (j = 0; j < nr; j++) {
+			struct pgm_stream *s = streams[j];
+
+			spm += s->spm;
+			odata += s->odata;
+			rdata += s->rdata;
+			nr_streams++;
+		}
+
+		offset += 10;
+	}
+
+	if (nr_streams && odata)
+
+		return sprintf(b, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
+				nr_streams, spm, odata, rdata, nak);
+	else
+		return 0;
+}
+
 

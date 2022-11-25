@@ -51,8 +51,7 @@ const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 
 const char *stats_text[nr_stats] = {
 	"PacketsReceived", "PacketsSent", "PacketsBridged", "PacketsInvalid", "PacketsQueued",
-	"JoinRequests", "JoinFailures", "JoinSuccess", "LeaveRequests",
-	"pgmdup", "pgm_odata", "pgm_rdata", "pgm_spm", "pgm_nak"
+	"JoinRequests", "JoinFailures", "JoinSuccess", "LeaveRequests"
 };
 
 bool latency = false;

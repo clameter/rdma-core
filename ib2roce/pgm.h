@@ -41,10 +41,12 @@
 #include "multicast.h"
 #include "buffers.h"
 
-enum pgm_mode { pgm_none, pgm_basic, pgm_passthrough, pgm_dlr, pgm_resend };
+enum pgm_mode { pgm_off, pgm_strict, pgm_llm, pgm_passthrough, pgm_dlr, pgm_resend };
 
 extern enum pgm_mode pgm_mode;
 
 bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf);
+
+unsigned pgm_brief_stats(char *b, struct i2r_interface *i);
 
 #endif
