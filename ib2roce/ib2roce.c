@@ -65,6 +65,7 @@
 #include "beacon.h"
 #include "cli.h"
 #include "pgm.h"
+#include "sender.h"
 
 #ifdef UNICAST
 #include "endpoint.h"
@@ -175,7 +176,7 @@ void receive_multicast(struct buf *buf)
 			goto discardit;
 		}
 
-		if (buf->ip.saddr == c->i->if_addr.sin_addr.s_addr) {
+		if (buf->ip.saddr == c->i->if_addr.sin_addr.s_addr && buf->w->qp_num == buf->w->src_qp) {
 			reason = "Loopback Packet";
 			goto discardit;
 		}
@@ -193,7 +194,7 @@ void receive_multicast(struct buf *buf)
 			goto discardit;
 		}
 
-		if (memcmp(&buf->grh.sgid, &c->i->gid, sizeof(union ibv_gid)) == 0) {
+		if (memcmp(&buf->grh.sgid, &c->i->gid, sizeof(union ibv_gid)) == 0 && buf->w->qp_num == buf->w->src_qp) {
 
 			reason = "Loopback Packet";
 			goto discardit;
@@ -564,6 +565,8 @@ int main(int argc, char **argv)
 
 	beacon_setup();
 
+	if (mode == mode_sender)
+		sender_setup();
 
 	post_receive_buffers();
 
@@ -581,6 +584,10 @@ int main(int argc, char **argv)
 		sd_notify(0, "STOPPING=1");
 
 	beacon_shutdown();
+
+	if (mode == mode_sender)
+		sender_shutdown();
+
 	stop_cores();
 
 	shutdown_roce();

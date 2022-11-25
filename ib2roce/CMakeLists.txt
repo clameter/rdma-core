@@ -16,6 +16,7 @@ rdma_sbin_executable(ib2roce
   interfaces.c
   cli.c
   pgm.c
+  sender.c
 )
 target_link_libraries(ib2roce LINK_PRIVATE
   ibverbs
