@@ -48,6 +48,15 @@
 
 #define MAX_CONCOMS 30
 
+enum operation_mode mode;
+
+
+static const char *mode_text[NR_MODES] = {
+	"ib2roce",
+	"mclisten",
+	"mcsender"
+};
+
 static struct concom {
 	const char *name;
 	bool prompt;
@@ -78,7 +87,7 @@ static void help(FILE *out, char *parameters)
 {
 	struct concom * cc;
 
-	fprintf(out, "List of ib2roce console commands:\n");
+	fprintf(out, "List of %s console commands:\n", mode_text[mode]);
 	fprintf(out, "Command		Description\n");
 	fprintf(out, "----------------------------------------\n");
 
@@ -94,7 +103,7 @@ static void exitcmd(FILE *out, char *parameters)
 
 static void prompt(void *private)
 {
-	printf("ib2roce-$ ");
+	printf("%s-$ ", mode_text[mode]);
 	fflush(stdout);
 };
 
@@ -319,6 +328,26 @@ void parse_options(int argc, char **argv)
 	int op;
 	int i;
 
+	p = rindex(argv[0],'/');
+	if (p)
+		p++;
+	else
+		p = argv[0];
+
+	/* Find operation mode */
+	if (strncmp(p, "ib2roce", 7) == 0)
+		mode = mode_bridge;
+	else {
+		bridging = false;
+
+		if (strncmp(p, "mclisten", 8) == 0)
+			mode = mode_listen;
+		else if (strncmp(p, "mcsender", 8) == 0)
+			mode = mode_sender;
+		else
+			panic("Cannot identify operation mode. Binary must be called mclisten, mcsender or ib2roce\n");
+	}
+
 	/* Compose opt_string from opts */
 	p = opt_string;
 	for(i = 0; i < 128; i++) {
@@ -409,8 +438,8 @@ static void help_opt(char *optarg)
 {
 	int i;
 
-	printf("ib2roce " VERSION " Christoph Lameter <cl@linux.com>\n");
-	printf("Usage: ib2roce [<option>] ... \n");
+	printf("%s " VERSION " Christoph Lameter <cl@linux.com>\n", mode_text[mode]);
+	printf("Usage: %s [<option>] ... \n", mode_text[mode]);
 
 	for(i = 0; i < 128; i++) {
 		struct opts_data *od = opts_datas + i;
@@ -447,7 +476,7 @@ static void opts_init(void)
 	register_option("help", no_argument, 'h', help_opt, NULL, "Show these instructions");
 
 	register_concom("help",	true,	0,	"Print a list of commands",			help );
-	register_concom("quit",	false,	0,	"Terminate ib2roce",				exitcmd);
+	register_concom("quit",	false,	0,	"Terminate process",				exitcmd);
 }
 
 

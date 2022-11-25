@@ -42,6 +42,10 @@
 
 #define VERSION "2022.0512"
 
+enum operation_mode { mode_bridge, mode_listen, mode_sender, NR_MODES };
+
+extern enum operation_mode mode;
+
 /* Command registration for the CLI */
 void register_concom(const char *name, bool prompt, int parameters, const char *text, void (*callback)(FILE *out, char *parameters));
 
