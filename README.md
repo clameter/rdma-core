@@ -14,6 +14,7 @@ The userspace component of the libibverbs RDMA kernel drivers are included
 under the providers/ directory. Support for the following Kernel RDMA drivers
 is included:
 
+ - bnxt_re.ko
  - efa.ko
  - erdma.ko
  - iw_cxgb4.ko
@@ -21,6 +22,7 @@ is included:
  - hns-roce.ko
  - irdma.ko
  - ib_qib.ko
+ - mana_ib.ko
  - mlx4_ib.ko
  - mlx5_ib.ko
  - ib_mthca.ko
@@ -72,7 +74,7 @@ NOTE: Fedora Core uses the name 'ninja-build' for the 'ninja' command.
 $ zypper install cmake gcc libnl3-devel libudev-devel ninja pkg-config valgrind-devel python3-devel python3-Cython python3-docutils pandoc
 ```
 
-## Building on CentOS 6/7, Amazon Linux 1/2
+## Building on CentOS 7, Amazon Linux 2
 
 Install required packages:
 

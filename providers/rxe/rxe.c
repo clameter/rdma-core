@@ -574,10 +574,11 @@ static int rxe_poll_cq(struct ibv_cq *ibcq, int ne, struct ibv_wc *wc)
 	return npolled;
 }
 
-static struct ibv_srq *rxe_create_srq(struct ibv_pd *pd,
+static struct ibv_srq *rxe_create_srq(struct ibv_pd *ibpd,
 				      struct ibv_srq_init_attr *attr)
 {
 	struct rxe_srq *srq;
+	struct ibv_srq *ibsrq;
 	struct ibv_create_srq cmd;
 	struct urxe_create_srq_resp resp;
 	int ret;
@@ -586,7 +587,9 @@ static struct ibv_srq *rxe_create_srq(struct ibv_pd *pd,
 	if (srq == NULL)
 		return NULL;
 
-	ret = ibv_cmd_create_srq(pd, &srq->ibv_srq, attr, &cmd, sizeof(cmd),
+	ibsrq = &srq->vsrq.srq;
+
+	ret = ibv_cmd_create_srq(ibpd, ibsrq, attr, &cmd, sizeof(cmd),
 				 &resp.ibv_resp, sizeof(resp));
 	if (ret) {
 		free(srq);
@@ -595,9 +598,9 @@ static struct ibv_srq *rxe_create_srq(struct ibv_pd *pd,
 
 	srq->rq.queue = mmap(NULL, resp.mi.size,
 			     PROT_READ | PROT_WRITE, MAP_SHARED,
-			     pd->context->cmd_fd, resp.mi.offset);
+			     ibpd->context->cmd_fd, resp.mi.offset);
 	if ((void *)srq->rq.queue == MAP_FAILED) {
-		ibv_cmd_destroy_srq(&srq->ibv_srq);
+		ibv_cmd_destroy_srq(ibsrq);
 		free(srq);
 		return NULL;
 	}
@@ -606,7 +609,46 @@ static struct ibv_srq *rxe_create_srq(struct ibv_pd *pd,
 	srq->rq.max_sge = attr->attr.max_sge;
 	pthread_spin_init(&srq->rq.lock, PTHREAD_PROCESS_PRIVATE);
 
-	return &srq->ibv_srq;
+	return ibsrq;
+}
+
+static struct ibv_srq *rxe_create_srq_ex(
+		struct ibv_context *ibcontext,
+		struct ibv_srq_init_attr_ex *attr_ex)
+{
+	struct rxe_srq *srq;
+	struct ibv_srq *ibsrq;
+	struct ibv_create_xsrq cmd;
+	struct urxe_create_srq_ex_resp resp;
+	int ret;
+
+	srq = calloc(1, sizeof(*srq));
+	if (srq == NULL)
+		return NULL;
+
+	ibsrq = &srq->vsrq.srq;
+
+	ret = ibv_cmd_create_srq_ex(ibcontext, &srq->vsrq, attr_ex,
+			  &cmd, sizeof(cmd), &resp.ibv_resp, sizeof(resp));
+	if (ret) {
+		free(srq);
+		return NULL;
+	}
+
+	srq->rq.queue = mmap(NULL, resp.mi.size,
+			     PROT_READ | PROT_WRITE, MAP_SHARED,
+			     ibcontext->cmd_fd, resp.mi.offset);
+	if ((void *)srq->rq.queue == MAP_FAILED) {
+		ibv_cmd_destroy_srq(ibsrq);
+		free(srq);
+		return NULL;
+	}
+
+	srq->mmap_info = resp.mi;
+	srq->rq.max_sge = attr_ex->attr.max_sge;
+	pthread_spin_init(&srq->rq.lock, PTHREAD_PROCESS_PRIVATE);
+
+	return ibsrq;
 }
 
 static int rxe_modify_srq(struct ibv_srq *ibsrq,
@@ -658,13 +700,13 @@ static int rxe_query_srq(struct ibv_srq *srq, struct ibv_srq_attr *attr)
 	return ibv_cmd_query_srq(srq, attr, &cmd, sizeof(cmd));
 }
 
-static int rxe_destroy_srq(struct ibv_srq *ibvsrq)
+static int rxe_destroy_srq(struct ibv_srq *ibsrq)
 {
 	int ret;
-	struct rxe_srq *srq = to_rsrq(ibvsrq);
+	struct rxe_srq *srq = to_rsrq(ibsrq);
 	struct rxe_queue_buf *q = srq->rq.queue;
 
-	ret = ibv_cmd_destroy_srq(ibvsrq);
+	ret = ibv_cmd_destroy_srq(ibsrq);
 	if (!ret) {
 		if (srq->mmap_info.size)
 			munmap(q, srq->mmap_info.size);
@@ -715,11 +757,11 @@ out:
 	return rc;
 }
 
-static int rxe_post_srq_recv(struct ibv_srq *ibvsrq,
+static int rxe_post_srq_recv(struct ibv_srq *ibsrq,
 			     struct ibv_recv_wr *recv_wr,
 			     struct ibv_recv_wr **bad_recv_wr)
 {
-	struct rxe_srq *srq = to_rsrq(ibvsrq);
+	struct rxe_srq *srq = to_rsrq(ibsrq);
 	int rc = 0;
 
 	pthread_spin_lock(&srq->rq.lock);
@@ -764,7 +806,6 @@ static void wr_atomic_cmp_swp(struct ibv_qp_ex *ibqp, uint32_t rkey,
 	wqe->wr.wr.atomic.swap = swap;
 	wqe->wr.wr.atomic.rkey = rkey;
 	wqe->iova = remote_addr;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -787,7 +828,6 @@ static void wr_atomic_fetch_add(struct ibv_qp_ex *ibqp, uint32_t rkey,
 	wqe->wr.wr.atomic.compare_add = add;
 	wqe->wr.wr.atomic.rkey = rkey;
 	wqe->iova = remote_addr;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -812,7 +852,6 @@ static void wr_bind_mw(struct ibv_qp_ex *ibqp, struct ibv_mw *ibmw,
 	wqe->wr.wr.mw.mw_rkey = ibmw->rkey;
 	wqe->wr.wr.mw.rkey = rkey;
 	wqe->wr.wr.mw.access = info->mw_access_flags;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -831,7 +870,6 @@ static void wr_local_inv(struct ibv_qp_ex *ibqp, uint32_t invalidate_rkey)
 	wqe->wr.opcode = IBV_WR_LOCAL_INV;
 	wqe->wr.send_flags = qp->vqp.qp_ex.wr_flags;
 	wqe->wr.ex.invalidate_rkey = invalidate_rkey;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -853,7 +891,6 @@ static void wr_rdma_read(struct ibv_qp_ex *ibqp, uint32_t rkey,
 	wqe->wr.wr.rdma.remote_addr = remote_addr;
 	wqe->wr.wr.rdma.rkey = rkey;
 	wqe->iova = remote_addr;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -875,7 +912,55 @@ static void wr_rdma_write(struct ibv_qp_ex *ibqp, uint32_t rkey,
 	wqe->wr.wr.rdma.remote_addr = remote_addr;
 	wqe->wr.wr.rdma.rkey = rkey;
 	wqe->iova = remote_addr;
-	wqe->ssn = qp->ssn++;
+
+	advance_qp_cur_index(qp);
+}
+
+static void wr_flush(struct ibv_qp_ex *ibqp, uint32_t rkey,
+		     uint64_t remote_addr, size_t length,
+		     uint8_t type, uint8_t level)
+{
+	struct rxe_qp *qp = container_of(ibqp, struct rxe_qp, vqp.qp_ex);
+	struct rxe_send_wqe *wqe = addr_from_index(qp->sq.queue, qp->cur_index);
+
+	if (check_qp_queue_full(qp))
+		return;
+
+	memset(wqe, 0, sizeof(*wqe));
+
+	wqe->wr.wr_id = qp->vqp.qp_ex.wr_id;
+	wqe->wr.opcode = IBV_WR_FLUSH;
+	wqe->wr.send_flags = qp->vqp.qp_ex.wr_flags;
+	wqe->wr.wr.flush.remote_addr = remote_addr;
+	wqe->wr.wr.flush.rkey = rkey;
+	wqe->wr.wr.flush.type = type;
+	wqe->wr.wr.flush.level = level;
+	wqe->iova = remote_addr;
+
+	advance_qp_cur_index(qp);
+}
+
+static void wr_atomic_write(struct ibv_qp_ex *ibqp, uint32_t rkey,
+			    uint64_t remote_addr, const void *atomic_wr)
+{
+	struct rxe_qp *qp = container_of(ibqp, struct rxe_qp, vqp.qp_ex);
+	struct rxe_send_wqe *wqe = addr_from_index(qp->sq.queue, qp->cur_index);
+
+	if (check_qp_queue_full(qp))
+		return;
+
+	memset(wqe, 0, sizeof(*wqe));
+
+	wqe->wr.wr_id = qp->vqp.qp_ex.wr_id;
+	wqe->wr.opcode = IBV_WR_ATOMIC_WRITE;
+	wqe->wr.send_flags = qp->vqp.qp_ex.wr_flags;
+	wqe->wr.wr.rdma.remote_addr = remote_addr;
+	wqe->wr.wr.rdma.rkey = rkey;
+	memcpy(wqe->dma.atomic_wr, atomic_wr, 8);
+	wqe->dma.length = 8;
+	wqe->dma.resid = 8;
+
+	wqe->iova = remote_addr;
 
 	advance_qp_cur_index(qp);
 }
@@ -898,7 +983,6 @@ static void wr_rdma_write_imm(struct ibv_qp_ex *ibqp, uint32_t rkey,
 	wqe->wr.wr.rdma.rkey = rkey;
 	wqe->wr.ex.imm_data = imm_data;
 	wqe->iova = remote_addr;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -916,7 +1000,6 @@ static void wr_send(struct ibv_qp_ex *ibqp)
 	wqe->wr.wr_id = qp->vqp.qp_ex.wr_id;
 	wqe->wr.opcode = IBV_WR_SEND;
 	wqe->wr.send_flags = qp->vqp.qp_ex.wr_flags;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -935,7 +1018,6 @@ static void wr_send_imm(struct ibv_qp_ex *ibqp, __be32 imm_data)
 	wqe->wr.opcode = IBV_WR_SEND_WITH_IMM;
 	wqe->wr.send_flags = qp->vqp.qp_ex.wr_flags;
 	wqe->wr.ex.imm_data = imm_data;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -954,7 +1036,6 @@ static void wr_send_inv(struct ibv_qp_ex *ibqp, uint32_t invalidate_rkey)
 	wqe->wr.opcode = IBV_WR_SEND_WITH_INV;
 	wqe->wr.send_flags = qp->vqp.qp_ex.wr_flags;
 	wqe->wr.ex.invalidate_rkey = invalidate_rkey;
-	wqe->ssn = qp->ssn++;
 
 	advance_qp_cur_index(qp);
 }
@@ -1197,7 +1278,8 @@ enum {
 		IBV_QP_EX_WITH_SEND | IBV_QP_EX_WITH_SEND_WITH_IMM |
 		IBV_QP_EX_WITH_RDMA_READ | IBV_QP_EX_WITH_ATOMIC_CMP_AND_SWP |
 		IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD | IBV_QP_EX_WITH_LOCAL_INV |
-		IBV_QP_EX_WITH_BIND_MW | IBV_QP_EX_WITH_SEND_WITH_INV,
+		IBV_QP_EX_WITH_BIND_MW | IBV_QP_EX_WITH_SEND_WITH_INV |
+		IBV_QP_EX_WITH_FLUSH | IBV_QP_EX_WITH_ATOMIC_WRITE,
 
 	RXE_SUP_UC_QP_SEND_OPS_FLAGS =
 		IBV_QP_EX_WITH_RDMA_WRITE | IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM |
@@ -1256,11 +1338,17 @@ static void set_qp_send_ops(struct rxe_qp *qp, uint64_t flags)
 	if (flags & IBV_QP_EX_WITH_LOCAL_INV)
 		qp->vqp.qp_ex.wr_local_inv = wr_local_inv;
 
+	if (flags & IBV_QP_EX_WITH_ATOMIC_WRITE)
+		qp->vqp.qp_ex.wr_atomic_write = wr_atomic_write;
+
 	if (flags & IBV_QP_EX_WITH_RDMA_READ)
 		qp->vqp.qp_ex.wr_rdma_read = wr_rdma_read;
 
 	if (flags & IBV_QP_EX_WITH_RDMA_WRITE)
 		qp->vqp.qp_ex.wr_rdma_write = wr_rdma_write;
+
+	if (flags & IBV_QP_EX_WITH_FLUSH)
+		qp->vqp.qp_ex.wr_flush = wr_flush;
 
 	if (flags & IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM)
 		qp->vqp.qp_ex.wr_rdma_write_imm = wr_rdma_write_imm;
@@ -1373,25 +1461,25 @@ static int validate_send_wr(struct rxe_qp *qp, struct ibv_send_wr *ibwr,
 	enum ibv_wr_opcode opcode = ibwr->opcode;
 
 	if (ibwr->num_sge > sq->max_sge)
-		return -EINVAL;
+		return EINVAL;
 
 	if ((opcode == IBV_WR_ATOMIC_CMP_AND_SWP)
 	    || (opcode == IBV_WR_ATOMIC_FETCH_AND_ADD))
 		if (length < 8 || ibwr->wr.atomic.remote_addr & 0x7)
-			return -EINVAL;
+			return EINVAL;
 
 	if ((ibwr->send_flags & IBV_SEND_INLINE) && (length > sq->max_inline))
-		return -EINVAL;
+		return EINVAL;
 
 	if (ibwr->opcode == IBV_WR_BIND_MW) {
 		if (length)
-			return -EINVAL;
+			return EINVAL;
 		if (ibwr->num_sge)
-			return -EINVAL;
+			return EINVAL;
 		if (ibwr->imm_data)
-			return -EINVAL;
+			return EINVAL;
 		if ((qp_type(qp) != IBV_QPT_RC) && (qp_type(qp) != IBV_QPT_UC))
-			return -EINVAL;
+			return EINVAL;
 	}
 
 	return 0;
@@ -1497,7 +1585,6 @@ static int init_send_wqe(struct rxe_qp *qp, struct rxe_wq *sq,
 	wqe->dma.cur_sge	= 0;
 	wqe->dma.sge_offset	= 0;
 	wqe->state		= 0;
-	wqe->ssn		= qp->ssn++;
 
 	return 0;
 }
@@ -1527,7 +1614,7 @@ static int post_one_send(struct rxe_qp *qp, struct rxe_wq *sq,
 		return err;
 
 	if (queue_full(sq->queue))
-		return -ENOMEM;
+		return ENOMEM;
 
 	advance_producer(sq->queue);
 
@@ -1745,6 +1832,7 @@ static const struct verbs_context_ops rxe_ctx_ops = {
 	.resize_cq = rxe_resize_cq,
 	.destroy_cq = rxe_destroy_cq,
 	.create_srq = rxe_create_srq,
+	.create_srq_ex = rxe_create_srq_ex,
 	.modify_srq = rxe_modify_srq,
 	.query_srq = rxe_query_srq,
 	.destroy_srq = rxe_destroy_srq,
