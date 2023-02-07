@@ -325,70 +325,6 @@ int send_pending_buffers(struct rdma_channel *c)
 	return false;
 }
 
-static void send_queue_monitor(void *private);
-
-#define SEND_QUEUE_MAX 20
-
-struct rdma_channel *send_queue_table[SEND_QUEUE_MAX];
-
-static void sched_send_queue_monitor(void)
-{
-	add_event(now + milliseconds(10),
-		send_queue_monitor, NULL, "SendQueue");
-}
-
-static void send_queue_add(struct rdma_channel *c)
-{
-	int free = -1;
-	int i;
-	bool inuse = false;
-
-	for( i = 0; i < SEND_QUEUE_MAX; i++) {
-		struct rdma_channel *r = send_queue_table[i];
-
-		if (r) {
-			if (r == c)
-				return;
-
-			inuse = true;
-		} else {
-			if (free < 0)
-				free = i;
-		}
-        }
-
-        if (free >= 0)
-                send_queue_table[free] = c;
-        else
-                panic("No slots left in send_queue\n");
-
-	if (!inuse)
-		sched_send_queue_monitor();
-}
-
-void send_queue_monitor(void *private)
-{
-	int i;
-	bool active = false;
-
-	for(i = 0; i < SEND_QUEUE_MAX; i++) {
-		struct rdma_channel *c = send_queue_table[i];
-
-		if (!c)
-			continue;
-
-		active = true;
-		if (send_pending_buffers(c)) {
-			/* We just drained the queue */
-			send_queue_table[i] = NULL;
-		}
-
-	}
-
-	if (active)
-		sched_send_queue_monitor();
-}
-
 /*
  * Send data to a target. No metadata is used in struct buf. However, the buffer must be passed to the wc in order
  * to be able to free up resources when done.
@@ -444,14 +380,7 @@ int send_to(struct rdma_channel *c,
 	return ret;
 
 queue:
-	if (fifo_put(&c->send_queue, buf) && !current)
-		/*
-		 * This moves the handling onto the high latency thread.
-		 * Adding the queue is only required when we add the first
-		 * buffer
-		 */
-		send_queue_add(c);
-
+	fifo_put(&c->send_queue, buf);
 	st(c, packets_queued);
 	return 0;
 }
