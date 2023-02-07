@@ -162,7 +162,7 @@ void channel_destroy(struct rdma_channel *c);
 
 void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *));
 
-void calculate_pps(void *private);
+void start_calculate_pps(void);
 
 void show_core_config(void);
 

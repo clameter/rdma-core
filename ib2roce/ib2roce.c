@@ -350,7 +350,7 @@ static void setup_timed_events(void)
 	if (background)
 		logging(NULL);
 
-	calculate_pps(NULL);
+	start_calculate_pps();
 
 	check_joins(&i2r[INFINIBAND].channels, &i2r[ROCE].channels);
 

@@ -661,6 +661,7 @@ void arm_channels(struct core_info *core)
 }
 
 static int stat_interval = 10;		/* Interval for statistics */
+static uint64_t stat_start;		/* Starting the next calculation */
 
 static void calculate_pps_channel(FILE *out, struct rdma_channel *c)
 {
@@ -682,10 +683,17 @@ static void calculate_pps_channel(FILE *out, struct rdma_channel *c)
 	c->last_snapshot = now;
 }
 
-void calculate_pps(void *private)
+static void calculate_pps(void *private)
 {
 	all_channels(NULL, calculate_pps_channel);
-	add_event(now + seconds(stat_interval), calculate_pps, NULL, "pps calculation");
+	stat_start += seconds(stat_interval);
+	add_event(stat_start, calculate_pps, NULL, "pps calculation");
+}
+
+void start_calculate_pps(void)
+{
+	stat_start = now;
+	calculate_pps(NULL);
 }
 
 static void channel_zap(FILE *out, struct rdma_channel *c)
