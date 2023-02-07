@@ -142,13 +142,29 @@ int64_t time_to_next_event(void)
 		return NO_EVENTS;
 }
 
+char *print_time(uint64_t time)
+{
+	static char buf[20];
+
+	if (time > 10 * ONE_SECOND)
+		sprintf(buf, "%lds", (time + ONE_SECOND /2 ) / ONE_SECOND);
+	else if (time > 10 * ONE_MILLISECOND)
+		sprintf(buf, "%ldms", (time + ONE_MICROSECOND / 2 ) /ONE_MILLISECOND);
+	else if (time > 10 * ONE_MICROSECOND)
+		sprintf(buf, "%ldus", (time + ONE_MICROSECOND / 2 )/ ONE_MICROSECOND);
+	else
+		sprintf(buf, "%ldns", time);
+
+	return buf;
+}
+
 int get_timer_list(char *buf, char separator)
 {
 	int n = 0;
 
 	now = timestamp();
 	for(struct timed_event *z = next_event; z; z = z->next)
-		n += sprintf(buf + n, "%ldms%c", z->time > now ? (z->time - now) / ONE_MILLISECOND : 0,  separator);
+		n += sprintf(buf + n, "%s(%s)%c", z->text, print_time(z->time > now ? (z->time - now) : 0),  separator);
 
 	return n;
 }
@@ -329,7 +345,7 @@ static void event_cmd(FILE *out, char *parameters)
 	if (next_event) {
 
 		for(struct timed_event *z = next_event; z; z = z->next)
-			fprintf(out, "%ldms %s\n", (z->time - timestamp()) / ONE_MILLISECOND, z->text);
+			fprintf(out, "%s %s\n", print_time(z->time - now), z->text);
 
 	} else
 		fprintf(out, "No events.\n");

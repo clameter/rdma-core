@@ -124,6 +124,7 @@ void terminate(int x);
 /* Get a textual representation of the timers */
 int get_timer_list(char *b, char separator);
 
+char *print_time(uint64_t);
 void start_cores(void);
 void stop_cores(void);
 

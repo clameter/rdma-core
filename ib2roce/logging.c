@@ -202,7 +202,7 @@ void brief_status(FILE *out)
 	if (n == 0) {
 		events = "No upcoming events";
 	} else {
-		snprintf(buf2, sizeof(buf2), "Events in %s", buf);
+		snprintf(buf2, sizeof(buf2), "Events: %s", buf);
 		events = buf2;
 	}
 
@@ -237,9 +237,9 @@ void brief_status(FILE *out)
 	}
 
 	if (out == stdout)
-		logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
+		logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s", events, active_mc, nr_mc, counts);
 	else
-		fprintf(out, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
+		fprintf(out, "%s. Groups=%d/%d. Packets=%s", events, active_mc, nr_mc, counts);
 
 #ifdef UNICAST
 	list_endpoints(i2r + INFINIBAND);
