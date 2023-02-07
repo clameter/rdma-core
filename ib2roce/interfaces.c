@@ -1088,6 +1088,10 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 
 	/* Since we freed some buffers up we may be able to post more of them */
 	post_receive(c);
+
+	/* If we got some completes then we can push more packets into the queue */
+	if (!fifo_empty(&c->send_queue))
+		send_pending_buffers(c);
 }
 
 /*
@@ -1120,8 +1124,6 @@ void scan_cqs(void *private)
 				continue;
 			}
 		}
-		if (!fifo_empty(&c->send_queue))
-			send_pending_buffers(c);
 	}
 }
 
