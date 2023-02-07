@@ -83,7 +83,7 @@ struct buf *alloc_buffer(struct rdma_channel *c)
 	do {
 		buf = nextbuffer;
 		if (!buf)
-			return NULL;
+			goto oom;
 
 		next = buf->next;
 	} while (!buf_cmpxchg(&nextbuffer, buf, next));
@@ -100,6 +100,10 @@ struct buf *alloc_buffer(struct rdma_channel *c)
 			panic("buffer content not zeroed\n");
 #endif
 	return buf;
+
+oom:
+	panic("Out of Buffers allocating for channel %s\n", c ? c->text : "Unknown");
+	return NULL;
 }
 
 void free_buffer(struct buf *buf)
@@ -336,6 +340,7 @@ int send_to(struct rdma_channel *c,
 {
 	int ret;
 	struct ibv_send_wr *bad_send_wr;
+	unsigned backlog = fifo_items(&c->send_queue);
 
 	if (!ai->ah)
 		panic("Send without a route to a destination\n");
@@ -360,7 +365,7 @@ int send_to(struct rdma_channel *c,
 	buf->sge.lkey = c->mr->lkey;
 	buf->sge.addr = (uint64_t)addr;
 
-	if (!fifo_empty(&c->send_queue) || c->active_send_buffers >= c->nr_send)
+	if (backlog || c->active_send_buffers >= c->nr_send)
 		goto queue;
 
 	c->active_send_buffers++;
@@ -382,6 +387,21 @@ int send_to(struct rdma_channel *c,
 queue:
 	fifo_put(&c->send_queue, buf);
 	st(c, packets_queued);
+
+	if (backlog > c->max_backlog) {
+		if (!c->backlog_drop)
+			logg(LOG_WARNING, "Backlog for %s has more than %d buffers. Starting to drop from the backlog.\n",
+			       c->text, c->max_backlog);
+		do {
+
+			buf = fifo_get(&c->send_queue);
+			if (!buf)
+				break;
+			put_buf(buf);
+			c->backlog_drop++;
+
+		} while (true);
+	}
 	return 0;
 }
 

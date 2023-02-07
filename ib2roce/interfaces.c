@@ -972,11 +972,6 @@ void post_receive(struct rdma_channel *c)
 
 		struct buf *buf = alloc_buffer(c);
 
-		if (!buf) {
-			logg(LOG_WARNING, "%s: No free buffers left\n", c->text);
-			return;
-		}
-
 		/* Use the buffer address for the completion handler */
 		recv_wr.wr_id = (uint64_t)buf;
 		sge.addr = (uint64_t)buf->raw;

@@ -107,6 +107,8 @@ struct rdma_channel {
 	unsigned max_packet_size;
 	enum channel_type type;
 	struct fifo send_queue;		/* Packets that were deferred for write */
+	unsigned max_backlog;
+	unsigned backlog_drop;	/* Packets dropped from backlog */
 	bool listening;			/* rdmacm Channel is listening for connections */
 	unsigned instance;		/* If multuple instances exist */
 	const char *text;

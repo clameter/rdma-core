@@ -173,6 +173,7 @@ retry:
 	c->nr_cq = ci->nr_cq;
 	c->nr_send = ci->nr_send;
 	c->nr_receive = ci->nr_cq - ci->nr_send;
+	c->max_backlog = 10000;
 	fifo_init(&c->send_queue);
 
 	if (ci->setup(c)) {
@@ -772,8 +773,8 @@ void channel_stat(int indent, FILE *out, struct rdma_channel *c)
 	memset(indent_str, ' ', indent);
 	indent_str[indent] = 0;
 
-	fprintf(out, "%sChannel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u\n", indent_str, c->text,
-		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_send, c->cq_high, fifo_items(&c->send_queue));
+	fprintf(out, "%sChannel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u BacklogDrops=%u\n", indent_str, c->text,
+		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_send, c->cq_high, fifo_items(&c->send_queue), c->backlog_drop);
 
 	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))
 		fprintf(out, "%s pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n",
