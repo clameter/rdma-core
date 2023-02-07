@@ -46,7 +46,8 @@ static unsigned sendbatch = 1;
 static unsigned sendlen = 1024;
 
 static uint64_t sender_interval;
-static unsigned sender_seq = 1;
+static uint64_t sender_time;
+static unsigned sender_seq;
 
 static unsigned sessionid;
 static char hostname[40];
@@ -110,7 +111,8 @@ static void sender_send(void *private)
 		sender_seq++;
 	}
 
-	add_event(timestamp() + sender_interval, sender_send, NULL, "Sender Send");
+	sender_time += sender_interval;
+	add_event(sender_time, sender_send, NULL, "*Sender Send");
 }
 
 void sender_shutdown(void)
@@ -133,8 +135,9 @@ void sender_setup(void)
 	if (!sender_interval)
 		return;
 
-	add_event(timestamp() + ONE_SECOND + rand() % sender_interval,
-			sender_send, NULL, "Sender Send");
+	sender_time = timestamp() + ONE_SECOND + rand() % sender_interval;
+
+	add_event(sender_time, sender_send, NULL, "Sender Send");
 }
 
 __attribute__((constructor))
