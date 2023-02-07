@@ -312,6 +312,11 @@ static void systemd_set(char *optarg)
 	systemd = true;
 }
 
+static void continous_set(char *optarg)
+{
+	continous_cmd(stdout, optarg);
+}
+
 __attribute__((constructor))
 static void logging_init(void)
 {
@@ -321,5 +326,6 @@ static void logging_init(void)
 		"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)");
 	register_option("verbose", no_argument, 'v', verbose_set, NULL, "Increase logging detail");
 	register_option("systemd", no_argument, 's', systemd_set, NULL, "Operate from systemd");
+	register_option("continous", required_argument, '@', continous_set, NULL, "Print continuous status");
 }
 
