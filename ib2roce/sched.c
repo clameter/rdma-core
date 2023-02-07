@@ -139,7 +139,7 @@ int64_t time_to_next_event(void)
 	if (next_event)
 		return (long)next_event->time - (long)timestamp();
 	else
-		return 0;
+		return NO_EVENTS;
 }
 
 int get_timer_list(char *buf, char separator)
@@ -212,20 +212,22 @@ int event_loop(void)
 	while (!terminated) {
 
 		timeout = time_to_next_event();
-		if (timeout) {
-			/*
-			 * If we come from processing poll events then
-			 * give priority to more poll event processing
-			 */
-			if ((timeout <= 0 && events == 0) ||
-				       timeout < -(long)milliseconds(10))
 
-				timeout = run_events();
+		/* Run long overdue scheduled events */
+		while (timeout != NO_EVENTS && timeout < -(long)milliseconds(10))
+			timeout = run_events();
 
-		}
+		/* Run scheduled events as long as there are no pending polling events */
+		if (timeout != NO_EVENTS && !events && timeout <= 0)
+			timeout = run_events();
 
-		if (timeout <= 0 || timeout > (long)seconds(10))
+		/* Cap wait to 10 seconds */
+		if (timeout == NO_EVENTS || timeout > (long)seconds(10))
 			timeout = seconds(10);
+
+		/* Immediate return if we have to run scheduled events */
+		if (timeout < 0)
+			timeout  = 0;
 
 	 	events = poll(pfd, poll_items, (timeout + ONE_MILLISECOND/2) / ONE_MILLISECOND);
 

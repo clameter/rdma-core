@@ -106,6 +106,8 @@ void add_event(uint64_t when, event_callback *callback, void *private, const cha
 void register_callback(event_callback *callback, int fd, void *private);
 void unregister_callback(int fd);
 
+#define NO_EVENTS (-1000*ONE_SECOND)
+
 int64_t time_to_next_event(void);	/* Time till next event */
 
 uint64_t run_events(void);	/* Run events that are scheduled */
