@@ -1094,6 +1094,9 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 		send_pending_buffers(c);
 }
 
+
+#define MAX_POLL_CQE 2000
+
 /*
  * Polling function for each core enabling low latency operations.
  * This currently does not support NUMA affinities. It may need
@@ -1108,12 +1111,12 @@ void scan_cqs(void *private)
 	struct core_info *core = private;
 	int i;
 	int cqs;
-	struct ibv_wc wc[10];
+	struct ibv_wc wc[MAX_POLL_CQE];
 
 	for(i = 0; i < core->nr_channels; i++) {
 		struct rdma_channel *c = core->channel[i];
 
-		cqs = ibv_poll_cq(c->cq, 10, wc);
+		cqs = ibv_poll_cq(c->cq, MAX_POLL_CQE, wc);
 		if (cqs) {
 			if (cqs > 0)
 				process_cqes(c, wc, cqs);
@@ -1133,7 +1136,7 @@ void handle_comp_event(void *private)
 	struct rdma_channel *c;
 	struct ibv_cq *cq;
 	int cqs;
-	struct ibv_wc wc[10];
+	struct ibv_wc wc[MAX_POLL_CQE];
 
 	if (ibv_get_cq_event(events, &cq, (void **)&c)) {
 		logg(LOG_ERR, "ibv_get_cq_event failed with %s\n", errname());
@@ -1148,7 +1151,7 @@ void handle_comp_event(void *private)
        		panic("Invalid channel in handle_comp_event() %p\n", c);
 
 	/* Retrieve completion events and process incoming data */
-	cqs = ibv_poll_cq(cq, 10, wc);
+	cqs = ibv_poll_cq(cq, MAX_POLL_CQE, wc);
 	if (cqs < 0) {
 		logg(LOG_WARNING, "CQ polling failed with: %s on %s\n",
 			errname(), c->text);
