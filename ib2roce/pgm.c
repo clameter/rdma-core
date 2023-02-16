@@ -37,7 +37,6 @@
 
 #include "interfaces.h"
 #include "pgm.h"
-#include "packet.h"
 #ifdef UNICAST
 #include "endpoint.h"
 #endif
@@ -110,7 +109,7 @@ static void format_tsi(char *b, struct pgm_tsi *tsi)
 
 	strcpy(c, inet_ntoa(tsi->sender));
 
-	snprintf(b, 60, "%s:%d->%s:%d", c, ntohs(tsi->sport), inet_ntoa(tsi->mcgroup), ntohs(tsi->dport));
+	snprintf(b, 60, "%s:%d->%s:%d", c, tsi->sport, inet_ntoa(tsi->mcgroup), tsi->dport);
 }
 
 static bool add_record(struct buf *buf, struct pgm_tsi *tsi, uint32_t sqn, void *start, unsigned len)
@@ -265,7 +264,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 			if (sqn < s->last_seq) {
 				s->dup++;
 				ret = false;
-				logg(LOG_NOTICE, "%s: Repeated data out of Window\n", s->text);
+				logg(LOG_NOTICE, "%s: Repeated data out of Window SQN=%u < last=%u\n", s->text, sqn, s->last_seq);
 				break;
 			}
 
@@ -436,6 +435,9 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 				case PGM_OPT_SYN:
 					PULL(buf, syn);
 					logg(LOG_INFO, "%s: OPT SYN\n", text);
+					s->last_seq = sqn;
+					s->last = sqn;
+					s->oldest = sqn;
 					break;
 				case PGM_OPT_FIN:
 					PULL(buf, fin);
@@ -516,31 +518,32 @@ static void tsi_cmd(FILE *out, char *parameters)
 
 				format_tsi(buf, &ps->tsi);
 
-				fprintf(out, "%s: lead=%d trail=%d last=%d lastRepairData=%d oldest=%d\n",
+				fprintf(out, "%s: lead=%d trail=%d last=%d lastRepairData=%d oldest=%d",
 					buf, ps->lead, ps->trail, ps->last, ps->rlast, ps->oldest);
 
 				if (ps->dup)
-					fprintf(out, "Dup(OData!)=%u", ps->dup);
+					fprintf(out, " dup(OData!)=%u", ps->dup);
 
 				if (ps->rdup)
-					fprintf(out, "Dup(Rdata!)=%u", ps->rdup);
+					fprintf(out, " dup(Rdata!)=%u", ps->rdup);
 
 				if (ps->rdata)
-					fprintf(out, "rdata=%u", ps->rdata);
+					fprintf(out, " rdata=%u", ps->rdata);
 
 				if (ps->ack)
-					fprintf(out, "ack=%u", ps->ack);
+					fprintf(out, " ack=%u", ps->ack);
 
 				if (ps->nak)
-					fprintf(out, "nak=%u", ps->nak);
+					fprintf(out, " nak=%u", ps->nak);
 
 				if (ps->first_sqn)
-					fprintf(out, "firstsqn=%u", ps->first_sqn);
+					fprintf(out, " firstsqn=%u", ps->first_sqn);
 
 				if (ps->sqn_seq_errs) {
-					fprintf(out, "sqnerrs=%u lastmissed=%u nr_missed=%u",
+					fprintf(out, " sqnerrs=%u lastmissed=%u nr_missed=%u",
 						ps->sqn_seq_errs, ps->last_missed_sqn, ps->last_missed_sqns);
 				}
+				fprintf(out, "\n");
   			}
 			offset += nr;
 		}

@@ -40,6 +40,7 @@
 #include "interfaces.h"
 #include "sender.h"
 #include "cli.h"
+#include "packet.h"
 
 static unsigned sendrate = 5;
 static unsigned sendbatch = 1;

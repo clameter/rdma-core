@@ -40,6 +40,7 @@
 #include "channel.h"
 #include "multicast.h"
 #include "buffers.h"
+#include "packet.h"
 
 enum pgm_mode { pgm_off, pgm_strict, pgm_llm, pgm_passthrough, pgm_dlr, pgm_resend };
 
