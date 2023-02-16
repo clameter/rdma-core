@@ -245,6 +245,9 @@ int event_loop(void)
 
 		timeout = time_to_next_event();
 
+		if (timeout < -(long)seconds(60))
+			panic("Falling behind more than a minute in processing events.\n");
+
 		/* Run long overdue scheduled events */
 		while (timeout != NO_EVENTS && timeout < -(long)milliseconds(10))
 			timeout = run_events();

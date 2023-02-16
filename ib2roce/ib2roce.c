@@ -507,6 +507,8 @@ int main(int argc, char **argv)
 {
 	int ret = 0;
 
+	/* Init the scheduler */
+	now = timestamp();
 	parse_options(argc, argv);
 
 	if (debug || !bridging) {
