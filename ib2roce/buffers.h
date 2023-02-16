@@ -111,7 +111,36 @@ static inline void pull(struct buf *buf, void *dest, unsigned length)
 	buf->cur += length;
 }
 
+static inline void *vpull(struct buf *buf, unsigned length)
+{
+	void *p = buf->cur;
+
+	buf->cur += length;
+
+	return p;
+}
+
 #define PULL(__BUF, __VAR) pull(__BUF, &(__VAR), sizeof(__VAR))
+#define VPULL(__BUF, __VAR) (__VAR) = vpull(__BUF, sizeof(__VAR))
+
+static inline void push(struct buf *buf, void *src, unsigned length)
+{
+	memcpy(buf->end, src, length);
+	buf->end += length;
+}
+
+static inline void *vpush(struct buf *buf, void *src, unsigned length)
+{
+	void *p = buf->end;
+
+	buf->end += length;
+	return p;
+}
+
+#define PUSH(__BUF, __VAR) push(__BUF, &(__VAR), sizeof(__VAR))
+
+#define VPUSH(__BUF, __VAR) { __VAR = (void  *)buf->end; buf->end += sizeof(*__VAR);}
+
 
 extern struct buf *buffers;
 
