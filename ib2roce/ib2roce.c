@@ -328,12 +328,6 @@ invalid_packet:
 	st(c, packets_invalid);
 }
 
-static void logging(void *private)
-{
-	brief_status(stdout);
-	add_event(timestamp() + seconds(60), logging, NULL, "Brief Status");
-}
-
 static void run_watchdog(void *private)
 {
 	sd_notify(0, "WATCHDOG=1");
@@ -346,9 +340,6 @@ static void setup_timed_events(void)
 	int ret;
 
 	now = timestamp();
-
-	if (background)
-		logging(NULL);
 
 	start_calculate_pps();
 

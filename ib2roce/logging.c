@@ -266,41 +266,9 @@ void get_core_logs(void *private)
 	add_event(now + milliseconds(100), get_core_logs, c, "Get Core Logs");
 }
 
-/*
- * Continous printing of the log line on the console
- */
-static int log_interval;
-
 static void verbose_set(char *optarg)
 {
 	loglevel++;
-}
-
-static void continous(void *private)
-{
-	FILE *out = private;
-
-	fprintf(out, "\n");
-	brief_status(out);
-
-	if (log_interval)
-		add_event(timestamp() + seconds(log_interval),
-				continous, private, "Continous Logging");
-}
-
-static void continous_cmd(FILE *out, char *parameters)
-{
-	int old_interval = log_interval;
-
-	if (!parameters) {
-		fprintf(out, "Continuous logging interval is %d seconds.\n", log_interval);
-		return;
-	}
-
-	log_interval = atoi(parameters);
-
-	if (!old_interval && log_interval)
-		continous(out);
 }
 
 static void statuscmd(FILE *out, char *parameters) {
@@ -312,20 +280,13 @@ static void systemd_set(char *optarg)
 	systemd = true;
 }
 
-static void continous_set(char *optarg)
-{
-	continous_cmd(stdout, optarg);
-}
-
 __attribute__((constructor))
 static void logging_init(void)
 {
-	register_concom("continuous", false, 1,	"Print continous status in specified interval",	continous_cmd);
 	register_concom("status", true, 0, "Print a brief status", statuscmd);
 	register_enable("loglevel", true, NULL, &loglevel, "5","3", NULL,
 		"Log output to console (0=EMERG, 1=ALERT, 2=CRIT, 3=ERR, 4=WARN, 5=NOTICE, 6=INFO, 7=DEBUG)");
 	register_option("verbose", no_argument, 'v', verbose_set, NULL, "Increase logging detail");
 	register_option("systemd", no_argument, 's', systemd_set, NULL, "Operate from systemd");
-	register_option("continous", required_argument, '@', continous_set, NULL, "Print continuous status");
 }
 
