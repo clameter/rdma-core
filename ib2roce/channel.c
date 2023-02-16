@@ -794,8 +794,11 @@ void channel_stat(int indent, FILE *out, struct rdma_channel *c)
 	memset(indent_str, ' ', indent);
 	indent_str[indent] = 0;
 
-	fprintf(out, "%sChannel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u BacklogDrops=%u\n", indent_str, c->text,
-		c->active_receive_buffers, c->nr_receive, c->active_send_buffers, c->nr_send, c->cq_high, fifo_items(&c->send_queue), c->backlog_drop);
+	fprintf(out, "%sChannel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u BacklogDrops=%u Port=%d QPN=%d\n",
+		indent_str, c->text, c->active_receive_buffers, c->nr_receive,
+		c->active_send_buffers, c->nr_send, c->cq_high,
+		fifo_items(&c->send_queue), c->backlog_drop,
+		ntohs(((struct sockaddr_in *)c->bindaddr)->sin_port), c->qp->qp_num);
 
 	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))
 		fprintf(out, "%s pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n",

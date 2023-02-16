@@ -610,10 +610,11 @@ static void multicast_cmd(FILE *out, char *parameters)
 			if (mi->status == MC_OFF)
 				continue;
 
-			fprintf(out, "%s %s %s %s %s ", mi->channel ? mi->channel->text : interfaces_text[in], m->text,
+			fprintf(out, "%s %s %s %s %s %u", mi->channel ? mi->channel->text : interfaces_text[in], m->text,
 				mc_text[mi->status],
 				mi->sendonly ? "Sendonly" : "",
-				in == INFINIBAND ? mgid_text(m) : "");
+				in == INFINIBAND ? mgid_text(m) : "",
+				m->port);
 
 			if (!m->enabled)
 				fprintf(out, " disabled");
