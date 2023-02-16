@@ -48,42 +48,118 @@ static unsigned sendlen = 1024;
 
 static uint64_t sender_interval;
 static uint64_t sender_time;
-static unsigned sender_seq;
+static unsigned sender_seq = 1;
 
 static unsigned sessionid;
 static char hostname[40];
 
-#define MAX_SENDRATE 10000
+#define MAX_SENDRATE 1000
 
 struct sender_info {
 	unsigned signature;
 	unsigned sessionid;
 	uint64_t timestamp;
-	unsigned sqn;
 	char name[40];
-	char dummy[];
 };
 
 #define SENDER_SIGNATURE 0xD3ADB33F
 
-static void prep_sender_struct(struct i2r_interface *i, struct buf *buf)
+/*
+static void send_data(struct mc *, struct buf *buf, int resend)
 {
-	struct sender_info *b = (void *)buf->raw;
+}
+
+static void receive_data(struct mc *, struct buf *buf)
+{
+}
+
+static void send_ack(struct mc *i)
+{
+}
+
+static void send_nak(struct mc *i)
+{
+}
+
+*/
+static void prep_sender_struct(struct i2r_interface *i, struct buf *buf, struct mc *m)
+{
+	struct pgm_header *h;
+	struct pgm_data *d;
+	struct pgm_opt_length *ol;
+	struct sender_info *s;
+	bool last_opt;
+
+	buf->end = buf->raw;
+
 
 	/* Max MTU is 4096 bytes */
 	if (sendlen > 4096)
 		abort();
 
-
 	memset(buf->raw, 0, sendlen);
 
-	b->signature = SENDER_SIGNATURE;
-	memcpy(b->name, hostname, sizeof(hostname));
-	b->sessionid = sessionid;
+	VPUSH(buf, h);
 
-	b->timestamp = now;
-	b->sqn = sender_seq;
-	buf->end = buf->raw + sendlen;
+	h->pgm_sport = htons(i->port);
+	h->pgm_dport = htons(m->port);
+	h->pgm_type = PGM_ODATA;
+	h->pgm_options = PGM_OPT_PRESENT;
+	h->pgm_checksum = 0;
+	memcpy(h->pgm_gsi, &i->if_addr.sin_addr, sizeof(i->if_addr.sin_addr));
+	memcpy(h->pgm_gsi + 4, &i->if_addr.sin_port, sizeof(i->if_addr.sin_port));
+
+	VPUSH(buf, d);
+	d->data_sqn = htonl(sender_seq);
+	d->data_trail = htonl(sender_seq);
+
+	VPUSH(buf, ol);
+
+	last_opt = sender_seq > 1;
+
+	/* Options follow opt_length is needed */
+	ol->opt_type = PGM_OPT_LENGTH;
+        if (last_opt)
+		ol->opt_type |= PGM_OPT_END;
+
+	ol->opt_length = sizeof(struct pgm_opt_length);
+
+	if (sender_seq == 1) {
+		struct pgm_opt_header *poh;
+		struct pgm_opt_syn *pos;
+
+		VPUSH(buf, poh);
+		poh->opt_type = PGM_OPT_SYN | PGM_OPT_END;
+		poh->opt_reserved = 0;
+
+		VPUSH(buf, pos);
+		pos->opt_reserved = 0;
+
+		poh->opt_length = buf->end - (uint8_t *)poh;
+
+	}
+
+/*
+	Missing
+       	OPT_FIN in last packet
+ 	OPT_RST for unrecoverable error
+*/
+
+	ol->opt_total_length = htons(buf->end - (uint8_t *)ol);
+
+	VPUSH(buf, s);
+	s->signature = SENDER_SIGNATURE;
+	memcpy(s->name, hostname, sizeof(hostname));
+	s->sessionid = sessionid;
+
+	s->timestamp = now;
+
+	/* RFC3208 8. Packet formats */
+	h->pgm_tsdu_length = htons(buf->end - buf->raw - sizeof(struct pgm_header));
+
+	/* Stuff it if sendlen is defined */
+	if (buf->end < buf->raw + sendlen)
+		buf->end = buf->raw +sendlen;
 }
 
 static void sender_send(void *private)
@@ -106,14 +182,14 @@ static void sender_send(void *private)
 				continue;
 
 			buf = alloc_buffer(c);
-			prep_sender_struct(i, buf);
+			prep_sender_struct(i, buf, m);
 			send_to(c, buf->raw, buf->end - buf->raw, &m->interface[default_interface].ai, false, 0, buf);
 		}
 		sender_seq++;
 	}
 
 	sender_time += sender_interval;
-	add_event(sender_time, sender_send, NULL, "*Sender Send");
+	add_event(sender_time, sender_send, NULL, "Sender Send");
 }
 
 void sender_shutdown(void)
