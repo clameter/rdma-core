@@ -684,11 +684,32 @@ static void calculate_pps_channel(FILE *out, struct rdma_channel *c)
 	c->last_snapshot = now;
 }
 
+static bool pps_display;
+
 static void calculate_pps(void *private)
 {
 	all_channels(NULL, calculate_pps_channel);
 	stat_start += seconds(stat_interval);
 	add_event(stat_start, calculate_pps, NULL, "pps calculation");
+
+	if (pps_display) {
+		int n = 0;
+		char buf[4000];
+
+ 		interface_foreach(i)
+			channel_foreach(c, &i->channels) {
+				if (c->pps_in || c->pps_out) {
+					n += sprintf(buf + n, "%s ", c->text);
+					if (c->pps_in)
+						n += sprintf(buf + n, "%s in ", print_count(c->pps_in));
+					if (c->pps_out)
+						n += sprintf(buf + n, "%s out ", print_count(c->pps_out));
+				}
+			}
+	
+		if (n)
+			logg(LOG_INFO,"pps: %s\n", buf);
+	}
 }
 
 void start_calculate_pps(void)
@@ -807,6 +828,9 @@ static void channel_init(void)
 
 	register_enable("loopbackprev", false, &loopback_blocking, NULL, "on", "off", NULL,
 		"Multicast loopback prevention of the NIC");
+
+	register_enable("ppsdisplay", false, &pps_display, NULL, "on", "off", NULL,
+		"Display pps in and out of interfaces");
 
 #ifdef UNICAST
 	register_enable("flow", false, &flow_steering, NULL, "on", "off", NULL,

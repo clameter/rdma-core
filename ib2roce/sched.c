@@ -158,6 +158,22 @@ char *print_time(uint64_t time)
 	return buf;
 }
 
+char *print_count(uint64_t count)
+{
+	static char buf[20];
+
+	if (count > 10L * 1024*1024*1024)
+		sprintf(buf, "%ldg", (count + 512*1024*1024) / (1024*1024*1024));
+	else if (count > 10L * 1024*1024)
+		sprintf(buf, "%ldm", (count + 512*1024) / (1024*1024));
+	else if (count > 10L * 1024)
+		sprintf(buf, "%ldk", (count + 512)/ 1024);
+	else
+		sprintf(buf, "%ld", count);
+
+	return buf;
+}
+
 int get_timer_list(char *buf, char separator)
 {
 	int n = 0;

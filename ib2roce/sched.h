@@ -125,6 +125,8 @@ void terminate(int x);
 int get_timer_list(char *b, char separator);
 
 char *print_time(uint64_t);
+char *print_count(uint64_t count);
+
 void start_cores(void);
 void stop_cores(void);
 
