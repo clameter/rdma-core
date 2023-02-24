@@ -111,6 +111,7 @@ struct rdma_channel {
 	unsigned max_backlog;
 	unsigned backlog_drop;	/* Packets dropped from backlog */
 	bool listening;			/* rdmacm Channel is listening for connections */
+	bool reduced_rate_warning;	/* Warning about a reduced rate was given */
 	unsigned instance;		/* If multuple instances exist */
 	const char *text;
 	struct rdma_unicast *ru;	/* Only rdmacm */

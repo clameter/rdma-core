@@ -46,6 +46,7 @@
 #include "channel.h"
 #include "cli.h"
 #include "beacon.h"
+#include "pgm.h"
 
 const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 
@@ -705,6 +706,8 @@ static void calculate_pps(void *private)
 					if (c->pps_out)
 						n += sprintf(buf + n, "%s out ", print_count(c->pps_out));
 				}
+				if (pgm_mode)
+					n += pgm_brief_stats(buf + n, i);
 			}
 	
 		if (n)
@@ -794,17 +797,22 @@ void channel_stat(int indent, FILE *out, struct rdma_channel *c)
 	memset(indent_str, ' ', indent);
 	indent_str[indent] = 0;
 
-	fprintf(out, "%sChannel %s: ActiveRecvBuffers=%u/%u ActiveSendBuffers=%u/%u CQ_high=%u SendQ=%u BacklogDrops=%u Port=%d QPN=%d\n",
+	fprintf(out, "%sChannel %s: ActRecvBuf=%u/%u ActSendBuf=%u/%u CQ_high=%u BackLog=%u BacklogDrops=%u Port=%d QPN=%d nr_multicast=%u",
 		indent_str, c->text, c->active_receive_buffers, c->nr_receive,
 		c->active_send_buffers, c->nr_send, c->cq_high,
 		fifo_items(&c->send_queue), c->backlog_drop,
-		ntohs(((struct sockaddr_in *)c->bindaddr)->sin_port), c->qp->qp_num);
+		ntohs(((struct sockaddr_in *)c->bindaddr)->sin_port), c->qp->qp_num, c->nr_mcs);
 
-	if (c->last_snapshot && (c->max_pps_in || c->max_pps_out))
-		fprintf(out, "%s pps_in=%d pps_out=%d max_pps_in=%d max_pps_out=%d\n",
-			indent_str, c->pps_in, c->pps_out, c->max_pps_in, c->max_pps_out);
-
-	fprintf(out, "%s", indent_str);
+		if (c->last_snapshot) {
+			if (c->pps_in)
+			 	fprintf(out, " pps_in=%u", c->max_pps_in);
+			if (c->pps_out)
+			 	fprintf(out, " pps_out=%u", c->max_pps_out);
+			if (c->max_pps_in)
+			 	fprintf(out, " max_pps_in=%u", c->max_pps_in);
+			if (c->max_pps_out)
+			 	fprintf(out, " max_pps_out=%u", c->max_pps_out);
+	}
 
 	for(int k = 0; k < nr_stats; k++)
 		if (c->stats[k])
