@@ -46,7 +46,7 @@
  * PGM RFC3208 Support
  */
 
-enum pgm_mode pgm_mode = pgm_off;
+bool pgm_mode;
 
 struct nak {
 	struct pgm_nak *next;
@@ -189,7 +189,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 		return false;
 	}
 
-	if (pgm_mode < pgm_passthrough)
+	if (!pgm_mode)
 		return true;
 
 	tdsu = ntohs(header.pgm.pgm_tsdu_length);
@@ -212,9 +212,6 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 			s->trail = ntohl(spm.spm_trail);
 			s->lead = ntohl(spm.spm_lead);
-			if (pgm_mode <= pgm_passthrough)
-				break;
-
 			if (s->last_seq < s->lead) {
 				/* We are missing packets */
 			}
@@ -290,14 +287,10 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 			if (sqn > s->lead)
 				s->lead = sqn;
 
-			if (pgm_mode <= pgm_passthrough) {
-
-				if (header.pgm.pgm_type == PGM_ODATA) {
-					if (sqn != s->last +1)
-						logg(LOG_NOTICE, "%s: Sequence error SQN %d->SQN %d diff %d\n", s->text, s->last, sqn, sqn-s->last);
-					s->last = sqn;
-				}
-				break;
+			if (header.pgm.pgm_type == PGM_ODATA) {
+				if (sqn != s->last +1)
+					logg(LOG_NOTICE, "%s: Sequence error SQN %d->SQN %d diff %d\n", s->text, s->last, sqn, sqn-s->last);
+				s->last = sqn;
 			}
 
 			/* This is either the next data or missing data */
@@ -554,8 +547,8 @@ __attribute__((constructor))
 static void pgm_init(void)
 {
 	register_concom("tsi", true, 0, "Show PGM info", tsi_cmd);
-	register_enable("pgm", true, NULL, (int *)&pgm_mode, "2", "off", NULL,
-		"PGM processing mode (0=None, 1= verify source address, 2=Passtrough, 3=DLR, 4=Resend with new TSI");
+	register_enable("pgm", true, &pgm_mode, NULL, "on", "off", NULL,
+		"Enable PGM processing and validaton (Sequence numbers etc)");
 
 	init_pgm_streams();
 }

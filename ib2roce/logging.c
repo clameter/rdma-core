@@ -220,7 +220,7 @@ void brief_status(FILE *out)
 		if (i->mc_rate_limited)
 			n+= sprintf(counts + n, " R%d", i->mc_rate_limited);
 
-		if (pgm_mode != pgm_off)
+		if (pgm_mode)
 			n += pgm_brief_stats(counts + n, i);
 
 		if (sum_stats(stats, i, channel_ud) && stats[packets_received]) {
@@ -237,9 +237,9 @@ void brief_status(FILE *out)
 	}
 
 	if (out == stdout)
-		logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s", events, active_mc, nr_mc, counts);
+		logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
 	else
-		fprintf(out, "%s. Groups=%d/%d. Packets=%s", events, active_mc, nr_mc, counts);
+		fprintf(out, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
 
 #ifdef UNICAST
 	list_endpoints(i2r + INFINIBAND);
