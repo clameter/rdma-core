@@ -249,7 +249,7 @@ void receive_multicast(struct buf *buf)
 	if (!m->enabled)
 		return;
 
-	if (pgm_mode) {
+	if (pgm_mode && m->mgid_mode == MGID_MODE_CLLM) {
 		uint8_t *saved = buf->cur;
 		if (!pgm_process(c, m, buf))
 			return;

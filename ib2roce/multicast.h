@@ -94,6 +94,8 @@ struct mc_interface {
 	unsigned long delayed;		/* Packets delayed */
 };
 
+#define MGID_MODE_CLLM 4
+
 struct mc {
 	struct in_addr addr;
 	struct mc_interface interface[NR_INTERFACES];

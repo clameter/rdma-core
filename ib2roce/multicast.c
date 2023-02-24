@@ -127,7 +127,7 @@ static struct mgid_signature {		/* Manage different MGID formats used */
 	{	0x4001, "IB",	false, false, false }
 };
 
-static uint8_t mgid_mode = 4;		/* CLLM is the default */
+static uint8_t mgid_mode = MGID_MODE_CLLM;		/* CLLM is the default */
 
 static uint8_t __find_mgid_mode(char *p)
 {
