@@ -55,6 +55,7 @@
 #include <infiniband/verbs.h>
 #include <sys/ioctl.h>
 #include <numa.h>
+#include <ifaddrs.h>
 
 #include "packet.h"
 #include "errno.h"
@@ -121,6 +122,7 @@ void set_rates(void)
 		set_rate(m);
 	}
 }
+
 
 /* Check the RDMA device if it fits what was specified on the command line and store it if it matches */
 int check_rdma_device(enum interfaces i, int port, char *name,
@@ -386,6 +388,26 @@ static void get_if_info(struct i2r_interface *i)
 	close(fh);
 
 	i->numa_node = atoi(buffer);
+
+	/* Dermine potential alternate interfaces for the IB interface) */
+	if (i - i2r  == INFINIBAND) {
+		struct ifaddrs *ifap;
+
+		getifaddrs(&ifap);
+
+		for (struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next) {
+			if (ifa->ifa_addr && ifa->ifa_addr->sa_family==AF_INET) {
+
+				if (strcmp(ifa->ifa_name, i->if_name))
+					continue;
+
+				i->alt_addr = *((struct sockaddr_in *)(ifa->ifa_addr));
+				i->alt_netmask = *((struct sockaddr_in *)(ifa->ifa_netmask));
+			}
+        	}
+		free(ifap);
+    	}
+
 	return;
 
 err:
@@ -445,6 +467,7 @@ void setup_interface(enum interfaces in)
 	struct rdma_channel *ud = NULL;
 #endif
 	unsigned channels;
+	char buf[30];
 
 	if (in == INFINIBAND)
 		i->maclen = 20;
@@ -575,13 +598,16 @@ void setup_interface(enum interfaces in)
  	check_out_of_buffer(i);
  	numa_run_on_node(-1);
 
-	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s:%d QPs=%u MTU=%u NUMA=%d.\n",
+	strcpy(buf, inet_ntoa(i->alt_addr.sin_addr));
+
+	logg(LOG_NOTICE, "%s interface %s/%s(%d) port %d GID=%s/%d IPv4=%s %s:%d QPs=%u MTU=%u NUMA=%d.\n",
 		i->text,
 		i->rdma_name,
 		i->if_name, i->ifindex,
 		i->port,
 		inet6_ntoa(e->gid.raw), i->gid_index,
-		inet_ntoa(i->if_addr.sin_addr), default_port,
+		inet_ntoa(i->if_addr.sin_addr), buf,
+	       	default_port,
 		channels, i->mtu, i->numa_node
 	);
 }

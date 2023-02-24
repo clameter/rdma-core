@@ -183,15 +183,6 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 	PULL(buf, header);
 
-	/* Verify if pgm message originated from our subnet */
-	if (!valid_addr(c->i, header.addr)) {
-		logg(LOG_INFO, "Discarded PGM packet originating from %s is from outside our subnet %s\n", inet_ntoa(header.addr), c->i->text);
-		return false;
-	}
-
-	if (!pgm_mode)
-		return true;
-
 	tdsu = ntohs(header.pgm.pgm_tsdu_length);
 
 	tsi.mcgroup = m->addr;
@@ -248,7 +239,11 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 					i->nr_tsi++;
 
-					logg(LOG_NOTICE, "%s: New Stream TSI %s\n", i->text, s->text);
+					if (!valid_addr(c->i, tsi.sender)) {
+						m->enabled = false;
+						logg(LOG_NOTICE, "%s: Invalid Stream TSI %si (invalid local IP addr)\n", i->text, s->text);
+					} else
+						logg(LOG_NOTICE, "%s: New Stream TSI %s\n", i->text, s->text);
 				}
 				unlock();
 			}

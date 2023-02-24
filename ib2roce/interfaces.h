@@ -101,6 +101,8 @@ struct i2r_interface {
 	uint8_t if_mac[ETH_ALEN];
 	struct sockaddr_in if_addr;
 	struct sockaddr_in if_netmask;
+	struct sockaddr_in alt_addr;
+	struct sockaddr_in alt_netmask;
 	unsigned ifindex;
 	unsigned mc_per_qp;			/* How many MCs per QP */
 	unsigned numa_node;			/* NUMA Affinity of the interface */
@@ -179,9 +181,22 @@ void shutdown_roce(void);
 
 static inline bool __valid_addr(struct i2r_interface *i, __be32 saddr)
 {
-	unsigned netmask = i->if_netmask.sin_addr.s_addr;
+	unsigned netmask;
 
-	return ((saddr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask));
+	netmask	= i->if_netmask.sin_addr.s_addr;
+
+	if  ((saddr & netmask) ==  (i->if_addr.sin_addr.s_addr & netmask))
+		return true;
+
+	netmask = i->alt_netmask.sin_addr.s_addr;
+
+	if (!netmask)
+		return false;
+
+	if  ((saddr & netmask) ==  (i->alt_addr.sin_addr.s_addr & netmask))
+		return true;
+
+	return false;
 }
 
 static inline bool valid_addr(struct i2r_interface *i, struct in_addr addr)
