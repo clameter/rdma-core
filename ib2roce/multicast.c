@@ -543,13 +543,21 @@ void next_join_complete(struct mc *m)
 	struct i2r_interface *i;
 
 	if (m->interface[ROCE].channel && m->interface[INFINIBAND].channel) {
+		struct rdma_channel *roce, *inf;
 
-		if (m->interface[ROCE].channel->core == m->interface[INFINIBAND].channel->core)
+		roce = m->interface[ROCE].channel;
+	        inf = m->interface[INFINIBAND].channel;
+
+		if (roce->core == inf->core)
 
 			m->same_core = true;
 
 		else
 			logg(LOG_WARNING, "MC %s in and out channel not on the same core\n", inet_ntoa(m->addr));
+
+		/* Link channels so that congestion handling works right */
+		roce->destination = inf;
+		inf->destination = roce;
 	}
 
 	active_mc++;

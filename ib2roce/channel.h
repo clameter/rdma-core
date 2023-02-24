@@ -97,6 +97,7 @@ struct rdma_channel {
 	unsigned int active_receive_buffers;
 	unsigned int active_send_buffers;	/* if the sender is on a different core than the receiver then we have a race condition for the buffers */
 	unsigned int cq_high;		/* Largest number of CQs taken from the queue */
+	struct rdma_channel *destination;	/* If set the destination channel for bridging */
 	unsigned int nr_cq;		/* Number of items for the CQ */
 	unsigned int nr_send;		/* Maximum number of write buffers to use */
 	unsigned int nr_receive;	/* Number of read buffer to post */
@@ -124,6 +125,16 @@ struct rdma_channel {
 	unsigned nr_mcs;		/* Number of multicast groups attached via this channel */
 	struct mc *mc[];		/* Dynamically sized structure depending on the number of allowed MC groups for an interface */
 };
+
+static inline int sendqueue_avail(struct rdma_channel *c)
+{
+	return (int)c->nr_send - (int)c->active_send_buffers;
+}
+
+static inline bool sendqueue_full(struct rdma_channel *c)
+{
+	return sendqueue_avail(c) <= 0;
+}
 
 static inline void st(struct rdma_channel *c, enum stats s)
 {

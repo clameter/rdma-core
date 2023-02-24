@@ -1117,6 +1117,30 @@ static void process_cqes(struct rdma_channel *c, struct ibv_wc *wc, unsigned cqs
 
 
 #define MAX_POLL_CQE 2000
+#define MIN_POLL_CQE 5
+
+
+/*
+ * Figure out the number of items to poll. This should depend on the
+ * availability of slots in the destination channel if we have one.
+ */
+static unsigned find_nr_poll(struct rdma_channel *c)
+{
+	int n;
+
+	if (!c->destination)
+		return MAX_POLL_CQE;
+
+	n = sendqueue_avail(c->destination);
+
+	if (n > MAX_POLL_CQE)
+		return MAX_POLL_CQE;
+
+	if (n < MIN_POLL_CQE)
+		return MIN_POLL_CQE;
+
+	return n;
+}
 
 /*
  * Polling function for each core enabling low latency operations.
@@ -1137,7 +1161,7 @@ void scan_cqs(void *private)
 	for(i = 0; i < core->nr_channels; i++) {
 		struct rdma_channel *c = core->channel[i];
 
-		cqs = ibv_poll_cq(c->cq, MAX_POLL_CQE, wc);
+		cqs = ibv_poll_cq(c->cq, find_nr_poll(c), wc);
 		if (cqs) {
 			if (cqs > 0)
 				process_cqes(c, wc, cqs);
@@ -1172,7 +1196,7 @@ void handle_comp_event(void *private)
        		panic("Invalid channel in handle_comp_event() %p\n", c);
 
 	/* Retrieve completion events and process incoming data */
-	cqs = ibv_poll_cq(cq, MAX_POLL_CQE, wc);
+	cqs = ibv_poll_cq(cq, find_nr_poll(c), wc);
 	if (cqs < 0) {
 		logg(LOG_WARNING, "CQ polling failed with: %s on %s\n",
 			errname(), c->text);
