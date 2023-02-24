@@ -669,8 +669,8 @@ static void calculate_pps_channel(FILE *out, struct rdma_channel *c)
 	if (c->last_snapshot) {
 		uint64_t tdiff = now - c->last_snapshot;
 
-		c->pps_in = seconds(c->stats[packets_received] - c->last_received) / tdiff;
-		c->pps_out = seconds(c->stats[packets_sent] - c->last_sent) / tdiff;
+		c->pps_in = (seconds(c->stats[packets_received] - c->last_received) + tdiff/2) / tdiff;
+		c->pps_out = (seconds(c->stats[packets_sent] - c->last_sent) + tdiff/2) / tdiff;
 
 		if (c->pps_in > c->max_pps_in)
 			c->max_pps_in = c->pps_in;
@@ -832,7 +832,7 @@ static void channel_init(void)
 	register_enable("loopbackprev", false, &loopback_blocking, NULL, "on", "off", NULL,
 		"Multicast loopback prevention of the NIC");
 
-	register_enable("ppsdisplay", false, &pps_display, NULL, "on", "off", NULL,
+	register_enable("ppsdisplay", true, &pps_display, NULL, "on", "off", NULL,
 		"Display pps in and out of interfaces");
 
 #ifdef UNICAST
