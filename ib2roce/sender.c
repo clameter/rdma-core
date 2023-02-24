@@ -44,7 +44,7 @@
 
 static unsigned sendrate = 5;
 static unsigned sendbatch = 1;
-static unsigned sendlen = 1024;
+static unsigned sendlen = 32;
 
 static uint64_t sender_interval;
 static uint64_t sender_time;
@@ -166,11 +166,25 @@ static void sender_send(void *private)
 {
 	struct buf *buf;
 	struct i2r_interface *i = i2r + default_interface;
+	struct rdma_channel *blacklisted = NULL;
 
 	if (!sender_interval || !i->context)
 		return;
 
+	if (sender_time + sender_interval < now) {
+		static bool falling_behind_warning;
+
+		if (!falling_behind_warning) {
+			logg(LOG_WARNING, "Falling behind sending %s. Skipping intervals\n", print_time(now - sender_time - sender_interval));
+			falling_behind_warning = true;
+		}
+
+		sender_time = now;
+		goto out;
+	}
+
 	for(int j = 0; j < sendbatch; j++) {
+		bool successful = false;
 
 		now = timestamp();
 
@@ -178,16 +192,30 @@ static void sender_send(void *private)
 		mc_foreach(m) {
 			struct rdma_channel *c = m->interface[default_interface].channel;
 
+			if (blacklisted == c)
+				continue;
+
 			if (m->interface[default_interface].status != MC_JOINED)
 				continue;
 
+			if (sendqueue_full(c)) {
+				if (!c->reduced_rate_warning) {
+					logg(LOG_WARNING, "%s: Sendbuffer full. Reducing sendrate\n", c->text);
+					c->reduced_rate_warning = true;
+				}
+				blacklisted = c;
+				successful = false;
+				continue;
+			}
 			buf = alloc_buffer(c);
 			prep_sender_struct(i, buf, m);
-			send_to(c, buf->raw, buf->end - buf->raw, &m->interface[default_interface].ai, false, 0, buf);
+			__send_to(c, buf->raw, buf->end - buf->raw, &m->interface[default_interface].ai, false, 0, buf);
 		}
-		sender_seq++;
+		if (successful)
+			sender_seq++;
 	}
 
+out:
 	sender_time += sender_interval;
 	add_event(sender_time, sender_send, NULL, "Sender Send");
 }
@@ -200,14 +228,34 @@ void sender_shutdown(void)
 	}
 }
 
-void sender_setup(void)
+static void __sender_setup(void *private)
 {
-	if (sendrate > 1000 || !sendrate) {
-		logg(LOG_ERR, "Cannot send more than 1000 batches per second\n");
-		return;
+	unsigned r;
+
+	if (sendrate < 300) {
+		r = sendrate;
+ 		sendbatch = 1;
+	} else if (sendrate < 3000) {
+		r = sendrate / 10;
+		sendbatch = 10;
+	} else if (sendrate  < 30000) {
+		r = sendrate / 100;
+		sendbatch = 100;
+	} else if (sendrate < 300000) {
+		r = sendrate / 1000;
+		sendbatch = 1000;
+	} else {
+		r = 1000;
+		sendbatch = sendrate / 1000;
 	}
 
-	sender_interval = ONE_SECOND / sendrate;
+	sender_interval = ONE_SECOND / r;
+	logg(LOG_DEBUG, "Rate = %u. Batch=%u Sendrate=%u interval=%s rate*sendbatch=%u\n", sendrate, sendbatch, r, print_time(sender_interval), r * sendbatch);
+}
+
+void sender_setup(void)
+{
+	__sender_setup(NULL);
 
 	if (!sender_interval)
 		return;
@@ -225,11 +273,9 @@ static void sender_init(void)
 	if (gethostname(hostname, sizeof(hostname)) < 0)
 			logg(LOG_CRIT, "Cannot determine hostname: %s\n", errname());
 
-	register_enable("sendrate", true, NULL, (int *)&sendrate, "2", "off", NULL,
+	register_enable("sendrate", true, NULL, (int *)&sendrate, "2", "off", sender_setup,
 		"The rate of sending packets when requested");
 	register_enable("sendlen", true, NULL, (int *)&sendlen, "2", "off", NULL,
 		"The length of the packets being sent");
-	register_enable("sendbatch", true, NULL, (int *)&sendbatch, "2", "off", NULL,
-		"Number of packets to send in one batch");
 }
 
