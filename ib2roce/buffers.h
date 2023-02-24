@@ -185,6 +185,15 @@ int send_inline(struct rdma_channel *c, void *addr, unsigned len, struct ah_info
 int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, uint32_t remote_qpn, uint32_t qkey);
 
 /*
+ * Send data to a target without consideration of the backlog or
+ * queueing
+ */
+int __send_to(struct rdma_channel *c,
+	void *addr, unsigned len, struct ah_info *ai,
+	bool imm_used, unsigned imm,
+	struct buf *buf);
+
+/*
  * Send data to a target. No metadata is used in struct buf. However, the buffer must be passed to the wc in order
  * to be able to free up resources when done.
  */

@@ -329,19 +329,9 @@ int send_pending_buffers(struct rdma_channel *c)
 	return false;
 }
 
-/*
- * Send data to a target. No metadata is used in struct buf. However, the buffer must be passed to the wc in order
- * to be able to free up resources when done.
- */
-int send_to(struct rdma_channel *c,
-	void *addr, unsigned len, struct ah_info *ai,
-	bool imm_used, unsigned imm,
-	struct buf *buf)
+static void setup_wr(struct rdma_channel *c, void *addr, unsigned len,
+	struct ah_info *ai, bool imm_used, unsigned imm, struct buf *buf)
 {
-	int ret;
-	struct ibv_send_wr *bad_send_wr;
-	unsigned backlog = fifo_items(&c->send_queue);
-
 	if (!ai->ah)
 		panic("Send without a route to a destination\n");
 
@@ -364,25 +354,59 @@ int send_to(struct rdma_channel *c,
 	buf->sge.length = len;
 	buf->sge.lkey = c->mr->lkey;
 	buf->sge.addr = (uint64_t)addr;
+}
 
-	if (backlog || c->active_send_buffers >= c->nr_send)
-		goto queue;
+/*
+ * Send data to a target. No metadata is used in struct buf. However, the buffer must be passed to the wc in order
+ * to be able to free up resources when done.
+ *
+ * This version does not do any queuing or checking if the send buffers are full.
+ */
+int __send_to(struct rdma_channel *c,
+	void *addr, unsigned len, struct ah_info *ai,
+	bool imm_used, unsigned imm,
+	struct buf *buf)
+{
+	int ret;
+	struct ibv_send_wr *bad_send_wr;
 
-	c->active_send_buffers++;
+
+	setup_wr(c, addr, len, ai, imm_used, imm, buf);
 	ret = ibv_post_send(c->qp, &buf->wr, &bad_send_wr);
 	if (ret) {
-		if (errno == ENOMEM)
-			goto queue;
-
 		errno = ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
 		put_buf(buf);
 	} else {
+		c->active_send_buffers++;
 		logg(LOG_DEBUG, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
 			buf->wr.wr.ud.remote_qpn, buf->wr.wr.ud.remote_qkey, len);
 	}
-
 	return ret;
+}
+
+/*
+ * Send data to a target while dealing with the backlog
+ */
+int send_to(struct rdma_channel *c,
+	void *addr, unsigned len, struct ah_info *ai,
+	bool imm_used, unsigned imm,
+	struct buf *buf)
+{
+	int ret;
+	unsigned backlog = fifo_items(&c->send_queue);
+
+	if (backlog || c->active_send_buffers >= c->nr_send) {
+		setup_wr(c, addr, len, ai, imm_used, imm, buf);
+		goto queue;
+	}
+
+	ret = __send_to(c, addr,len, ai, imm_used, imm, buf);
+	if (!ret)
+		return 0;
+
+	if (ret != ENOMEM)
+		return ret;
 
 queue:
 	fifo_put(&c->send_queue, buf);
