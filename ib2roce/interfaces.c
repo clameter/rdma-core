@@ -435,7 +435,7 @@ void check_out_of_buffer(void *private)
 	out_of_buffer = atol(buffer);
 	if (i->out_of_buffer != out_of_buffer) {
 		if (i->out_of_buffer)
-			logg(LOG_ERR, "Out of Buffer on %s. %ld packets dropped (was %ld, now %ld)\n",
+			logg(LOG_ERR, "Out of Buffer (sysfs counter check) on %s. %ld packets dropped (was %ld, now %ld)\n",
 					i->text, out_of_buffer - i->out_of_buffer, i->out_of_buffer, out_of_buffer);
 
 		i->out_of_buffer = out_of_buffer;

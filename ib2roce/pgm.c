@@ -87,8 +87,8 @@ struct pgm_stream {
 	unsigned sqn_seq_errs;
 	unsigned drop;
 	unsigned last_missed_sqn, last_missed_sqns;
+	struct in_addr repairer;
 	enum stream_state state;
-//	struct nak *nak;
 	char text[60];
 };
 
@@ -100,36 +100,6 @@ struct pgm_record {
 	struct buf *buf;		/* Address of buffer */
 	void *start;			/* Beginning of ODATA/RDATA record */
 	unsigned len;			/* Length of the message */
-};
-
-#define MAX_PGM_TYPE (PGM_ACK + 1)
-#define PGM_TYPE_MASK (PGM_OPT_VAR_PKTLEN -1)
-#define MAX_PGM_OPT PGM_OPT_PGMCC_FEEDBACK
-
-/* There are 3 categories of pgm_data frames and one invalid. Encode them in a 64 bit integer */
-#define PGM_CAT_SHIFT 16
-
-enum cat_type { cat_invalid, cat_spm, cat_data, cat_nak, pgm_cat_max };
-
-/* This mapping only works for IPv4 */
-static const uint64_t cat_sizes =
-	(sizeof(struct pgm_spm) << PGM_CAT_SHIFT) +
-	(sizeof(struct pgm_data) << (2 * PGM_CAT_SHIFT)) +
-	(sizeof(struct pgm_nak) << (3 * PGM_CAT_SHIFT));
-
-/* Mapping of PGM_TYPES to categories */
-
-/* 2 bits required for each entry in type_to_cat */
-#define PGM_TYPE_SHIFT 2
-
-static const uint64_t type_to_cat = {
-	cat_spm +					/* PGM_SPM	   = 0x00 */
-        (cat_data << (4 * PGM_TYPE_SHIFT)) +		/* PGM_ODATA       = 0x04 */
-        (cat_data << (5 * PGM_TYPE_SHIFT)) +		/* PGM_RDATA       = 0x05 */
-        (cat_nak << (8 * PGM_TYPE_SHIFT)) +		/* PGM_NAK         = 0x08 */
-        (cat_nak << (9 * PGM_TYPE_SHIFT)) +		/* PGM_NNAK        = 0x09 */
-        (cat_nak << (10 * PGM_TYPE_SHIFT)) +		/* PGM_NCF         = 0x0a */
-        (cat_nak << (13 * PGM_TYPE_SHIFT))		/* PGM_ACK         = 0x0d */
 };
 
 /* Permissions for options indexed by category */
@@ -159,30 +129,30 @@ static void format_tsi(char *b, struct pgm_tsi *tsi)
 	snprintf(b, 60, "%s:%d->%s:%d", c, tsi->sport, inet_ntoa(tsi->mcgroup), tsi->dport);
 }
 
-static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *opt_offset, uint8_t *a)
+static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *opt_offset, uint8_t *a, unsigned len)
 {
 	struct pgm_data *data = (struct pgm_data *)(h + 1);
 //	uint32_t tdsu = ntohs(h->pgm_tsdu_length);
 	uint32_t sqn = ntohl(data->data_sqn);
 	uint32_t trail = ntohl(data->data_trail);
+	char rtype = h->pgm_type == PGM_RDATA ? 'R' : 'O';
 
-	logg(LOG_DEBUG, "%s: %cDATA SQN=%d TRAIL=%d SYN=%d\n", s->text,
-		h->pgm_type == PGM_RDATA ? 'R' : 'O', sqn, trail, opt_offset[PGM_OPT_SYN]);
-
-	if (h->pgm_type == PGM_RDATA) {
-		s->rdata++;
-		return true;
-	}
-
-	s->odata++;
+	logg(LOG_DEBUG, "%s: %cDATA SQN=%d TRAIL=%d SYN=%d len=%u\n", s->text, rtype, sqn, trail, opt_offset[PGM_OPT_SYN], len);
 
 	/* Accept SQN if the stream is new or if the SYN option is set */
 	if (s->state == stream_init || opt_offset[PGM_OPT_SYN]) {
+		logg(LOG_INFO, "TSI Start (OPT_SYN on %cDATA) %s\n", rtype, s->text);
 		s->state = stream_sync;
 		goto accept;
 	}
 
-	if (sqn < s->last) {
+	if (h->pgm_type == PGM_RDATA) {
+		s->rdata++;
+		goto finish;
+	}
+	s->odata++;
+
+	if (sqn <= s->last) {
 		s->dup++;
 		logg(LOG_NOTICE, "%s: Sender is duplicating traffic last=%u sqn=%u\n", s->text, s->last, sqn);
 		s->last = sqn;
@@ -196,7 +166,7 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 	if (sqn > s->lead)
 		s->lead = sqn;
 
-	if (sqn != s->last +1) {
+	if (sqn != s->last +1 && !opt_offset[PGM_OPT_RST]) {
 		logg(LOG_NOTICE, "%s: Sequence error SQN %d->SQN %d diff %d\n", s->text, s->last, sqn, sqn - s->last);
 		s->state = stream_repair;
 		s->sqn_seq_errs++;
@@ -204,6 +174,15 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 
 accept:
 	s->last = sqn;
+
+finish:
+	if (opt_offset[PGM_OPT_FIN]) {
+		/* End of Stream */
+		logg(LOG_INFO, "TSI End (OPT_FIN on %cDATA) %s\n", rtype, s->text);
+		s->state = stream_init;
+	}
+
+
 	return true;
 }
 
@@ -215,7 +194,18 @@ static bool process_spm(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 	s->trail = ntohl(spm->spm_trail);
 	s->lead = ntohl(spm->spm_lead);
 
-	s->state = stream_sync;
+	if (opt_offset[PGM_OPT_RST]) {
+		logg(LOG_INFO, "TSI Error (OPT_RST on SPM) %s\n", s->text);
+		s->state = stream_error;
+	} else
+		s->state = stream_sync;
+
+	if (opt_offset[PGM_OPT_FIN]) {
+		/* End of Stream */
+		logg(LOG_INFO, "TSI End (OPT_FIN on SPM) %s\n", s->text);
+		s->state = stream_init;
+	}
+
 	return true;
 }
 
@@ -270,10 +260,10 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 			if (!valid_addr(c->i, tsi.sender)) {
 				s->state = stream_ignore;
-				logg(LOG_NOTICE, "%s: Invalid Stream TSI %s (IP addr not local)\n", i->text, s->text);
+				logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
 				return false;
 			} else
-				logg(LOG_NOTICE, "%s: New Stream TSI %s\n", i->text, s->text);
+				logg(LOG_NOTICE, "TSI New %s\n", s->text);
 		} else
 			unlock();
 	}
@@ -286,14 +276,14 @@ drop:
 
 	/* Determine the category of the pgm_type which will allow us to easily check allowed options */
  	pgm_type = header->pgm_type & PGM_TYPE_MASK;
-	pgm_category = (type_to_cat >> (pgm_type * PGM_TYPE_SHIFT)) & ((1 << PGM_TYPE_SHIFT) -1);
+	pgm_category = pgm_type2cat(pgm_type);
 	if (pgm_type >= MAX_PGM_TYPE || pgm_category == cat_invalid) {
 		logg(LOG_NOTICE, "%s: Invalid PGM type %u. Packet Skipped.\n", s->text, pgm_type);
 		goto drop;
 	}
 
 	/* move to the beginning of the options. Extracts size for category from cat_sizes */
-	a = pgm_start + sizeof(struct pgm_header) + ((cat_sizes >> (pgm_category * PGM_CAT_SHIFT)) & ((1 << PGM_CAT_SHIFT) -1));
+	a = pgm_start + sizeof(struct pgm_header) + pgm_type2size(pgm_type);
 
 	/*
 	 * Parse options following the PGM header. This is common for all PGM packet types so do it
@@ -324,7 +314,7 @@ drop:
 				opt_offset[option] = a + 2 - pgm_start;
 
 				 if (!((1L << option) & cat_perm[pgm_category]))
-					logg(LOG_INFO, "%s: Invalid option %x specified.\n", s->text, option);
+					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n", s->text, option, pgm_type);
                         } else
 				logg(LOG_INFO, "%s: Option > max\n", s->text);
 
@@ -350,7 +340,7 @@ drop:
 			return process_spm(s, header, opt_offset);
 
 		case cat_data:
-		        return process_data(s, header, opt_offset, a);
+		        return process_data(s, header, opt_offset, a, buf->end - a);
 
 		case cat_nak:
 			return process_nak(s, header, opt_offset);

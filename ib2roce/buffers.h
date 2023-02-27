@@ -98,6 +98,9 @@ struct buf {
 			/* Structs pulled out of the frame */
 			struct ibv_grh grh;
 			struct iphdr ip;
+			/* structs for sender */
+			struct pgm_opt_length *option_length;
+			struct pgm_opt_header *lastopt;
 		};
 		uint8_t meta[META_SIZE];
 	};
