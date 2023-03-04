@@ -568,11 +568,10 @@ unsigned int hash_get_objects(struct hash *h, unsigned first, unsigned number, v
 			for(j = 0; j < nr; j++) {
 				if (items >= first) {
 					objects[stored++] = *p++;
-					items++;
-					if (items >= number)
+					if (stored >= number)
 						goto out;
-				} else
-					items += nr;
+				}
+				items++;
 			}
 		}
 	}
@@ -580,7 +579,7 @@ out:
 	return stored;
 }
 
-static unsigned int hash_check(struct hash *h, bool fast)
+unsigned int hash_check(struct hash *h, bool fast)
 {
 	unsigned i,j;
 	int errors = 0;
@@ -651,7 +650,7 @@ static unsigned int hash_check(struct hash *h, bool fast)
 		for (j = 0; j < nr; j++) {
 			unsigned long val  = (unsigned long)cp[j];
 
-			if (val < 0x1000000) {
+			if (val < 0x1000) {
 				printf("Entry %u(%u) object#%u invalid coll cell contents %lx.\n", i, lower_bits, j, val);
 				errors++;
 			}

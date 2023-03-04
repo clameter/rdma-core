@@ -2,20 +2,22 @@
 #define IB2ROCE_HASH
 
 /*
- * unsigned long values in the tables are representing the address
- * of the object in the hash. The 3 lower bits are usually not used
- * since objects are aligned to 8 byte boundaries.
+ * unsigned long values in the hash tables are usually used to represent
+ * the address of the object hashed. However, if there is a collision then
+ * the 3 lower bits are also used to indicate how the collision was resolved.
+ * The lower 3 bits are usually not used since objects are aligned to
+ * 8 byte boundaries in a 64 bit environment.
  *
- * The lower 3 bits are used to indicate collisions. Lookups
- * can then store the colliding points in overflow areas.
+ * The lower 3 bits encode the number of collision entries. The rest of the
+ * 64 bit value then points to the overflow table where the addresses of the:w
+ * objects with the same hash can be found.
  *
- * 000 Pointer to the hashed object
- * 001 Number of collision entries at this address followed by the pointers
- * 010 2 Collision entries at the address pointed to.
- * 011 3
- * ...
- * 111 7 Collision entries at the indicated address
+ * So we can encode 0-7 in the lower 3 bits
  *
+ * They mean:
+ * 0	The long can be used as a pointer to the object directly.
+ * 1    The number of collisions can be found at the address followed by the collision entries
+ * 2..7 Number of collision entries that can be found at the address
  */
 #define HASH_COLL_INIT_BITS 4
 #define HASH_INIT_BITS 4
@@ -54,9 +56,10 @@ void hash_add(struct hash *h, void *object);
 void hash_del(struct hash *h, void *object);
 void *hash_find(struct hash *h, void *key);
 
+unsigned int hash_check(struct hash *h, bool fast);
+
 /* Read N objects starting at the mths one */
 unsigned int hash_get_objects(struct hash *h, unsigned first, unsigned number, void **objects);
-unsigned int hash_items(struct hash *h);
 void hash_test(void);
 
 #endif
