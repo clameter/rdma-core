@@ -697,19 +697,25 @@ static void calculate_pps(void *private)
 		int n = 0;
 		char buf[4000];
 
- 		interface_foreach(i)
+ 		interface_foreach(i) {
+			unsigned pps_in = 0;
+			unsigned pps_out = 0;
+
 			channel_foreach(c, &i->channels) {
-				if (c->pps_in || c->pps_out) {
-					n += sprintf(buf + n, "%s ", c->text);
-					if (c->pps_in)
-						n += sprintf(buf + n, "%s in ", print_count(c->pps_in));
-					if (c->pps_out)
-						n += sprintf(buf + n, "%s out ", print_count(c->pps_out));
-				}
-				if (pgm_mode)
-					n += pgm_brief_stats(buf + n, i);
+				pps_in += c->pps_in;
+				pps_out += c->pps_out;
+			}
+			if (pps_in || pps_out) {
+				n += sprintf(buf + n, "%s ", i->text);
+				if (pps_in)
+					n += sprintf(buf + n, "%s in ", print_count(pps_in));
+				if (pps_out)
+					n += sprintf(buf + n, "%s out ", print_count(pps_out));
 			}
 	
+			if (pgm_mode)
+				n += pgm_brief_stats(buf + n, i);
+		}
 		if (n)
 			logg(LOG_INFO,"pps: %s\n", buf);
 	}
