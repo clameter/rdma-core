@@ -143,11 +143,18 @@ char *__hexbytes(char *b, uint8_t *q, unsigned len, char separator)
 		unsigned n = *q++;
 		*p++ = hexbyte( n >> 4 );
 		*p++ = hexbyte( n & 0xf);
+
+		if (!separator)
+			continue;
+
 		if (i < len - 1)
 			*p++ = separator;
 		else
 			*p++ = 0;
 	}
+
+	if (!separator)
+		*p++ = 0;
 	return b;
 }
 

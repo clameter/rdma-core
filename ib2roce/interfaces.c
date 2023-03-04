@@ -694,7 +694,7 @@ void handle_rdma_event(void *private)
 				}
 				m->interface[in].status = MC_JOINED;
 
-				logg(LOG_NOTICE, "Joined %s MLID 0x%x tos %u sl %u on %s\n",
+				logg(LOG_DEBUG, "Joined %s MLID 0x%x tos %u sl %u on %s\n",
 					inet6_ntoa(param->ah_attr.grh.dgid.raw),
 					param->ah_attr.dlid,
 					m->tos_mode,

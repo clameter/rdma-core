@@ -130,6 +130,11 @@ struct i2r_interface {
 	unsigned nr_tsi;
 	struct hash *pgm_tsi_hash;
 	struct hash *pgm_record_hash;
+	unsigned last_tsi;
+	unsigned last_spm;
+	unsigned last_odata;
+	unsigned last_rdata;
+	unsigned last_naks;
 };
 
 extern struct i2r_interface i2r[];

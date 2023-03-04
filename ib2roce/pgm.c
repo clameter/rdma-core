@@ -58,10 +58,11 @@ struct nak {
 
 struct pgm_tsi {
 	struct in_addr mcgroup;
-	struct in_addr sender;
-	uint16_t dport;
-	uint16_t sport;
+	uint8_t gsi[6];			/* GSI field from PGM header */
+	uint8_t flow[2];		/* source port */
 };
+
+const char *pgm_type_text[] = { "SPM", "POLL", "POLR", NULL, "ODATA", "RDATA", NULL, NULL, "NAK", "NNAK", "NCF", NULL, "SPMR", "ACK" };
 
 enum stream_state {
 	stream_init,
@@ -69,25 +70,41 @@ enum stream_state {
 	stream_repair,
 	stream_error,
 	stream_ignore,
+	stream_states
 };
+
+const char *stream_state_text[] = {
+	"INIT",
+	"SYNC",
+	"REPAIR",
+	"ERROR",
+	"IGNORE" };
+
 /* Stream information */
 struct pgm_stream {
-	struct pgm_tsi tsi;
+	struct pgm_tsi tsi;		/* Transport Session Identifier */
 	struct i2r_interface *i;	/* Interface of the source */
 	unsigned trail;			/* Sender trail */
 	unsigned lead;			/* Sender lead */
-
-	unsigned last;			/* Highest SQN received */
-	unsigned rlast;			/* Last Repair data */
-	unsigned last_seq;		/* Last in sequence */
-	unsigned oldest;		/* The oldest message available locally */
-	unsigned dup, odata, rdata, spm, ack, nak;
-	unsigned rdup;
-	unsigned first_sqn, last_sqn;
-	unsigned sqn_seq_errs;
-	unsigned drop;
+	unsigned last;			/* last SQN received */
+	unsigned odata;			/* ODATA packets received */
+        unsigned rdata;			/* RDATA packets received */
+	unsigned spm;			/* SPM packets received */
+	uint64_t timestamp;		/* Timestamp for last action */
+	unsigned ncf;			/* NCF packets received */
+	unsigned ack;			/* ACK in NACK format */
+	unsigned nak;			/* NAKs */
+	unsigned drop;			/* Packets dropped */
+	uint64_t timestamp_error;	/* Timestamp for last problem */
+	unsigned dup;			/* Duplicate ODATA */
+	unsigned rdup;			/* Duplicated RDATA */
+	unsigned rlast;			/* Last SQN for repair data */
+	unsigned sqn_seq_errs;		/* Sequence Errors */
 	unsigned last_missed_sqn, last_missed_sqns;
-	struct in_addr repairer;
+	unsigned first_sqn, last_sqn;
+	unsigned oldest;		/* The oldest message available locally */
+	unsigned last_seq;		/* Last in sequence */
+	struct in_addr repairer;	/* Unicast address for NAKs */
 	enum stream_state state;
 	char text[60];
 };
@@ -116,17 +133,22 @@ static void init_pgm_streams(void)
 
 	for(i = i2r; i < i2r + NR_INTERFACES; i++) {
 		i->pgm_tsi_hash = hash_create(0, sizeof(struct pgm_tsi));
-		i->pgm_record_hash = hash_create(0, sizeof(struct pgm_tsi) + sizeof(uint32_t));
+//		i->pgm_record_hash = hash_create(0, sizeof(struct pgm_tsi) + sizeof(uint32_t));
 	}
+}
+
+static struct in_addr tsi_sender(struct pgm_tsi *tsi)
+{
+	struct in_addr a;
+
+	memcpy(&a, tsi->gsi, sizeof(struct in_addr));
+	return a;
 }
 
 static void format_tsi(char *b, struct pgm_tsi *tsi)
 {
-	static char c[30];
-
-	strcpy(c, inet_ntoa(tsi->sender));
-
-	snprintf(b, 60, "%s:%d->%s:%d", c, tsi->sport, inet_ntoa(tsi->mcgroup), tsi->dport);
+	__hexbytes(b, tsi->gsi, 8, 0);
+	sprintf(b + 16, "@%s", inet_ntoa(tsi->mcgroup));
 }
 
 static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *opt_offset, uint8_t *a, unsigned len)
@@ -135,19 +157,19 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 //	uint32_t tdsu = ntohs(h->pgm_tsdu_length);
 	uint32_t sqn = ntohl(data->data_sqn);
 	uint32_t trail = ntohl(data->data_trail);
-	char rtype = h->pgm_type == PGM_RDATA ? 'R' : 'O';
 
-	logg(LOG_DEBUG, "%s: %cDATA SQN=%d TRAIL=%d SYN=%d len=%u\n", s->text, rtype, sqn, trail, opt_offset[PGM_OPT_SYN], len);
+	logg(LOG_DEBUG, "%s: %s SQN=%d TRAIL=%d SYN=%d len=%u\n", s->text, pgm_type_text[h->pgm_type], sqn, trail, opt_offset[PGM_OPT_SYN], len);
 
 	/* Accept SQN if the stream is new or if the SYN option is set */
 	if (s->state == stream_init || opt_offset[PGM_OPT_SYN]) {
-		logg(LOG_INFO, "TSI Start (OPT_SYN on %cDATA) %s\n", rtype, s->text);
+		logg(LOG_INFO, "TSI Start (OPT_SYN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
 		s->state = stream_sync;
 		goto accept;
 	}
 
 	if (h->pgm_type == PGM_RDATA) {
 		s->rdata++;
+		s->timestamp_error = now;
 		goto finish;
 	}
 	s->odata++;
@@ -156,6 +178,7 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 		s->dup++;
 		logg(LOG_NOTICE, "%s: Sender is duplicating traffic last=%u sqn=%u\n", s->text, s->last, sqn);
 		s->last = sqn;
+		s->timestamp_error = now;
 		return false;
 	}
 
@@ -166,11 +189,13 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 	if (sqn > s->lead)
 		s->lead = sqn;
 
-	if (sqn != s->last +1 && !opt_offset[PGM_OPT_RST]) {
+	if (s->last > 1 && sqn != s->last +1 && !opt_offset[PGM_OPT_RST]) {
 		logg(LOG_NOTICE, "%s: Sequence error SQN %d->SQN %d diff %d\n", s->text, s->last, sqn, sqn - s->last);
 		s->state = stream_repair;
 		s->sqn_seq_errs++;
-	}
+		s->timestamp_error = now;
+	} else
+		s->timestamp = now;
 
 accept:
 	s->last = sqn;
@@ -178,7 +203,7 @@ accept:
 finish:
 	if (opt_offset[PGM_OPT_FIN]) {
 		/* End of Stream */
-		logg(LOG_INFO, "TSI End (OPT_FIN on %cDATA) %s\n", rtype, s->text);
+		logg(LOG_INFO, "TSI End (OPT_FIN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
 		s->state = stream_init;
 	}
 
@@ -213,17 +238,38 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 {
 	struct pgm_nak *nak = (struct pgm_nak *)(h + 1);
 	uint32_t sqn = ntohl(nak->nak_sqn);
+	unsigned count = 1;
+	unsigned n;
+	char sqns[2000];
+
+	/* First SQN */
+	n = sprintf(sqns, "%u", sqn);
+
+	/* More SQNs ? */
+	if (opt_offset[PGM_OPT_NAK_LIST]) {
+
+		struct pgm_opt_header *poh = (void *)h + opt_offset[PGM_OPT_NAK_LIST];
+		struct pgm_opt_nak_list *ponl = (void *)(&poh->opt_reserved);
+		unsigned naks =(poh->opt_length - 3)/sizeof(uint32_t);
+		unsigned i;
+
+		count += naks;
+
+		for(i = 0; i < naks; i++)
+			n += sprintf(sqns + n, " %u", ntohl(ponl->opt_sqn[i]));
+	}
 
 	if (h->pgm_type != PGM_ACK) {
+		s->nak += count;
+		logg(LOG_NOTICE, "%s: %s NLA=%s GRP_NLA=%s SQN=%s\n",
+			s->text, pgm_type_text[h->pgm_type], inet_ntoa(nak->nak_src_nla),
+			inet_ntoa(nak->nak_grp_nla), sqns);
 
-		s->nak++;
-		logg(LOG_NOTICE, "%s: NAK/NCF/NNAK SQN=%u NLA=%s GRP_NLA=%s\n",
-			s->text, sqn, inet_ntoa(nak->nak_src_nla),
-			inet_ntoa(nak->nak_grp_nla));
+		s->timestamp_error = now;
 
 	} else {
-		s->ack++;
-		logg(LOG_NOTICE, "%s: ACK %u\n", s->text, sqn);
+		s->ack += count;
+		logg(LOG_NOTICE, "%s: ACK %s\n", s->text, sqns);
 	}
 	return true;
 }
@@ -241,9 +287,8 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 	struct pgm_header *header = (void *)pgm_start;
 
 	tsi.mcgroup = m->addr;
-	memcpy(&tsi.sender, header->pgm_gsi, sizeof(struct in_addr));
-	tsi.sport = ntohs(header->pgm_sport);
-	tsi.dport = ntohs(header->pgm_dport);
+	memcpy(tsi.gsi, header->pgm_gsi, 6);
+	memcpy(&tsi.flow, &header->pgm_sport, sizeof(uint16_t));
 
 	s = hash_find(i->pgm_tsi_hash, &tsi);
 	if (!s) {
@@ -258,12 +303,12 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 			i->nr_tsi++;
 			unlock();
 
-			if (!valid_addr(c->i, tsi.sender)) {
+			if (!valid_addr(c->i, tsi_sender(&tsi))) {
 				s->state = stream_ignore;
 				logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
 				return false;
 			} else
-				logg(LOG_NOTICE, "TSI New %s\n", s->text);
+				logg(LOG_DEBUG, "TSI New %s\n", s->text);
 		} else
 			unlock();
 	}
@@ -271,6 +316,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 	if (s->state == stream_ignore) {
 drop:
 		s->drop++;
+		s->timestamp_error = now;
 		return false;
 	}
 
@@ -306,22 +352,19 @@ drop:
 			 * We just skip over unknown data
 			 */
 			if (option <= MAX_PGM_OPT) {
-				/*
-				 * The 2 should be sizeof(pgm_opt_header) but that header includes a reserved
-				 * field that is also part of the other struct pgm_opt_xxxes. So hardcode
-				 * the size here without the reserved field/
-				 */
-				opt_offset[option] = a + 2 - pgm_start;
+				opt_offset[option] = a - pgm_start;
 
 				 if (!((1L << option) & cat_perm[pgm_category]))
 					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n", s->text, option, pgm_type);
-                        } else
+                        }
+/*		       	else
 				logg(LOG_INFO, "%s: Option > max\n", s->text);
+*/
 
 			a += poh->opt_length;
 		} while (!(poh->opt_type & PGM_OPT_END));
 
-		v = (uint16_t *)(opt_offset[PGM_OPT_LENGTH] + pgm_start);
+		v = (uint16_t *)(opt_offset[PGM_OPT_LENGTH] + pgm_start + 2);
 		if (!*v)
 			logg(LOG_INFO, "%s: packet without OPT_LENGTH.\n", s->text);
 		else {
@@ -332,8 +375,10 @@ drop:
 				goto drop;
 			}
 		}
-	} else
-		logg(LOG_INFO, "%s: No Options ...\n", s->text);
+	} else {
+		if (pgm_category != cat_nak)
+			logg(LOG_INFO, "%s: No Options ... Type %d\n", s->text, pgm_type);
+	}
 
 	switch(pgm_category) {
 		case cat_spm:
@@ -353,8 +398,14 @@ drop:
 
 static void tsi_cmd(FILE *out, char *parameters)
 {
+	unsigned status[stream_states] = { 0, };
+	unsigned sum_tsi = 0;
+	unsigned data_tsi = 0;
+	unsigned active_tsi = 0;
+	unsigned tsi_displayed = 0;
+	char cmd = tolower(parameters ? parameters[0] : 's');
+
 	interface_foreach(i) {
-		fprintf(out, "%s: TSIs=%d\n", i->text, i->nr_tsi);
 		/* Retrieve TSI streams */
 		struct pgm_stream *t[10];
 		unsigned nr;
@@ -365,55 +416,109 @@ static void tsi_cmd(FILE *out, char *parameters)
 				struct pgm_stream *ps = t[j];
 				char buf[60];
 
+				status[ps->state]++;
+				if (ps->last > 1)
+					data_tsi++;
+
+				if (ps->timestamp > now - seconds(60))
+					active_tsi++;
+
+				switch (cmd) {
+					/* Summary */
+					case 's' :
+						continue;
+
+					/* Streams with data */
+					case 'd' :
+						/* Default Display: Only active streams */
+						if (ps->state != stream_sync || !ps->last)
+							continue;
+						break;
+
+					/* Streams with errors */
+					case 'e' :
+						 if (ps->state == stream_sync || ps->state == stream_init)
+							 continue;
+						 if (ps->timestamp_error)
+							 break;
+						 continue;
+
+					case 'n' :
+						 if (ps->state == stream_sync)
+							continue;
+						 if (!ps->ncf)
+							 continue;
+						 break;
+
+					default: break;
+				}
+
 				format_tsi(buf, &ps->tsi);
 
-				fprintf(out, "%s: lead=%d trail=%d last=%d lastRepairData=%d oldest=%d",
-					buf, ps->lead, ps->trail, ps->last, ps->rlast, ps->oldest);
+				fprintf(out, "%s: %s", buf, stream_state_text[ps->state]);
+
+				if (ps->last)
+					fprintf(out, " SQN: last=%d lead=%d trail=%d", ps->last, ps->lead, ps->trail);
+
+				if (ps->odata || ps->spm)
+					fprintf(out, " ODATA=%u RDATA=%u SPM=%u NCF=%u", ps->odata, ps->rdata, ps->spm, ps->ncf);
+
+				if (ps->timestamp)
+					fprintf(out, " Active %s", print_time(now - ps->timestamp));
+
+				if (ps->timestamp_error)
+					fprintf(out, " Error %s", print_time(now - ps->timestamp_error));
+
+				if (ps->drop)
+					fprintf(out, " Drop %u", ps->drop);
 
 				if (ps->dup)
 					fprintf(out, " dup(OData!)=%u", ps->dup);
 
-				if (ps->rdup)
-					fprintf(out, " dup(Rdata!)=%u", ps->rdup);
-
-				if (ps->rdata)
-					fprintf(out, " rdata=%u", ps->rdata);
-
 				if (ps->ack)
 					fprintf(out, " ack=%u", ps->ack);
 
-				if (ps->nak)
-					fprintf(out, " nak=%u", ps->nak);
-
-				if (ps->first_sqn)
-					fprintf(out, " firstsqn=%u", ps->first_sqn);
+				if (ps->ncf)
+					fprintf(out, " ncf=%u", ps->ncf);
 
 				if (ps->sqn_seq_errs) {
 					fprintf(out, " sqnerrs=%u lastmissed=%u nr_missed=%u",
 						ps->sqn_seq_errs, ps->last_missed_sqn, ps->last_missed_sqns);
 				}
 				fprintf(out, "\n");
+				tsi_displayed++;
   			}
 			offset += nr;
 		}
+		fprintf(out, "%s: TSIs=%d\n", i->text, i->nr_tsi);
+		sum_tsi += i->nr_tsi;
 	}
+	if (cmd == 's') {
+
+		fprintf(out, "Total TSIs=%u Active=%u Data=%u", sum_tsi, active_tsi, data_tsi);
+		for (int i = 0; i < stream_states; i++)
+			fprintf(out, " %s=%u", stream_state_text[i], status[i]);
+
+		fprintf(out, "\n");
+	} else
+		fprintf(out, "--- %u/%u TSIs shown\n", tsi_displayed, sum_tsi);
 }
 
 __attribute__((constructor))
 static void pgm_init(void)
 {
-	register_concom("tsi", true, 0, "Show PGM info", tsi_cmd);
+	register_concom("tsi", true, 1, "Show PGM info (parmameters all/data/errors/summary/nak)", tsi_cmd);
 	register_enable("pgm", true, &pgm_mode, NULL, "on", "off", NULL,
 		"Enable PGM processing and validaton (Sequence numbers etc)");
-
 	init_pgm_streams();
 }
 
+#define NSTREAMS 100
 /* Summarize TSI stats for an interface */
 unsigned pgm_brief_stats(char *b, struct i2r_interface *i)
 {
 
-	struct pgm_stream *streams[10];
+	struct pgm_stream *streams[NSTREAMS];
 	unsigned offset = 0;
 	unsigned nr;
 	unsigned nr_streams = 0;
@@ -425,7 +530,7 @@ unsigned pgm_brief_stats(char *b, struct i2r_interface *i)
 	if (!i->context || !i->pgm_tsi_hash)
 		return 0;
 
-	while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, 10, (void **)streams))) {
+	while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, NSTREAMS, (void **)streams))) {
 		int j;
 
 		for (j = 0; j < nr; j++) {
@@ -434,17 +539,24 @@ unsigned pgm_brief_stats(char *b, struct i2r_interface *i)
 			spm += s->spm;
 			odata += s->odata;
 			rdata += s->rdata;
+			nak += s->nak;
 			nr_streams++;
 		}
 
-		offset += 10;
+		offset += nr;
 	}
 
-	if (nr_streams && odata)
+	if (nr_streams && odata) {
+		int ret = sprintf(b, " [TSI=%u SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
+				i->nr_tsi - i->last_tsi, spm - i->last_spm, odata - i->last_odata, rdata - i->last_rdata, nak - i->last_naks);
 
-		return sprintf(b, " [TSI=%d SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
-				nr_streams, spm, odata, rdata, nak);
-	else
+		i->last_tsi = i->nr_tsi;
+		i->last_spm = spm;
+		i->last_odata = odata;
+		i->last_rdata = rdata;
+		i->last_naks = i->last_naks;
+		return ret;
+	} else
 		return 0;
 }
 

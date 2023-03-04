@@ -261,7 +261,7 @@ struct sockaddr_in *parse_addr(const char *arg, int port,
 
 	ret = getaddrinfo(a, service, &hints, &res);
 	if (ret) {
-		fprintf(stderr, "getaddrinfo() failed (%s) - invalid IP address.\n", gai_strerror(ret));
+		fprintf(stderr, "getaddrinfo() failed (%s) - invalid IP address (%s).\n", gai_strerror(ret), a);
 		return NULL;
 	}
 
