@@ -98,9 +98,9 @@ struct pgm_stream {
 	uint64_t timestamp_error;	/* Timestamp for last problem */
 	uint64_t options;		/* Which options were used by the stream */
 	unsigned dup;			/* Duplicate ODATA */
-	unsigned rdup;			/* Duplicated RDATA */
 	unsigned rlast;			/* Last SQN for repair data */
 	unsigned sqn_seq_errs;		/* Sequence Errors */
+	unsigned missed_sqns;		/* SQNs missed */
 	unsigned last_missed_sqn, last_missed_sqns;
 	unsigned first_sqn, last_sqn;
 	unsigned oldest;		/* The oldest message available locally */
@@ -197,6 +197,9 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 		logg(LOG_NOTICE, "%s: Sequence error SQN %d->SQN %d diff %d\n", s->text, s->last, sqn, sqn - s->last);
 		s->state = stream_repair;
 		s->sqn_seq_errs++;
+		s->missed_sqns += sqn - s->last;
+		s->last_missed_sqn = sqn - 1;
+		s->last_missed_sqns = sqn - s->last;
 		s->timestamp_error = now;
 	} else
 		s->timestamp = now;
@@ -264,6 +267,7 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 	}
 
 	if (h->pgm_type != PGM_ACK) {
+
 		s->nak += count;
 		logg(LOG_NOTICE, "%s: %s NLA=%s GRP_NLA=%s SQN=%s\n",
 			s->text, pgm_type_text[h->pgm_type], inet_ntoa(nak->nak_src_nla),
@@ -272,8 +276,10 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 		s->timestamp_error = now;
 
 	} else {
+
 		s->ack += count;
 		logg(LOG_NOTICE, "%s: ACK %s\n", s->text, sqns);
+
 	}
 	return true;
 }
@@ -483,14 +489,19 @@ static void tsi_cmd(FILE *out, char *parameters)
 				if (ps->last)
 					fprintf(out, " SQN: last=%d lead=%d trail=%d", ps->last, ps->lead, ps->trail);
 
-				if (ps->odata || ps->spm)
-					fprintf(out, " ODATA=%u RDATA=%u SPM=%u NCF=%u", ps->odata, ps->rdata, ps->spm, ps->ncf);
+				if (ps->odata || ps->spm) {
+					fprintf(out, " ODATA=%u SPM=%u", ps->odata, ps->spm);
 
-				if (ps->timestamp)
-					fprintf(out, " Active %s", print_time(now - ps->timestamp));
+					if (ps->timestamp)
+						fprintf(out, " Active %s", print_time(now - ps->timestamp));
 
-				if (ps->timestamp_error)
-					fprintf(out, " Error %s", print_time(now - ps->timestamp_error));
+					if (ps->rdata || ps->ncf)
+						fprintf(out, " RDATA=%u NCF=%u", ps->rdata, ps->ncf);
+
+					if (ps->timestamp_error)
+						fprintf(out, " Error %s", print_time(now - ps->timestamp_error));
+
+				}
 
 				if (ps->drop)
 					fprintf(out, " Drop %u", ps->drop);
@@ -501,12 +512,9 @@ static void tsi_cmd(FILE *out, char *parameters)
 				if (ps->ack)
 					fprintf(out, " ack=%u", ps->ack);
 
-				if (ps->ncf)
-					fprintf(out, " ncf=%u", ps->ncf);
-
 				if (ps->sqn_seq_errs) {
-					fprintf(out, " sqnerrs=%u lastmissed=%u nr_missed=%u",
-						ps->sqn_seq_errs, ps->last_missed_sqn, ps->last_missed_sqns);
+					fprintf(out, " sqnerrs=%u missed_sqns=%u last_missed_sqn=%u last_missed_sqns=%u",
+						ps->sqn_seq_errs, ps->missed_sqns, ps->last_missed_sqn, ps->last_missed_sqns);
 				}
 				if (ps->options) {
 					fprintf(out, " ignored-opt=");
