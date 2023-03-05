@@ -96,6 +96,7 @@ struct pgm_stream {
 	unsigned nak;			/* NAKs */
 	unsigned drop;			/* Packets dropped */
 	uint64_t timestamp_error;	/* Timestamp for last problem */
+	uint64_t options;		/* Which options were used by the stream */
 	unsigned dup;			/* Duplicate ODATA */
 	unsigned rdup;			/* Duplicated RDATA */
 	unsigned rlast;			/* Last SQN for repair data */
@@ -348,46 +349,58 @@ drop:
 	memset(opt_offset, 0, sizeof(uint16_t) * MAX_PGM_OPT);
 
 	if (header->pgm_options & PGM_OPT_PRESENT) {
+
 		struct pgm_opt_header *poh;
 		uint8_t *opt_start =  a;
 		uint16_t *v;
 		unsigned option;
+		uint64_t opt_bit;
 
 		do {
 			poh = (struct pgm_opt_header *)a;
 			option = poh->opt_type & PGM_OPT_MASK;
+			opt_bit = 1L << option;
 
 			/*
 			 * RFC3208 allows ignoring options that are unknown.
 			 * We just skip over unknown data
 			 */
 			if (option <= MAX_PGM_OPT) {
+
 				opt_offset[option] = a - pgm_start;
 
-				 if (!((1L << option) & cat_perm[pgm_category]))
+				if (!(opt_bit & cat_perm[pgm_category]))
 					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n", s->text, option, pgm_type);
-                        }
-/*		       	else
-				logg(LOG_INFO, "%s: Option > max\n", s->text);
-*/
+
+                        } else {
+				/* Record unknown option encountered */
+				s->options |= opt_bit;
+			}
 
 			a += poh->opt_length;
+
 		} while (!(poh->opt_type & PGM_OPT_END));
 
 		v = (uint16_t *)(opt_offset[PGM_OPT_LENGTH] + pgm_start + 2);
 		if (!*v)
+
 			logg(LOG_INFO, "%s: packet without OPT_LENGTH.\n", s->text);
+
 		else {
 			unsigned total_opt_length = ntohs(*v);
 
 			if (a - opt_start != total_opt_length) {
-				logg(LOG_INFO, "%s: total_opt_length mismatch (is %lu, expected %u). Packet skipped\n", s->text, a - opt_start, total_opt_length);
+				logg(LOG_INFO, "%s: total_opt_length mismatch (is %lu, expected %u). Packet skipped\n",
+					s->text, a - opt_start, total_opt_length);
 				goto drop;
 			}
 		}
+
 	} else {
+
 		if (pgm_category != cat_nak)
 			logg(LOG_INFO, "%s: No Options ... Type %d\n", s->text, pgm_type);
+
 	}
 
 	switch(pgm_category) {
@@ -495,6 +508,16 @@ static void tsi_cmd(FILE *out, char *parameters)
 					fprintf(out, " sqnerrs=%u lastmissed=%u nr_missed=%u",
 						ps->sqn_seq_errs, ps->last_missed_sqn, ps->last_missed_sqns);
 				}
+				if (ps->options) {
+					fprintf(out, " ignored-opt=");
+
+					for(int b = MAX_PGM_OPT; b < 64; b++) {
+						if (ps->options & (1L << b)) {
+							fprintf(out, "%x ", b);
+						}
+					}
+				}
+
 				fprintf(out, "\n");
 				tsi_displayed++;
   			}
