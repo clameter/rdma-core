@@ -274,6 +274,24 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 	return true;
 }
 
+static struct pgm_stream *create_tsi(struct i2r_interface *i, struct pgm_tsi *tsi)
+{
+	struct pgm_stream *s;
+
+	lock();
+	s = hash_find(i->pgm_tsi_hash, &tsi);
+	if (!s) {
+		s = calloc(1, sizeof(struct pgm_stream));
+		s->tsi = *tsi;
+		s->i = i;
+		format_tsi(s->text, tsi);
+		hash_add(i->pgm_tsi_hash, s);
+		i->nr_tsi++;
+	}
+	unlock();
+	return s;
+}
+
 bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 {
 	struct i2r_interface *i = c->i;
@@ -292,25 +310,14 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 	s = hash_find(i->pgm_tsi_hash, &tsi);
 	if (!s) {
-		lock();
-		s = hash_find(i->pgm_tsi_hash, &tsi);
-		if (!s) {
-			s = calloc(1, sizeof(struct pgm_stream));
-			s->tsi = tsi;
-			s->i = i;
-			format_tsi(s->text, &tsi);
-			hash_add(i->pgm_tsi_hash, s);
-			i->nr_tsi++;
-			unlock();
+		s= create_tsi(i, &tsi);
 
-			if (!valid_addr(c->i, tsi_sender(&tsi))) {
-				s->state = stream_ignore;
-				logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
-				return false;
-			} else
-				logg(LOG_DEBUG, "TSI New %s\n", s->text);
+		if (!valid_addr(c->i, tsi_sender(&tsi))) {
+			s->state = stream_ignore;
+			logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
+			return false;
 		} else
-			unlock();
+			logg(LOG_DEBUG, "TSI New %s\n", s->text);
 	}
 
 	if (s->state == stream_ignore) {
