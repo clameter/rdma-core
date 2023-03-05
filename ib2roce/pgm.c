@@ -386,9 +386,27 @@ drop:
 					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n",
 						s->text, option, header->pgm_type);
 
-                        } else {
-				/* Record unknown and ignored option encountered */
+                        } else
+			if (option != PGM_OPT_INVALID) {
+				/* Record unknown option encountered */
 				s->options |= opt_bit;
+
+				/* What now ? */
+				switch (poh->opt_reserved & PGM_OPX_MASK) {
+
+					case PGM_OPX_INVALIDATE:
+						/* Modify so downstream does not process this option */
+						poh->opt_type = PGM_OPT_INVALID | (poh->opt_type & PGM_OPT_END);
+						break;
+
+					case PGM_OPX_DISCARD:
+						/* Discard the packet  */
+						goto drop;
+
+					case PGM_OPX_IGNORE:
+						/* Just leave it as is */
+						break;
+				}
 			}
 
 			a += poh->opt_length;
