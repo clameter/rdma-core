@@ -321,7 +321,10 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 	tsi.mcgroup = m->addr;
 	memcpy(tsi.gsi, header->pgm_gsi, 6);
-	memcpy(&tsi.flow, &header->pgm_sport, sizeof(uint16_t));
+	if (header->pgm_type == PGM_NAK || header->pgm_type == PGM_NNAK)
+		memcpy(&tsi.flow, &header->pgm_dport, sizeof(uint16_t));
+	else
+		memcpy(&tsi.flow, &header->pgm_sport, sizeof(uint16_t));
 
 	s = hash_find(i->pgm_tsi_hash, &tsi);
 	if (!s) {
