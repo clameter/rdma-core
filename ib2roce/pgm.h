@@ -49,8 +49,8 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf);
 unsigned pgm_brief_stats(char *b, struct i2r_interface *i);
 
 #define MAX_PGM_TYPE (PGM_ACK + 1)
-#define PGM_TYPE_MASK (PGM_OPT_VAR_PKTLEN -1)
-#define MAX_PGM_OPT PGM_OPT_PGMCC_FEEDBACK
+#define PGM_OPT_TYPE_MASK (PGM_OPT_VAR_PKTLEN -1)
+#define MAX_PGM_OPT (PGM_OPT_RST + 1)
 
 /* There are 3 categories of pgm_data frames and one invalid. Encode them in a 64 bit integer */
 #define PGM_CAT_SHIFT 16

@@ -94,6 +94,7 @@ struct pgm_stream {
 	unsigned ncf;			/* NCF packets received */
 	unsigned ack;			/* ACK in NACK format */
 	unsigned nak;			/* NAKs */
+	unsigned nnak;			/* NNAKs */
 	unsigned drop;			/* Packets dropped */
 	uint64_t timestamp_error;	/* Timestamp for last problem */
 	uint64_t options;		/* Which options were used by the stream */
@@ -268,7 +269,12 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 
 	if (h->pgm_type != PGM_ACK) {
 
-		s->nak += count;
+		switch (h->pgm_type) {
+			case PGM_NAK: s->nak += count; break;
+			case PGM_NCF: s->ncf += count; break;
+			case PGM_NNAK: s->nnak += count; break;
+		}
+
 		logg(LOG_NOTICE, "%s: %s NLA=%s GRP_NLA=%s SQN=%s\n",
 			s->text, pgm_type_text[h->pgm_type], inet_ntoa(nak->nak_src_nla),
 			inet_ntoa(nak->nak_grp_nla), sqns);
@@ -309,7 +315,6 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 	struct pgm_stream *s;
 	uint8_t *a;
 	uint16_t opt_offset[MAX_PGM_OPT];
-	unsigned pgm_type;
 	enum cat_type pgm_category;
 	uint8_t *pgm_start = (uint8_t *)(buf->cur);
 	struct pgm_header *header = (void *)pgm_start;
@@ -338,15 +343,14 @@ drop:
 	}
 
 	/* Determine the category of the pgm_type which will allow us to easily check allowed options */
- 	pgm_type = header->pgm_type & PGM_TYPE_MASK;
-	pgm_category = pgm_type2cat(pgm_type);
-	if (pgm_type >= MAX_PGM_TYPE || pgm_category == cat_invalid) {
-		logg(LOG_NOTICE, "%s: Invalid PGM type %u. Packet Skipped.\n", s->text, pgm_type);
+	pgm_category = pgm_type2cat(header->pgm_type);
+	if (header->pgm_type >= MAX_PGM_TYPE || pgm_category == cat_invalid) {
+		logg(LOG_NOTICE, "%s: Invalid PGM type %u. Packet Skipped.\n", s->text, header->pgm_type);
 		goto drop;
 	}
 
 	/* move to the beginning of the options. Extracts size for category from cat_sizes */
-	a = pgm_start + sizeof(struct pgm_header) + pgm_type2size(pgm_type);
+	a = pgm_start + sizeof(struct pgm_header) + pgm_type2size(header->pgm_type);
 
 	/*
 	 * Parse options following the PGM header. This is common for all PGM packet types so do it
@@ -376,10 +380,11 @@ drop:
 				opt_offset[option] = a - pgm_start;
 
 				if (!(opt_bit & cat_perm[pgm_category]))
-					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n", s->text, option, pgm_type);
+					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n",
+						s->text, option, header->pgm_type);
 
                         } else {
-				/* Record unknown option encountered */
+				/* Record unknown and ignored option encountered */
 				s->options |= opt_bit;
 			}
 
@@ -405,7 +410,7 @@ drop:
 	} else {
 
 		if (pgm_category != cat_nak)
-			logg(LOG_INFO, "%s: No Options ... Type %d\n", s->text, pgm_type);
+			logg(LOG_INFO, "%s: No Options ... Type %d\n", s->text, header->pgm_type);
 
 	}
 
