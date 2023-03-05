@@ -236,6 +236,9 @@ int find_rdma_devices(void)
 				goto skip;
 			}
 
+			if (mode != mode_bridge && roce_name && attr.link_layer == IBV_LINK_LAYER_INFINIBAND)
+				goto skip;
+
 			if (attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
 				if (check_rdma_device(INFINIBAND, port, ib_name, c, &attr, &dattr) &&
 					(!i2r[ROCE].mtu || i2r[ROCE].mtu == i2r[INFINIBAND].mtu))
