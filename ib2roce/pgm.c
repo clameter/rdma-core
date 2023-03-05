@@ -162,7 +162,10 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 
 	/* Accept SQN if the stream is new or if the SYN option is set */
 	if (s->state == stream_init || opt_offset[PGM_OPT_SYN]) {
-		logg(LOG_INFO, "TSI Start (OPT_SYN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
+
+		if (opt_offset[PGM_OPT_SYN])
+			logg(LOG_INFO, "TSI Start (OPT_SYN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
+
 		s->state = stream_sync;
 		goto accept;
 	}
