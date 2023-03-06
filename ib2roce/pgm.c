@@ -455,6 +455,12 @@ static void tsi_cmd(FILE *out, char *parameters)
 {
 	unsigned status[stream_states] = { 0, };
 	unsigned sum_tsi = 0;
+	unsigned sum_rdata = 0;
+	unsigned sum_odata = 0;
+	unsigned sum_spm = 0;
+	unsigned sum_ncf = 0;
+	unsigned sum_sqnerrs = 0;
+	unsigned sum_missed_sqn = 0;
 	unsigned data_tsi = 0;
 	unsigned active_tsi = 0;
 	unsigned tsi_displayed = 0;
@@ -492,11 +498,11 @@ static void tsi_cmd(FILE *out, char *parameters)
 
 					/* Streams with errors */
 					case 'e' :
-						 if (ps->state == stream_sync || ps->state == stream_init)
+						 if (ps->state == stream_init)
 							 continue;
-						 if (ps->timestamp_error)
-							 break;
-						 continue;
+						 if (!ps->timestamp_error)
+							 continue;
+						 break;
 
 					case 'n' :
 						 if (ps->state == stream_sync)
@@ -509,6 +515,13 @@ static void tsi_cmd(FILE *out, char *parameters)
 				}
 
 				format_tsi(buf, &ps->tsi);
+
+				sum_odata += ps->odata;
+				sum_rdata += ps->rdata;
+				sum_spm += ps->spm;
+				sum_ncf += ps->ncf;
+				sum_sqnerrs += ps->sqn_seq_errs;
+				sum_missed_sqn += ps->missed_sqns;
 
 				fprintf(out, "%s: %s", buf, stream_state_text[ps->state]);
 
@@ -557,8 +570,10 @@ static void tsi_cmd(FILE *out, char *parameters)
   			}
 			offset += nr;
 		}
-		fprintf(out, "%s: TSIs=%d\n", i->text, i->nr_tsi);
-		sum_tsi += i->nr_tsi;
+		if (i->nr_tsi) {
+			fprintf(out, "%s: TSIs=%d\n", i->text, i->nr_tsi);
+			sum_tsi += i->nr_tsi;
+		}
 	}
 	if (cmd == 's') {
 
@@ -568,7 +583,8 @@ static void tsi_cmd(FILE *out, char *parameters)
 
 		fprintf(out, "\n");
 	} else
-		fprintf(out, "--- %u/%u TSIs shown\n", tsi_displayed, sum_tsi);
+		fprintf(out, "--- %u/%u TSIs shown ODATA=%u RDATA=%u SPM=%u NCF=%u SQNERRS=%u Missed SQNs=%u\n",
+			tsi_displayed, sum_tsi, sum_odata, sum_rdata, sum_spm, sum_ncf, sum_sqnerrs, sum_missed_sqn);
 }
 
 __attribute__((constructor))
