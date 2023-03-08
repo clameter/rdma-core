@@ -101,18 +101,15 @@ __attribute__ ((format (printf, 1, 2)))
 void panic(const char *fmt, ...)
 {
 	va_list valist;
-#if 0
 	void *frames[NR_FRAMES];
 	int nrframes;
 	int j;
 	char **strings;
-#endif
 
 	va_start(valist, fmt);
 	__logg(LOG_CRIT, fmt, valist);
 
 	logg(LOG_CRIT, "Panic");	
-#if 0
 	nrframes = backtrace(frames, NR_FRAMES);
 	strings = backtrace_symbols(frames, nrframes);
 
@@ -121,9 +118,6 @@ void panic(const char *fmt, ...)
 	}
 	free(strings);
 	abort();
-#else
-	exit(7);
-#endif
 }
 
 static char hexbyte(unsigned x)
