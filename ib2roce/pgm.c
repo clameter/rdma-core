@@ -45,6 +45,7 @@
 /*
  * PGM RFC3208 Support
  */
+#define PGM_EXT_OPT_LABEL 0x22
 
 bool pgm_mode = true; 	/* Will only analyze CLLM streams */
 
@@ -108,6 +109,7 @@ struct pgm_stream {
 	unsigned last_seq;		/* Last in sequence */
 	struct in_addr repairer;	/* Unicast address for NAKs */
 	enum stream_state state;
+	bool label;
 	char text[60];
 };
 
@@ -147,10 +149,20 @@ static struct in_addr tsi_sender(struct pgm_tsi *tsi)
 	return a;
 }
 
-static void format_tsi(char *b, struct pgm_tsi *tsi)
+static void format_tsi(char *b, struct pgm_tsi *tsi, unsigned char *label, unsigned len)
 {
-	__hexbytes(b, tsi->gsi, 8, 0);
-	sprintf(b + 16, "@%s", inet_ntoa(tsi->mcgroup));
+	char *p = b;
+
+	if (len) {
+		memcpy(b, label, len);
+		p += len;
+		*p++=':';
+	}
+
+	__hexbytes(p, tsi->gsi, 8, 0);
+	p+= 16;
+
+	sprintf(p, "@%s", inet_ntoa(tsi->mcgroup));
 }
 
 static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *opt_offset, uint8_t *a, unsigned len)
@@ -300,7 +312,7 @@ static struct pgm_stream *create_tsi(struct i2r_interface *i, struct pgm_tsi *ts
 		s = calloc(1, sizeof(struct pgm_stream));
 		s->tsi = *tsi;
 		s->i = i;
-		format_tsi(s->text, tsi);
+		format_tsi(s->text, tsi, NULL, 0);
 		hash_add(i->pgm_tsi_hash, s);
 		i->nr_tsi++;
 	}
@@ -386,7 +398,14 @@ drop:
 					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n",
 						s->text, option, header->pgm_type);
 
-                        } else
+			} else
+			if (option == PGM_EXT_OPT_LABEL) {
+
+				if (!s->label) {
+					s->label = true;
+					format_tsi(s->text, &tsi, a +4, poh->opt_length - 4);
+				}
+			} else
 			if (option != PGM_OPT_INVALID) {
 				/* Record unknown option encountered */
 				s->options |= opt_bit;
@@ -475,7 +494,6 @@ static void tsi_cmd(FILE *out, char *parameters)
 		while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, 10, (void **)t))) {
 			for(int j = 0; j < nr; j++) {
 				struct pgm_stream *ps = t[j];
-				char buf[60];
 
 				status[ps->state]++;
 				if (ps->last > 1)
@@ -513,9 +531,7 @@ static void tsi_cmd(FILE *out, char *parameters)
 
 					default: break;
 				}
-
-				format_tsi(buf, &ps->tsi);
-
+				now = timestamp();
 				sum_odata += ps->odata;
 				sum_rdata += ps->rdata;
 				sum_spm += ps->spm;
@@ -523,7 +539,7 @@ static void tsi_cmd(FILE *out, char *parameters)
 				sum_sqnerrs += ps->sqn_seq_errs;
 				sum_missed_sqn += ps->missed_sqns;
 
-				fprintf(out, "%s: %s", buf, stream_state_text[ps->state]);
+				fprintf(out, "%s: %s", ps->text, stream_state_text[ps->state]);
 
 				if (ps->last)
 					fprintf(out, " SQN: last=%d lead=%d trail=%d", ps->last, ps->lead, ps->trail);
