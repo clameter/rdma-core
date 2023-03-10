@@ -48,12 +48,17 @@ static unsigned sendlen = 32;
 
 static uint64_t sender_interval;
 static uint64_t sender_time;
+static uint64_t spm_time;
+
 static unsigned sender_seq;
+static unsigned spm_seq;
 
 static unsigned sessionid;
 static char hostname[40];
 
 #define MAX_SENDRATE 1000
+
+#define AMBIENT_SPM_INTERVAL ONE_SECOND
 
 struct sender_info {
 	unsigned signature;
@@ -84,7 +89,7 @@ static void *pgm_packet_start(struct i2r_interface *i, struct buf *buf, struct m
 	/* Create the pgm header */
 	VPUSH(buf, h);
 
-	h->pgm_sport = htons(i->port);
+	h->pgm_sport = htons(0xaaaa);
 	h->pgm_dport = htons(m->port);
 	h->pgm_type = ptype;
 	h->pgm_options = PGM_OPT_PRESENT;
@@ -155,15 +160,20 @@ static void pgm_packet_end(struct buf *buf)
 static void prep_spm(struct i2r_interface *i, struct buf *buf, struct mc *m, uint8_t ptype)
 {
 	struct pgm_spm *ps = pgm_packet_start(i, buf, m, PGM_SPM);
+	char *p;
 
-	ps->spm_sqn = 1;
-	ps->spm_trail = 1;
-	ps->spm_lead = 1;
-	ps->spm_nla_afi = 4;
+	ps->spm_sqn = htonl(spm_seq);
+	ps->spm_trail = htonl(sender_seq);
+	ps->spm_lead = htonl(sender_seq);
+	ps->spm_nla_afi = AFI_IP;
 	ps->spm_nla = i->if_addr.sin_addr;
 
 	if (ptype)
 		pgm_option(buf, ptype, 0);
+
+	/* Label the stream */
+	p = pgm_option(buf, PGM_EXT_OPT_LABEL, 1 + 8);
+	memcpy(p + 1, "mcsender", 8);
 
 	pgm_end_options(buf);
 	pgm_packet_end(buf);
@@ -203,6 +213,24 @@ static void prep_sender_struct(struct i2r_interface *i, struct buf *buf, struct 
 
 	pgm_packet_end(buf);
 }
+
+static void send_spms(unsigned pgm_opt)
+{
+	/* scan through all multicast groups and send SPMs */
+	mc_foreach(m) {
+		struct rdma_channel *c = m->interface[default_interface].channel;
+		struct buf *buf;
+
+		if (m->interface[default_interface].status != MC_JOINED)
+			continue;
+
+		buf = alloc_buffer(c);
+		prep_spm(c->i, buf, m, pgm_opt);
+		__send_to(c, buf->raw, buf->end - buf->raw, &m->interface[default_interface].ai, false, 0, buf);
+	}
+	spm_seq++;
+}
+
 
 static void sender_send(void *private)
 {
@@ -249,6 +277,7 @@ static void sender_send(void *private)
 				successful = false;
 				continue;
 			}
+
 			buf = alloc_buffer(c);
 			prep_sender_struct(i, buf, m);
 			__send_to(c, buf->raw, buf->end - buf->raw, &m->interface[default_interface].ai, false, 0, buf);
@@ -264,36 +293,20 @@ out:
 
 void sender_shutdown(void)
 {
-	struct i2r_interface *i = i2r + default_interface;
-	char buffer[10000];
-	unsigned n = 0;
-
 	if (!sender_interval)
 		return;
 
 	sender_interval = 0;
 	sender_send(NULL);		/* Argh... Race condition */
 
-	/* scan through all multicast groups and send SPMs */
-	mc_foreach(m) {
-		struct rdma_channel *c = m->interface[default_interface].channel;
-		struct buf *buf;
-
-		if (m->interface[default_interface].status != MC_JOINED)
-			continue;
-
-		n += sprintf(buffer + n," %s", m->text);
-		buf = alloc_buffer(c);
-		prep_spm(i, buf, m, PGM_OPT_FIN);
-		__send_to(c, buf->raw, buf->end - buf->raw, &m->interface[default_interface].ai, false, 0, buf);
-	}
+	/* Hmm... This should repeat for some time */
+	send_spms(PGM_OPT_FIN);
 	sender_seq = 0;
-	logg(LOG_INFO, "SPM with OPT_FIN was sent to%s.\n", buffer);
+	logg(LOG_INFO, "SPM with OPT_FIN sent.\n");
 }
 
 static void __sender_setup(void *private)
 {
-	struct i2r_interface *i = i2r + default_interface;
 	unsigned r;
 
 	sender_shutdown();
@@ -319,20 +332,15 @@ static void __sender_setup(void *private)
 
 	logg(LOG_INFO, "Rate = %u. Batch=%u Sendrate=%u interval=%s rate*sendbatch=%u\n", sendrate, sendbatch, r, print_time(sender_interval), r * sendbatch);
 
-	sender_seq = 1;
+}
 
-	/* scan through all multicast groups and send SPMs */
-	mc_foreach(m) {
-		struct rdma_channel *c = m->interface[default_interface].channel;
-		struct buf *buf;
+static void ambient_send(void *private)
+{
+	send_spms(sender_interval ? 0 : PGM_OPT_FIN);
 
-		if (m->interface[default_interface].status != MC_JOINED)
-			continue;
-
-		buf = alloc_buffer(c);
-		prep_spm(i, buf, m, 0);
-		__send_to(c, buf->raw, buf->end - buf->raw, &m->interface[default_interface].ai, false, 0, buf);
-	}
+	spm_time += AMBIENT_SPM_INTERVAL;
+	if (sender_interval)
+		add_event(spm_time, ambient_send, NULL, "Ambient SPMs");
 }
 
 void sender_setup(void)
@@ -342,9 +350,16 @@ void sender_setup(void)
 	if (!sender_interval)
 		return;
 
+	/* Initial SPM */
+	sender_seq = 1;
+	spm_seq = 1;
+	send_spms(PGM_OPT_SYN);
+
 	sender_time = timestamp() + ONE_SECOND + rand() % sender_interval;
+	spm_time = sender_time + AMBIENT_SPM_INTERVAL;
 
 	add_event(sender_time, sender_send, NULL, "Sender Send");
+	add_event(spm_time, ambient_send, NULL, "Ambient SPMs");
 }
 
 __attribute__((constructor))

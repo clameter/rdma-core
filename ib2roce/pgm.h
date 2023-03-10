@@ -88,4 +88,6 @@ static inline unsigned pgm_type2size(enum pgm_type_e ptype)
 	return (cat_sizes >> (pgm_type2cat(ptype) * PGM_CAT_SHIFT)) & ((1 << PGM_CAT_SHIFT) -1);
 }
 
+#define PGM_EXT_OPT_LABEL 0x22
+
 #endif

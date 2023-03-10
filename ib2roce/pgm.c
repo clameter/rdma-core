@@ -45,8 +45,6 @@
 /*
  * PGM RFC3208 Support
  */
-#define PGM_EXT_OPT_LABEL 0x22
-
 bool pgm_mode = true; 	/* Will only analyze PORT streams */
 
 struct nak {
@@ -89,14 +87,16 @@ struct pgm_stream {
 	unsigned lead;			/* Sender lead */
 	unsigned last;			/* last SQN received */
 	unsigned odata;			/* ODATA packets received */
-        unsigned rdata;			/* RDATA packets received */
+	unsigned rdata;			/* RDATA packets received */
 	unsigned spm;			/* SPM packets received */
+	unsigned spm_sqn;		/* SQN of the last SPM */
 	uint64_t timestamp;		/* Timestamp for last action */
 	unsigned ncf;			/* NCF packets received */
 	unsigned ack;			/* ACK in NACK format */
 	unsigned nak;			/* NAKs */
 	unsigned nnak;			/* NNAKs */
 	unsigned drop;			/* Packets dropped */
+	unsigned spm_errors;		/* SQNs with problems */
 	uint64_t timestamp_error;	/* Timestamp for last problem */
 	uint64_t options;		/* Which options were used by the stream */
 	unsigned dup;			/* Duplicate ODATA */
@@ -107,7 +107,7 @@ struct pgm_stream {
 	unsigned first_sqn, last_sqn;
 	unsigned oldest;		/* The oldest message available locally */
 	unsigned last_seq;		/* Last in sequence */
-	struct in_addr repairer;	/* Unicast address for NAKs */
+	struct in_addr nak_nla;		/* Unicast address for NAKs */
 	enum stream_state state;
 	bool label;
 	char text[60];
@@ -234,16 +234,25 @@ finish:
 static bool process_spm(struct pgm_stream *s, struct pgm_header *h, uint16_t *opt_offset)
 {
 	struct pgm_spm *spm = (struct pgm_spm *)(h + 1);
+	unsigned sqn;
+
+	logg(LOG_DEBUG, "%s: SPM SPMSQN=%d LEAD=%u TRAIL=%u FIN=%u RST=%u\n",
+		s->text, ntohl(spm->spm_sqn), ntohl(spm->spm_lead), ntohl(spm->spm_trail), opt_offset[PGM_OPT_FIN], opt_offset[PGM_OPT_RST]);
 
 	s->spm++;
-	s->trail = ntohl(spm->spm_trail);
-	s->lead = ntohl(spm->spm_lead);
+
+	if (spm->spm_nla_afi != AFI_IP) {
+		logg(LOG_INFO, "Unsupported AFI on SPM %s\n", s->text);
+spm_error:
+		s->spm_errors++;
+		return true;
+	}
 
 	if (opt_offset[PGM_OPT_RST]) {
-		logg(LOG_INFO, "TSI Error (OPT_RST on SPM) %s\n", s->text);
+		logg(LOG_INFO, "TSI Abort (OPT_RST on SPM) %s\n", s->text);
 		s->state = stream_error;
-	} else
-		s->state = stream_sync;
+		return true;
+	}
 
 	if (opt_offset[PGM_OPT_FIN]) {
 		/* End of Stream */
@@ -251,6 +260,19 @@ static bool process_spm(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 		s->state = stream_init;
 	}
 
+	s->state = stream_sync;
+	sqn = ntohl(spm->spm_sqn);
+
+	if (sqn <= s->spm_sqn) {
+		/* Outdated SPM */
+		logg(LOG_INFO, "SPM seq error %u -> %u on %s. Ignored\n", s->spm_sqn, sqn, s->text);
+		goto spm_error;
+	}
+
+	s->spm_sqn = sqn;
+	s->trail = ntohl(spm->spm_trail);
+	s->lead = ntohl(spm->spm_lead);
+	s->nak_nla = spm->spm_nla;
 	return true;
 }
 
@@ -403,7 +425,8 @@ drop:
 
 				if (!s->label) {
 					s->label = true;
-					format_tsi(s->text, &tsi, a +4, poh->opt_length - 4);
+					logg(LOG_INFO, "Label %s: opt_length=%u %s\n", s->text, poh->opt_length, a + 4);
+					format_tsi(s->text, &tsi, a + 4, poh->opt_length - 4);
 				}
 			} else
 			if (option != PGM_OPT_INVALID) {
@@ -542,7 +565,7 @@ static void tsi_cmd(FILE *out, char *parameters)
 				fprintf(out, "%s: %s", ps->text, stream_state_text[ps->state]);
 
 				if (ps->last)
-					fprintf(out, " SQN: last=%d lead=%d trail=%d", ps->last, ps->lead, ps->trail);
+					fprintf(out, " SQN: last=%u lead=%u trail=%u", ps->last, ps->lead, ps->trail);
 
 				if (ps->odata || ps->spm) {
 					fprintf(out, " ODATA=%u SPM=%u", ps->odata, ps->spm);
@@ -563,6 +586,9 @@ static void tsi_cmd(FILE *out, char *parameters)
 
 				if (ps->dup)
 					fprintf(out, " dup(OData!)=%u", ps->dup);
+
+				if (ps->spm_errors)
+					fprintf(out, " spmerrs=%u", ps->spm_errors);
 
 				if (ps->ack)
 					fprintf(out, " ack=%u", ps->ack);
