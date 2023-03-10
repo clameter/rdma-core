@@ -47,7 +47,7 @@
  */
 #define PGM_EXT_OPT_LABEL 0x22
 
-bool pgm_mode = true; 	/* Will only analyze CLLM streams */
+bool pgm_mode = true; 	/* Will only analyze PORT streams */
 
 struct nak {
 	struct pgm_nak *next;

@@ -123,11 +123,11 @@ static struct mgid_signature {		/* Manage different MGID formats used */
 	{	0x0000, "RDMA", false, false, true },
 	{	0x401B,	"IPv4",	false, false, true },
 	{	0x601B,	"IPv6",	false, false, true },
-	{	0xA01B,	"CLLM", true, true, false },
+	{	0xA01B,	"PORT", true, true, false },
 	{	0x4001, "IB",	false, false, false }
 };
 
-static uint8_t mgid_mode = MGID_MODE_CLLM;		/* CLLM is the default */
+static uint8_t mgid_mode = MGID_MODE_PORT;		/* PORT mode is the default */
 
 static uint8_t __find_mgid_mode(char *p)
 {
@@ -164,7 +164,7 @@ void setup_mc_addrs(struct mc *m, struct sockaddr_in *si)
 		 * MGID is build according to according to RFC 4391 Section 4
 		 * by taking 28 bits and putting them into the mgid
 		 *
-		 * But then CLLM and others include the full 32 bit...
+		 * But then PORT mode etc include the full 32 bit...
 		 * Deal with this crappy situation.
 		 */
 		struct sockaddr_ib *saib	= calloc(1, sizeof(struct sockaddr_ib));

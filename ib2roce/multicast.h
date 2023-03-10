@@ -71,7 +71,7 @@ extern unsigned int default_mc_port;
  *
  * ah_info points to multicast address and QP number in use
  * for the stream. There are no "ports" unless they are
- * embedded in the GID (like done by CLLM).
+ * embedded in the GID (like done by PORT mode).
  *
  * Multicast groups are setup before we enter multithreaded mode
  * However, the state of joins etc may change in multithreaded
@@ -94,7 +94,7 @@ struct mc_interface {
 	unsigned long delayed;		/* Packets delayed */
 };
 
-#define MGID_MODE_CLLM 4
+#define MGID_MODE_PORT 4
 
 struct mc {
 	struct in_addr addr;

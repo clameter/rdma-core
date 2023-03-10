@@ -50,13 +50,13 @@ after the option was specified.
 
 If no format is specified then ib2roce will display the available
 formats. If no custom mgid format is set for a multicast group
-(the default) then ib2roce will perform a join using CLLM conventions
+(the default) then ib2roce will perform a join using PORT conventions
 on Infiniband.
 
-The CLLM MGID format relies on the use of a port number to construct
+The PORT MGID format relies on the use of a port number to construct
 the MGID. This means that the port number needs to be correctly
 configured otherwise the MGID will not match and traffic will not
-flow to and from CLLM based applications. Other MGID encoding
+flow to and from applications relying on PORT. Other MGID encoding
 schemes do not include the port and there is also no way to specify
 an effective port for UDP datagrams on ROCE.
 .TP
@@ -81,7 +81,7 @@ occur to avoid additional traffic on the fabric.
 Set the default port number. This is used when binding to ROCE and Infiniband
 devices and for multicast groups that do not have a port specified.
 Currently these port numbers seem to be ignored by the RDMA subsystem.
-However, the port number is relevant when an CLLM MGID needs to be
+However, the port number is relevant when an PORT type MGID needs to be
 constructed.
 .TP
 \-r, --roce  <roce-device[:port]>
