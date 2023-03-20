@@ -83,15 +83,6 @@ struct mc_interface {
 	bool sendonly;
 	struct ah_info ai;
 	struct sockaddr *sa;
-
-	/* Statistics */
-	uint32_t packet_time;		/* How much time must elapse for a packet to be sent 0 = disabled */
-	uint32_t max_burst;		/* How long can a burst last */
-	uint64_t last_sent;		/* Last time a packet was sent */
-	uint64_t last_delayed;		/* Last a delayed packet was scheduled */
-	unsigned pending;		/* How many packets are waiting to be sent */
-	unsigned burst;			/* # of packets encountered with pacing below packet_time */
-	unsigned long delayed;		/* Packets delayed */
 };
 
 #define MGID_MODE_PORT 4

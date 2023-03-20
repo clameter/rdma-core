@@ -76,10 +76,6 @@
 char *ib_name, *roce_name;
 
 int rate = IBV_RATE_10_GBPS;	/* Limit sending rate */
-int rrate = 0;			/* Software delay per message for ROCE */
-int irate = 0;			/* Software delay per message for Infiniband */
-int max_rburst = 10;		/* Dont delay until # of packets for ROCE */
-int max_iburst = 10;		/* Dont delay until # of packets for Infiniband */
 
 bool bridging = true;		/* Allow briding */
 #ifdef UNICAST
@@ -103,16 +99,7 @@ const char *inet6_ntoa(void *x)
 
 void set_rate(struct mc *m)
 {
-	if (irate) {
-			m->interface[INFINIBAND].packet_time = ONE_SECOND / irate;
-			m->interface[INFINIBAND].max_burst = max_iburst;
-	}
-
-	if (rrate) {
-			m->interface[ROCE].packet_time = ONE_SECOND / rrate;
-			m->interface[ROCE].max_burst = max_rburst;
-	}
-
+	/* Currently not used */
 }
 
 void set_rates(void)

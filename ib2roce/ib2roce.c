@@ -120,31 +120,6 @@ static void shutdown_sniffer(int arg) {
 }
 #endif
 
-/* Delayed packet send due to traffic shaping */
-static void delayed_send(void *private)
-{
-	struct buf *buf = private;
-	struct rdma_channel *c = buf->c;
-	struct mc_interface *mi = buf->mi;
-	int ret;
-
-	mi->delayed++;
-	mi->pending--;
-	if (!mi->pending) {
-		/*
-		 * The last pending packet so we are off rate limiting.
-		 */
-		c->i->mc_rate_limited--;
-		mi->burst = 0;
-		mi->last_sent = timestamp();
-	}
-
-	ret = send_to(c, buf->cur, buf->end - buf->cur, &mi->ai, buf->imm_valid, buf->imm, buf);
-	if (!ret)
-		st(c, packets_bridged);
-	buf->mi = NULL;
-}
-
 /*
  * We have an GRH header so the packet has been processed by the RDMA
  * Subsystem and we can take care of it using the RDMA calls
@@ -269,43 +244,6 @@ void receive_multicast(struct buf *buf)
 		/* Ok we need to queue on another core */
 		fifo_put(&ch_out->send_queue, buf);
 		goto success;
-	}
-
-	if (mi->packet_time) {
-		uint64_t t;
-
-		if (mi->pending) {
-			/* Packet must be sent after the last delayed one */
-			mi->last_delayed += mi->packet_time;
-delayed_packet:
-			mi->pending++;
-			get_buf(buf);	/* Dont free this buffer */
-			buf->c = ch_out;
-			buf->w = NULL;
-			buf->mi = mi;
-			add_event(mi->last_delayed, delayed_send, buf, "Delayed Send");
-			return;
-		}
-
-	       	/* No pending I/O */
-		t = timestamp();
-
-		if (mi->last_sent && t < mi->last_sent + mi->packet_time) {
-
-			/* Packet spacing too tight */
-			mi->burst++;
-			if (mi->burst > mi->max_burst) {
-				c->i->mc_rate_limited++;
-				mi->last_delayed = mi->last_sent + mi->packet_time;
-				goto delayed_packet;
-			}
-
-		} else
-			/* End of Burst */
-			mi->burst = 0;
-
-		/* Packet will be sent now. Record timestamp */
-		mi->last_sent = t;
 	}
 
 	if (!mi->ai.ah)		/* After a join it may take awhile for the ah pointer to propagate */
@@ -486,14 +424,6 @@ static void setup_enable(void)
 		"Drop multicast packets. The value is the number of multicast packets to send before dropping");
 	register_enable("hwrate", true, NULL, &rate, "6", "0", NULL,
 		"Set the speed in the RDMA NIC to limit the output speed 2 =2.5GBPS 5 = 5GBPS 3 = 10GBPS ...(see enum ibv_rate)");
-	register_enable("irate", true,NULL, &irate, "1000", "0", set_rates,
-		"Infiniband: Limit the packets per second to be sent to an endpoint (0=off)");
-	register_enable("rrate", true,NULL, &rrate, "1000", "0", set_rates,
-		"ROCE: Limit the packets per second to be sent to an endpoint (0=off)");
-	register_enable("iburst", true,	NULL, &max_iburst, "100", "0", set_rates,
-		"Infiniband: Exempt the first N packets from swrate (0=off)");
-	register_enable("rburst", true,	NULL, &max_rburst, "100", "0", set_rates,
-		"ROCE: Exempt the first N packets from swrate (0=off)");
 }
 
 __attribute__((constructor))

@@ -59,10 +59,6 @@ extern bool bridging;
 extern bool unicast;
 
 extern int rate;	/* Limit sending rate */
-extern int rrate;	/* Software delay per message for ROCE */
-extern int irate;	/* Software delay per message for Infiniband */
-extern int max_rburst;	/* Dont delay until # of packets for ROCE */
-extern int max_iburst;	/* Dont delay until # of packets for Infiniband */
 
 #define MAX_CHANNELS_PER_INTERFACE 10
 
@@ -123,7 +119,6 @@ struct i2r_interface {
 	struct fifo resolve_queue;		/* List of send buffers with unresolved addresses */
 	struct hash *ep;			/* Hash of all endpoints reachable here */
 	struct hash *ip_to_ep;			/* Hash based on IP address */
-	unsigned mc_rate_limited;		/* Number of MC groups where rate limiting is ongoing */
 	unsigned long out_of_buffer;		/* Last state of /sys/class/infiniband .../overrun */
 
 	/* PGM information:  Only updated from the multicast channel core */

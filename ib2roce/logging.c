@@ -218,9 +218,6 @@ void brief_status(FILE *out)
 			stats[packets_received],
 			stats[packets_sent]);
 
-		if (i->mc_rate_limited)
-			n+= sprintf(counts + n, " R%d", i->mc_rate_limited);
-
 		if (pgm_mode)
 			n += pgm_brief_stats(counts + n, i);
 

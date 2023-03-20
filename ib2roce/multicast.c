@@ -633,24 +633,6 @@ static void multicast_cmd(FILE *out, char *parameters)
 			if (!is_a_channel_of(mi->channel, &i2r[in].channels))
 				fprintf(out, " remote");
 
-			if (!mi->packet_time) {
-				fprintf(out, " No rate limitations\n");
-				continue;
-			}
-
-			fprintf(out, " packet_time=%dns max_burst=%d",
-				mi->packet_time,
-				mi->max_burst);
-
-			if (mi->last_sent)
-			   fprintf(out, " last_sent=%ldms ago, pending=%u packets",
-				(now - mi->last_sent) / ONE_MILLISECOND,
-				mi->pending);
-
-			if (mi->last_delayed)
-			   fprintf(out, " delayed=%ld packets last_delayed=%ldms ago",
-				mi->delayed, (now - mi->last_delayed) / ONE_MILLISECOND);
-
 			fprintf(out, "\n");
 		}
 	}
