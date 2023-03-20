@@ -43,10 +43,7 @@
 #include "buffers.h"
 #include "cli.h"
 #include "hash.h"
-
-#ifdef UNICAST
 #include "endpoint.h"
-#endif
 
 #include <sys/mman.h>
 #include <stdatomic.h>
@@ -429,7 +426,6 @@ queue:
 	return 0;
 }
 
-#ifdef UNICAST
 /* Send buffer based on state in struct buf. Unicast only */
 int send_buf(struct buf *buf, struct rdma_unicast *ra)
 {
@@ -532,7 +528,6 @@ void send_buf_to(struct i2r_interface *i, struct buf *buf, struct sockaddr_in *s
 			return;
 	}
 }
-#endif
 
 static void buffers_cmd(FILE *out, char *parameters)
 {

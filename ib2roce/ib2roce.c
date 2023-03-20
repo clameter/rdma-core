@@ -67,10 +67,8 @@
 #include "pgm.h"
 #include "sender.h"
 
-#ifdef UNICAST
 #include "endpoint.h"
 #include "unicast.h"
-#endif
 
 /* Globals */
 
@@ -122,9 +120,7 @@ void receive_multicast(struct buf *buf)
 	int ret;
 	const char *reason = NULL;
 
-#ifdef UNICAST
 	learn_source_address(buf);
-#endif
 
 	if (!buf->grh_valid) {
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",

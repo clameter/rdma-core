@@ -47,6 +47,7 @@
 #include "cli.h"
 #include "beacon.h"
 #include "pgm.h"
+#include "unicast.h"
 
 const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 
@@ -330,7 +331,6 @@ static bool setup_multicast(struct rdma_channel *c)
 	return allocate_rdmacm_qp(c, true);
 }
 
-#ifdef UNICAST
 static bool setup_incoming(struct rdma_channel *c)
 {
 	return allocate_rdmacm_qp(c, true);
@@ -396,14 +396,11 @@ static bool setup_channel(struct rdma_channel *c)
 	}
 	return true;
 }
-#endif
 
 struct channel_info channel_infos[nr_channel_types] = {
 	{ "multicast",	0, 0,	10000,	1000,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
-#ifdef UNICAST
 	{ "ud",		1, 1,	500,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err },
 	{ "incoming",	-1, -1,	100,	50,	0,		0,			setup_incoming,	NULL,		channel_err },
-#endif
 	{ "error",	-1, -1,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
 };
 
@@ -515,14 +512,13 @@ void arm_channels(struct core_info *core)
 					}
 					break;
 
-#ifdef UNICAST
 				case channel_ud:
  					if (core == c->core) {
 						start_channel(c);
 						ibv_req_notify_cq(c->cq, 0);
 					}
 					break;
-#endif
+
 				default:
 					break;
 			}

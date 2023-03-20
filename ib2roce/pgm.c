@@ -37,9 +37,7 @@
 
 #include "interfaces.h"
 #include "pgm.h"
-#ifdef UNICAST
 #include "endpoint.h"
-#endif
 #include "cli.h"
 
 /*

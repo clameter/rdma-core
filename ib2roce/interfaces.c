@@ -69,9 +69,7 @@
 #include "multicast.h"
 #include "interfaces.h"
 #include "cli.h"
-#ifdef UNICAST
 #include "endpoint.h"
-#endif
 
 char *ib_name, *roce_name;
 
@@ -440,9 +438,7 @@ void setup_interface(enum interfaces in)
 	struct i2r_interface *i = i2r + in;
 	struct ibv_gid_entry *e;
 	struct rdma_channel *multicast= NULL;
-#ifdef UNICAST
 	struct rdma_channel *ud = NULL;
-#endif
 	unsigned channels;
 	char buf[30];
 
@@ -499,14 +495,14 @@ void setup_interface(enum interfaces in)
 
 	register_callback(handle_async_event, i->context->async_fd, i);
 
-#ifdef UNICAST
-	i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
-	i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
-	if (i == i2r + INFINIBAND)
-		i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
-	else
-		i->ep = i->ip_to_ep;;
-#endif
+	if (unicast) {
+		i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
+		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
+		if (i == i2r + INFINIBAND)
+			i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
+		else
+			i->ep = i->ip_to_ep;
+	}
 
 	/* Create RDMA elements that are interface wide */
 	i->rdma_events = rdma_create_event_channel();
@@ -549,14 +545,12 @@ void setup_interface(enum interfaces in)
 
 	}
 
-#ifdef UNICAST
 	if (unicast) {
 		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, 0);
  	}
 
 	if (channels > MAX_CHANNELS_PER_INTERFACE)
 		panic("Too many channels for interface %s\n", i->text);
-#endif
 
  	check_out_of_buffer(i);
  	numa_run_on_node(-1);
@@ -613,9 +607,7 @@ void handle_rdma_event(void *private)
 	struct rdma_cm_event *event;
 	int ret;
 	enum interfaces in = i - i2r;
-#ifdef UNICAST
 	struct rdma_unicast *ru = fifo_first(&i->resolve_queue);
-#endif
 
 	ret = rdma_get_cm_event(i->rdma_events, &event);
 	if (ret) {
@@ -691,7 +683,6 @@ void handle_rdma_event(void *private)
 			}
 			break;
 
-#ifdef UNICAST
 		case RDMA_CM_EVENT_ADDR_RESOLVED:
 			logg(LOG_NOTICE, "RDMA_CM_EVENT_ADDR_RESOLVED for %s:%d\n",
 				inet_ntoa(ru->sin.sin_addr), ntohs(ru->sin.sin_port));
@@ -819,7 +810,6 @@ void handle_rdma_event(void *private)
 
 			goto err;
 			break;
-#endif
 
 		default:
 			logg(LOG_NOTICE, "RDMA Event handler:%s status: %d\n",
@@ -830,12 +820,10 @@ void handle_rdma_event(void *private)
 	rdma_ack_cm_event(event);
 	return;
 
-#ifdef UNICAST
 err:
 	rdma_ack_cm_event(event);
 	ru->state = UC_ERROR;
 	resolve_end(ru);
-#endif
 }
 
 void handle_async_event(void *private)
@@ -1338,10 +1326,7 @@ static void interfaces_init(void)
 	register_option("roce", required_argument, 'r', roce_set,
 	       "<if[:portnumber]>","ROCE device. Uses the first available if not specified.");
 	register_enable("mcqp", true, NULL, &mc_per_qp, "0", "10", NULL, "Max # of MCs per QP");
-
-#ifdef UNICAST
 	register_enable("unicast", false, &unicast, NULL, "on", "off",	NULL,
 		"Processing of unicast packets with QP1 handling of SIDR REQ/REP");
-#endif
 }
 
