@@ -648,7 +648,7 @@ unsigned pgm_brief_stats(char *b, struct i2r_interface *i)
 	unsigned spm = 0;
 	unsigned odata = 0;
 	unsigned rdata = 0;
-	unsigned nak = 0;
+	unsigned ncf = 0;
 
 	if (!i->context || !i->pgm_tsi_hash)
 		return 0;
@@ -662,7 +662,7 @@ unsigned pgm_brief_stats(char *b, struct i2r_interface *i)
 			spm += s->spm;
 			odata += s->odata;
 			rdata += s->rdata;
-			nak += s->nak;
+			ncf += s->ncf;
 			nr_streams++;
 		}
 
@@ -670,14 +670,14 @@ unsigned pgm_brief_stats(char *b, struct i2r_interface *i)
 	}
 
 	if (nr_streams && odata) {
-		int ret = sprintf(b, " [TSI=%u SPM=%u,ODATA=%u,RDATA=%u,NAK=%u]",
-				i->nr_tsi - i->last_tsi, spm - i->last_spm, odata - i->last_odata, rdata - i->last_rdata, nak - i->last_naks);
+		int ret = sprintf(b, " [TSI=%u SPM=%u,ODATA=%u,RDATA=%u,NCF=%u]",
+				i->nr_tsi - i->last_tsi, spm - i->last_spm, odata - i->last_odata, rdata - i->last_rdata, ncf - i->last_ncfs);
 
 		i->last_tsi = i->nr_tsi;
 		i->last_spm = spm;
 		i->last_odata = odata;
 		i->last_rdata = rdata;
-		i->last_naks = i->last_naks;
+		i->last_ncfs = i->last_ncfs;
 		return ret;
 	} else
 		return 0;

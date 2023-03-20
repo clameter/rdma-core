@@ -125,7 +125,7 @@ struct i2r_interface {
 	unsigned last_spm;
 	unsigned last_odata;
 	unsigned last_rdata;
-	unsigned last_naks;
+	unsigned last_ncfs;
 };
 
 extern struct i2r_interface i2r[];
