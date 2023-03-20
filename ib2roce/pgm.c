@@ -178,7 +178,7 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 		if (opt_offset[PGM_OPT_SYN])
 			logg(LOG_INFO, "TSI Start (OPT_SYN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
 
-		s->state = stream_sync;
+		s->state = stream_init;
 		goto accept;
 	}
 
@@ -256,17 +256,18 @@ spm_error:
 		/* End of Stream */
 		logg(LOG_INFO, "TSI End (OPT_FIN on SPM) %s\n", s->text);
 		s->state = stream_init;
+		return true;
 	}
 
-	s->state = stream_sync;
 	sqn = ntohl(spm->spm_sqn);
 
-	if (sqn <= s->spm_sqn) {
+	if (s->spm_sqn && s->state == stream_sync && sqn <= s->spm_sqn) {
 		/* Outdated SPM */
 		logg(LOG_INFO, "SPM seq error %u -> %u on %s. Ignored\n", s->spm_sqn, sqn, s->text);
 		goto spm_error;
 	}
 
+	s->state = stream_sync;
 	s->spm_sqn = sqn;
 	s->trail = ntohl(spm->spm_trail);
 	s->lead = ntohl(spm->spm_lead);
@@ -423,7 +424,6 @@ drop:
 
 				if (!s->label) {
 					s->label = true;
-					logg(LOG_INFO, "Label %s: opt_length=%u %s\n", s->text, poh->opt_length, a + 4);
 					format_tsi(s->text, &tsi, a + 4, poh->opt_length - 4);
 				}
 			} else
