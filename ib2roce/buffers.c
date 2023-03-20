@@ -297,7 +297,6 @@ int send_ud(struct rdma_channel *c, struct buf *buf, struct ibv_ah *ah, uint32_t
 	if (ret) {
 		errno = ret;
 		logg(LOG_WARNING, "Failed to post send: %s on %s. Active Receive Buffers=%d/%d Active Send Buffers=%d\n", errname(), c->text, c->active_receive_buffers, c->nr_receive, c->active_send_buffers);
-		stop_channel(c);
 	} else
 		logg(LOG_DEBUG, "RDMA Send to QPN=%d QKEY=%x %d bytes\n",
 			wr.wr.ud.remote_qpn, wr.wr.ud.remote_qkey, len);
@@ -441,7 +440,7 @@ int send_buf(struct buf *buf, struct rdma_unicast *ra)
 }
 
 
-static unsigned keylength[nr_hashes] = { 4, 6, 16, 2 };
+static unsigned keylength[nr_hashes] = { 4 };
 
 struct rdma_unicast *hash_table[nr_hashes][0x100];
 

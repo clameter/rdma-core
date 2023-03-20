@@ -219,12 +219,6 @@ void brief_status(FILE *out)
 		if (pgm_mode)
 			n += pgm_brief_stats(counts + n, i);
 
-		if (sum_stats(stats, i, channel_ud) && stats[packets_received]) {
-				n+= sprintf(counts + n, ", UD %d/%d",
-					stats[packets_received],
-					stats[packets_sent]);
-		}
-
 		n+= sprintf(counts + n, ") ");
 	}
 

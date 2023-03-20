@@ -90,7 +90,7 @@ struct hash_item {
 	uint8_t key[hash_max_keylen];
 };
 
-enum hashes { hash_ip, hash_mac, hash_gid, hash_lid, nr_hashes };
+enum hashes { hash_ip, nr_hashes };
 
 struct rdma_unicast {
 	struct i2r_interface *i;

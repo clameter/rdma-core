@@ -438,7 +438,6 @@ void setup_interface(enum interfaces in)
 	struct i2r_interface *i = i2r + in;
 	struct ibv_gid_entry *e;
 	struct rdma_channel *multicast= NULL;
-	struct rdma_channel *ud = NULL;
 	unsigned channels;
 	char buf[30];
 
@@ -498,10 +497,6 @@ void setup_interface(enum interfaces in)
 	if (unicast) {
 		i->ru_hash = hash_create(offsetof(struct rdma_unicast, sin), sizeof(struct sockaddr_in));
 		i->ip_to_ep = hash_create(offsetof(struct endpoint, addr), sizeof(struct in_addr));
-		if (i == i2r + INFINIBAND)
-			i->ep = hash_create(offsetof(struct endpoint, lid), sizeof(uint16_t));
-		else
-			i->ep = i->ip_to_ep;
 	}
 
 	/* Create RDMA elements that are interface wide */
@@ -511,21 +506,6 @@ void setup_interface(enum interfaces in)
 			i->text, errname());
 
 	register_callback(handle_rdma_event, i->rdma_events->fd, i);
-
-	i->pd = ibv_alloc_pd(i->context);
-	if (!i->pd)
-       		panic("ibv_alloc_pd failed for %s.\n", i->text);
-
-	i->comp_events = ibv_create_comp_channel(i->context);
-	if (!i->comp_events)
-       		panic("ibv_create_comp_channel failed for %s : %s.\n",
-			i->text, errname());
-
-	register_callback(handle_comp_event, i->comp_events->fd, i->comp_events);
-
-	i->mr = ibv_reg_mr(i->pd, buffers, nr_buffers * sizeof(struct buf), IBV_ACCESS_LOCAL_WRITE);
-	if (!i->mr)
-		panic("ibv_reg_mr failed for %s:%s.\n", i->text, errname());
 
 	i->mc_per_qp = i->device_attr.max_mcast_qp_attach;
 	if (mc_per_qp && mc_per_qp < i->mc_per_qp)
@@ -544,13 +524,6 @@ void setup_interface(enum interfaces in)
 			panic("Cannot create %d rdma channels required for multicast\n", channels);
 
 	}
-
-	if (unicast) {
-		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, 0);
- 	}
-
-	if (channels > MAX_CHANNELS_PER_INTERFACE)
-		panic("Too many channels for interface %s\n", i->text);
 
  	check_out_of_buffer(i);
  	numa_run_on_node(-1);

@@ -82,12 +82,9 @@ bool is_a_channel_of(struct rdma_channel *, struct channel_list *);
 struct i2r_interface {
 	/* Not changed when multithreading */
 	struct ibv_context *context;		/* Not for RDMA CM use */
-	struct ibv_comp_channel *comp_events;
 	struct rdma_event_channel *rdma_events;
 	struct channel_list channels;
 	struct ibv_cq *cq;
-	struct ibv_pd *pd;
-	struct ibv_mr *mr;
 	unsigned port;
 	unsigned mtu;
 	unsigned maclen;
@@ -117,7 +114,6 @@ struct i2r_interface {
          */
 	struct hash *ru_hash;
 	struct fifo resolve_queue;		/* List of send buffers with unresolved addresses */
-	struct hash *ep;			/* Hash of all endpoints reachable here */
 	struct hash *ip_to_ep;			/* Hash based on IP address */
 	unsigned long out_of_buffer;		/* Last state of /sys/class/infiniband .../overrun */
 

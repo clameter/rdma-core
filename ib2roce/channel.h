@@ -66,8 +66,7 @@ extern enum interfaces default_interface;
 
 extern const char *stats_text[nr_stats];
 
-enum channel_type { channel_rdmacm, channel_ud,
-	channel_incoming, channel_err, nr_channel_types };
+enum channel_type { channel_rdmacm, channel_incoming, channel_outgoing, channel_err, nr_channel_types };
 
 #define NO_CORE (-1)
 
@@ -84,18 +83,18 @@ typedef void receive_callback(struct buf *);
  */
 struct rdma_channel {
 	struct i2r_interface *i;	/* The network interface of this channel */
-	struct core_info *core;		/* Core the channel is on or NULL if comp_events is used */
+	struct core_info *core;		/* Core the channel is on or NULL if comp_events is used and therefore we are high latency */
 	receive_callback *receive;
 	struct ibv_cq *cq;		/* Every channel has a distinct CQ */
-	struct ibv_qp *qp;		/* All of the ibv_xxes are pointing to the interface versions if this is not a rdmacm channel */
+	struct ibv_qp *qp;
 	struct ibv_mr *mr;
 	struct ibv_comp_channel *comp_events;
 	struct ibv_pd *pd;
 	unsigned int active_receive_buffers;
 	unsigned int active_send_buffers;	/* if the sender is on a different core than the receiver then we have a race condition for the buffers */
-	unsigned int cq_high;		/* Largest number of CQs taken from the queue */
+	unsigned int cq_high;		/* Largest number of CQEs taken from the queue */
 	struct rdma_channel *destination;	/* If set the destination channel for bridging */
-	unsigned int nr_cq;		/* Number of items for the CQ */
+	unsigned int nr_cq;		/* Number of items available in the CQ */
 	unsigned int nr_send;		/* Maximum number of write buffers to use */
 	unsigned int nr_receive;	/* Number of read buffer to post */
 	unsigned stats[nr_stats];
@@ -107,19 +106,19 @@ struct rdma_channel {
 	struct fifo send_queue;		/* Packets that were deferred for write */
 	unsigned max_backlog;
 	unsigned backlog_drop;	/* Packets dropped from backlog */
-	bool listening;			/* rdmacm Channel is listening for connections */
-	bool reduced_rate_warning;	/* Warning about a reduced rate was given */
-	unsigned instance;		/* If multuple instances exist */
+	bool listening;			/* rdmacm Channel is listening for connections and join/leave is no longer possible */
+	bool reduced_rate_warning;	/* Warning about a reduced sending rate was given due to send buffer being full */
+	unsigned instance;		/* If multiple instances exist */
 	const char *text;
-	struct rdma_unicast *ru;	/* Only rdmacm */
-	struct rdma_cm_id *id;		/* Only rdmacm */
-	struct sockaddr *bindaddr;	/* Only rdmacm */
-	struct ibv_qp_attr attr;	/* Only !rdmacm */
-	int fh;				/* Only channel_packet */
+	struct rdma_unicast *ru;
+	struct rdma_cm_id *id;
+	struct sockaddr *bindaddr;
+
 	uint64_t last_snapshot;		/* when was the last snapshot taken */
 	unsigned last_received, last_sent;
 	unsigned pps_in, pps_out;	/* Rate in the last interval */
 	unsigned max_pps_in, max_pps_out; /* Max Rate seen */
+
 	unsigned nr_mcs;		/* Number of multicast groups attached via this channel */
 	struct mc *mc[];		/* Dynamically sized structure depending on the number of allowed MC groups for an interface */
 };
@@ -161,9 +160,6 @@ extern struct channel_info {
 
 int channel_stats(char *b, struct rdma_channel *c, const char *interface, const char *type);
 void channel_stat(int ident, FILE *out, struct rdma_channel *c);
-
-void start_channel(struct rdma_channel *c);
-void stop_channel(struct rdma_channel *c);
 
 struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type type, unsigned instance);
 

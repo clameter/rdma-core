@@ -67,7 +67,6 @@
 #include "sender.h"
 
 #include "endpoint.h"
-#include "unicast.h"
 
 /* Globals */
 
@@ -118,8 +117,6 @@ void receive_multicast(struct buf *buf)
 	struct in_addr dest_addr;
 	int ret;
 	const char *reason = NULL;
-
-	learn_source_address(buf);
 
 	if (!buf->grh_valid) {
 		logg(LOG_WARNING, "No GRH on %s. Packet discarded: %s\n",

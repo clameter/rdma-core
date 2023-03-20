@@ -46,7 +46,6 @@
 #include "channel.h"
 #include "cli.h"
 #include "pgm.h"
-#include "unicast.h"
 
 const char *interfaces_text[NR_INTERFACES] = { "Infiniband", "ROCE" };
 
@@ -335,71 +334,10 @@ static bool setup_incoming(struct rdma_channel *c)
 	return allocate_rdmacm_qp(c, true);
 }
 
-/* Not using rdmacm so this is easier on the callbacks */
-static bool setup_channel(struct rdma_channel *c)
-{
-	struct i2r_interface *i = c->i;
-	int ret;
-	struct ibv_qp_init_attr_ex init_qp_attr_ex;
-
-	c->mr = i->mr;
-	c->pd = i->pd;
-
-	if (!c->core)
-		c->comp_events = i->comp_events;
-
-	c->cq = ibv_create_cq(i->context, c->nr_cq, c, c->comp_events, 0);
-	if (!c->cq) {
-		logg(LOG_CRIT, "ibv_create_cq failed for %s.\n",
-			c->text);
-		return false;
-	}
-
-	memset(&init_qp_attr_ex, 0, sizeof(init_qp_attr_ex));
-	init_qp_attr_ex.cap.max_send_wr = c->nr_send;
-	init_qp_attr_ex.cap.max_recv_wr = c->nr_receive;
-	init_qp_attr_ex.cap.max_send_sge = 1;	/* Highly sensitive settings that can cause -EINVAL if too large (10 f.e.) */
-	init_qp_attr_ex.cap.max_recv_sge = 1;
-	init_qp_attr_ex.cap.max_inline_data = MAX_INLINE_DATA;
-	init_qp_attr_ex.qp_context = c;
-	init_qp_attr_ex.sq_sig_all = 0;
-	init_qp_attr_ex.qp_type = channel_infos[c->type].qp_type,
-	init_qp_attr_ex.send_cq = c->cq;
-	init_qp_attr_ex.recv_cq = c->cq;
-
-	init_qp_attr_ex.comp_mask = IBV_QP_INIT_ATTR_CREATE_FLAGS|IBV_QP_INIT_ATTR_PD;
-	init_qp_attr_ex.pd = i->pd;
-	init_qp_attr_ex.create_flags = 0;
-
-	c->qp = ibv_create_qp_ex(i->context, &init_qp_attr_ex);
-	if (!c->qp) {
-		logg(LOG_CRIT, "ibv_create_qp_ex failed for %s. Error %s. Port=%d #CQ=%d\n",
-				c->text, errname(), i->port, c->nr_cq);
-		return false;
-	}
-
-	c->attr.port_num = i->port;
-	c->attr.qp_state = IBV_QPS_INIT;
-	c->attr.pkey_index = 0;
-	c->attr.qkey = channel_infos[c->type].qkey;
-
-	ret = ibv_modify_qp(c->qp, &c->attr,
-			IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_QKEY);
-
-	if (ret) {
-		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to Init state. %s\n", c->text, errname());
-		ibv_destroy_qp(c->qp);
-		ibv_destroy_cq(c->cq);
-		c->qp = NULL;
-		return false;
-	}
-	return true;
-}
-
 struct channel_info channel_infos[nr_channel_types] = {
 	{ "multicast",	0, 0,	10000,	1000,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
-	{ "ud",		1, 1,	500,	200,	RDMA_UDP_QKEY,	IBV_QPT_UD,		setup_channel,	receive_ud,	channel_err },
 	{ "incoming",	-1, -1,	100,	50,	0,		0,			setup_incoming,	NULL,		channel_err },
+	{ "outgoing",	-1, -1,	100,	50,	0,		0,			NULL,		NULL,		channel_err },
 	{ "error",	-1, -1,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
 };
 
@@ -408,71 +346,21 @@ void channel_destroy(struct rdma_channel *c)
 	if (!c)
 		return;
 
-	if (c->type == channel_rdmacm) {
+	if (c->qp)
+		rdma_destroy_qp(c->id);
 
-		if (c->qp)
-			rdma_destroy_qp(c->id);
+	if (c->cq)
+		ibv_destroy_cq(c->cq);
 
-		if (c->cq)
-			ibv_destroy_cq(c->cq);
-
-		ibv_dereg_mr(c->mr);
-		if (c->pd)
+	ibv_dereg_mr(c->mr);
+	if (c->pd)
 			ibv_dealloc_pd(c->pd);
 
-		rdma_destroy_id(c->id);
-	} else {
-		ibv_destroy_qp(c->qp);
+	rdma_destroy_id(c->id);
 
-		if (c->cq)
-			ibv_destroy_cq(c->cq);
-
-	}
 	clear_channel_bufs(c);
 	if (!c->core)
 		free(c);
-}
-
-void start_channel(struct rdma_channel *c)
-{
-	int ret;
-
-	if (!c)
-		return;
-
-	if (c->type == channel_rdmacm)
-       		return;
-
-	c->attr.qp_state = IBV_QPS_RTR;
-
-	ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE);
-	if (ret)
-		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTR state. %s\n", c->text, errname());
-
-	c->attr.qp_state = IBV_QPS_RTS;
-	ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE | IBV_QP_SQ_PSN);
-
-	if (ret)
-		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to RTS state. %s\n", c->text, errname());
-
-	logg(LOG_NOTICE, "QP %s moved to state RTS/RTR: QPN=%d\n",
-		 c->text, c->qp->qp_num);
-}
-
-void stop_channel(struct rdma_channel *c)
-{
-	int ret;
-
-	if (c->type == channel_rdmacm)
-		return;
-
-	c->attr.qp_state = IBV_QPS_INIT;
-
-	ret = ibv_modify_qp(c->qp, &c->attr, IBV_QP_STATE);
-	if (ret)
-		logg(LOG_CRIT, "ibv_modify_qp: Error when moving %s to INIT state. %s\n", c->text, errname());
-
-	logg(LOG_NOTICE, "QP %s moved to state QPS_INIT\n", c->text);
 }
 
 void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *))
@@ -499,23 +387,8 @@ void arm_channels(struct core_info *core)
 {
 	interface_foreach(i)
 		channel_foreach(c, &i->channels) {
-
-			switch (c->type) {
-		   		case  channel_rdmacm:
-		  			if (core == c->core) {
-						ibv_req_notify_cq(c->cq, 0);
-					}
-					break;
-
-				case channel_ud:
- 					if (core == c->core) {
-						start_channel(c);
-						ibv_req_notify_cq(c->cq, 0);
-					}
-					break;
-
-				default:
-					break;
+		  	if (core == c->core) {
+				ibv_req_notify_cq(c->cq, 0);
 			}
  		}
 }

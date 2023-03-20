@@ -571,9 +571,6 @@ void next_join_complete(struct mc *m)
 	for(i = i2r; i < i2r + NR_INTERFACES; i++)
 		if (i->context)	{
 			channel_foreach(c, gjs.channels[i - i2r]) {
-				if (c->type != channel_rdmacm)
-					continue;
-
 				if (c->listening)
 					continue;
 
