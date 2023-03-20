@@ -78,11 +78,7 @@ char *ib_name, *roce_name;
 int rate = IBV_RATE_10_GBPS;	/* Limit sending rate */
 
 bool bridging = true;		/* Allow briding */
-#ifdef UNICAST
 bool unicast = false;		/* Bridge unicast packets */
-static bool raw = false;	/* Use raw channels */
-static bool packet_socket = false;	/* Do not use RAW QPs, use packet socket instead */
-#endif
 
 enum interfaces default_interface;
 
@@ -291,13 +287,6 @@ int find_rdma_devices(void)
 
 static void qp_destroy(struct i2r_interface *i)
 {
-#ifdef HAVE_MSTFLINT
-	if (i == i2r + INFINIBAND && i->raw && i->raw->type == channel_ibraw) {
-		if (clear_ib_sniffer(i->port, i->raw->qp))
-			logg(LOG_ERR, "Failed to switch off sniffer mode on %s\n", i->raw->text);
-	}
-#endif
-
 	channelp_foreach(c, &i->channels) {
 		if (*c) {
 			channel_destroy(*c);
@@ -452,8 +441,6 @@ void setup_interface(enum interfaces in)
 	struct ibv_gid_entry *e;
 	struct rdma_channel *multicast= NULL;
 #ifdef UNICAST
-	struct rdma_channel *qp1 = NULL;
-	struct rdma_channel *raw_channel = NULL;
 	struct rdma_channel *ud = NULL;
 #endif
 	unsigned channels;
@@ -564,21 +551,7 @@ void setup_interface(enum interfaces in)
 
 #ifdef UNICAST
 	if (unicast) {
-
 		i->channels.c[channels++] = ud = new_rdma_channel(i, channel_ud, 0);
-		i->channels.c[channels++] = qp1 = new_rdma_channel(i, channel_qp1, 0);
-
- 		if (raw) {
- 			if (i == i2r + INFINIBAND) {
-				i->channels.c[channels++] = raw_channel = new_rdma_channel(i, channel_ibraw, 0);
- 				/* Sadly fallback is not working here */
- 			} else {
- 				if (packet_socket)
-					i->channels.c[channels++] = new_rdma_channel(i, channel_packet, 0);
- 				else
-					i->channels.c[channels++] = new_rdma_channel(i, channel_raw, 0);
- 			}
- 		}
  	}
 
 	if (channels > MAX_CHANNELS_PER_INTERFACE)
@@ -1197,59 +1170,6 @@ void handle_comp_event(void *private)
 		process_cqes(c, wc, cqs);
 }
 
-#ifdef UNICAST
-
-/* Special handling using raw socket */
-void handle_receive_packet(void *private)
-{
-	struct rdma_channel *c = private;
-	struct ibv_wc w = {};
-	unsigned ethertype;
-	ssize_t len;
-	struct buf *buf = alloc_buffer(c);
-	struct ether_header e;
-
-	len = recv(c->fh, buf->raw, DATA_SIZE, 0);
-
-	if (len < 0) {
-		logg(LOG_ERR, "recv error on %s:%s\n", c->text, errname());
-		return;
-	}
-
-	if (len < 10) {
-		logg(LOG_ERR, "Packet size below minimal %ld\n", len);
-		return;
-	}
-
-	st(c, packets_received);
-
-	w.byte_len = len;
-	buf->cur = buf->raw;
-	buf->end = buf->raw + w.byte_len;
-	buf->w = &w;
-	reset_flags(buf);
-	PULL(buf, e);
-
-	ethertype = ntohs(e.ether_type);
-	if (ethertype < 0x600)
-		ethertype = ETHERTYPE_IP;
-
-	if (ethertype == ETHERTYPE_IP) {
-		PULL(buf, buf->ip);
-		buf->ip_valid = true;
-
-		memcpy((void *)&buf->grh + 20, &buf->ip, 20);
-		buf->grh_valid = true;
-	}
-	buf->ip_csum_ok = true;
-	/* Reset scan to the beginning of the raw packet */
-	buf->cur = buf->raw;
-	c->receive(buf);
-	put_buf(buf);
-}
-
-#endif
-
 /* A mini router follows */
 struct i2r_interface *find_interface(struct sockaddr_in *sin)
 {
@@ -1420,10 +1340,6 @@ static void interfaces_init(void)
 	register_enable("mcqp", true, NULL, &mc_per_qp, "0", "10", NULL, "Max # of MCs per QP");
 
 #ifdef UNICAST
-	register_enable("packetsocket", false, &packet_socket, NULL, "on", "off", NULL,
-		"Use a packet socket instead of a RAW QP to capure IB/ROCE traffic");
-	register_enable("raw", false, &raw, NULL, "on", "off",	NULL,
-		"Use of RAW sockets to capture SIDR Requests. Avoids having to use a patched kernel");
 	register_enable("unicast", false, &unicast, NULL, "on", "off",	NULL,
 		"Processing of unicast packets with QP1 handling of SIDR REQ/REP");
 #endif

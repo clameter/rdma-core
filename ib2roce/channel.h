@@ -66,10 +66,8 @@ extern enum interfaces default_interface;
 
 extern const char *stats_text[nr_stats];
 
-enum channel_type { channel_rdmacm, channel_ud, channel_qp1,
-	channel_raw, channel_ibraw,
-	channel_packet, channel_incoming,
-	channel_err, nr_channel_types };
+enum channel_type { channel_rdmacm, channel_ud,
+	channel_incoming, channel_err, nr_channel_types };
 
 #define NO_CORE (-1)
 
@@ -93,7 +91,6 @@ struct rdma_channel {
 	struct ibv_mr *mr;
 	struct ibv_comp_channel *comp_events;
 	struct ibv_pd *pd;
-	struct ibv_flow *flow;
 	unsigned int active_receive_buffers;
 	unsigned int active_send_buffers;	/* if the sender is on a different core than the receiver then we have a race condition for the buffers */
 	unsigned int cq_high;		/* Largest number of CQs taken from the queue */
@@ -185,7 +182,7 @@ int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast);
 receive_callback receive_multicast;
 
 #ifdef UNICAST
-receive_callback receive_main, receive_raw, receive_ud, receive_qp1;
+receive_callback receive_main, receive_ud;
 #endif
 
 #endif

@@ -70,7 +70,6 @@
 #ifdef UNICAST
 #include "endpoint.h"
 #include "unicast.h"
-#include "ibraw.h"
 #endif
 
 /* Globals */
@@ -108,17 +107,6 @@ static char *grh_str(struct ibv_grh *g)
                         hbuf1, hbuf2);
 	return buf;
 }
-
-#ifdef HAVE_MSTFLINT
-static void shutdown_sniffer(int arg) {
-	struct i2r_interface *i = i2r + INFINIBAND;
-
-	if (clear_ib_sniffer(i->port, i->raw->qp))
-		logg(LOG_ERR, "Failed to switch off sniffer mode on %s\n", i->raw->text);
-	else
-		logg(LOG_NOTICE, "ABORT handler cleared the sniffer mode on Infiniband\n");
-}
-#endif
 
 /*
  * We have an GRH header so the packet has been processed by the RDMA

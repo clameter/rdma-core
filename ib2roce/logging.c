@@ -227,10 +227,6 @@ void brief_status(FILE *out)
 					stats[packets_sent]);
 		}
 
-		if (sum_stats(stats, i, channel_raw) && stats[packets_received]) {
-			n+= sprintf(counts + n, ", RAW %d", stats[packets_received]);
-		}
-
 		n+= sprintf(counts + n, ") ");
 	}
 

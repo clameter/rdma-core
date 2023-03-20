@@ -39,6 +39,6 @@
 
 #include "buffers.h"
 
-/* receive_callback receive_ud, receive_qp1, receive_raw(struct buf *); */
+receive_callback receive_ud;
 
 #endif
