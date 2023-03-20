@@ -77,7 +77,6 @@
 #include "locking.h"
 #include "multicast.h"
 #include "interfaces.h"
-#include "beacon.h"
 #include "cli.h"
 #include "pgm.h"
 #include "endpoint.h"

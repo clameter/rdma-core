@@ -62,7 +62,6 @@
 #include "buffers.h"
 #include "multicast.h"
 #include "interfaces.h"
-#include "beacon.h"
 #include "cli.h"
 #include "pgm.h"
 #include "sender.h"
@@ -470,8 +469,6 @@ int main(int argc, char **argv)
 	if (cores)
 		show_core_config();
 
-	beacon_setup();
-
 	if (mode == mode_sender)
 		sender_setup();
 
@@ -489,8 +486,6 @@ int main(int argc, char **argv)
 
 	if (systemd)
 		sd_notify(0, "STOPPING=1");
-
-	beacon_shutdown();
 
 	if (mode == mode_sender)
 		sender_shutdown();

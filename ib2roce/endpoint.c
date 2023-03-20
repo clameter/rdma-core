@@ -62,7 +62,6 @@
 #include "buffers.h"
 #include "multicast.h"
 #include "interfaces.h"
-#include "beacon.h"
 #include "cli.h"
 #include "endpoint.h"
 

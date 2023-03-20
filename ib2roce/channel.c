@@ -45,7 +45,6 @@
 #include "interfaces.h"
 #include "channel.h"
 #include "cli.h"
-#include "beacon.h"
 #include "pgm.h"
 #include "unicast.h"
 
@@ -481,10 +480,6 @@ void all_channels(FILE *out, void (*func)(FILE *out, struct rdma_channel *))
  	interface_foreach(i)
 		channel_foreach(c, &i->channels)
 				func(out, c);
-
-#ifdef BEACON
- 	run_bridge_channels(NULL, func);
-#endif
 }
 
 bool is_a_channel_of(struct rdma_channel *c, struct channel_list *cl)
