@@ -80,7 +80,7 @@ const char *stream_state_text[] = {
 /* Stream information */
 struct pgm_stream {
 	struct pgm_tsi tsi;		/* Transport Session Identifier */
-	struct i2r_interface *i;	/* Interface of the source */
+	struct rdma_channel *c;		/* Channel on which we receive the stream */
 	unsigned trail;			/* Sender trail */
 	unsigned lead;			/* Sender lead */
 	unsigned last;			/* last SQN received */
@@ -323,16 +323,17 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 	return true;
 }
 
-static struct pgm_stream *create_tsi(struct i2r_interface *i, struct pgm_tsi *tsi)
+static struct pgm_stream *create_tsi(struct rdma_channel *c, struct pgm_tsi *tsi)
 {
 	struct pgm_stream *s;
+	struct i2r_interface *i = c->i;
 
 	lock();
 	s = hash_find(i->pgm_tsi_hash, &tsi);
 	if (!s) {
 		s = calloc(1, sizeof(struct pgm_stream));
 		s->tsi = *tsi;
-		s->i = i;
+		s->c = c;
 		format_tsi(s->text, tsi, NULL, 0);
 		hash_add(i->pgm_tsi_hash, s);
 		i->nr_tsi++;
@@ -361,9 +362,9 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 	s = hash_find(i->pgm_tsi_hash, &tsi);
 	if (!s) {
-		s= create_tsi(i, &tsi);
+		s= create_tsi(c, &tsi);
 
-		if (!valid_addr(c->i, tsi_sender(&tsi))) {
+		if (!valid_addr(i, tsi_sender(&tsi))) {
 			s->state = stream_ignore;
 			logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
 			return false;
