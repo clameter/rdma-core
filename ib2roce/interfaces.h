@@ -121,6 +121,7 @@ struct i2r_interface {
 	unsigned nr_tsi;
 	struct hash *pgm_tsi_hash;
 	struct hash *pgm_record_hash;
+	uint64_t last_snapshot;
 	unsigned last_tsi;
 	unsigned last_spm;
 	unsigned last_odata;
