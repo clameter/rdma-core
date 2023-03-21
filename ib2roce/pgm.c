@@ -342,52 +342,27 @@ static struct pgm_stream *create_tsi(struct rdma_channel *c, struct pgm_tsi *tsi
 	return s;
 }
 
-bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
+
+
+/*
+ * Parse PGM headers and options. Return address of subheader and the options in the array
+ * Returns the catory of the pgm record
+ */
+static enum cat_type parse_pgm(struct pgm_stream *s, struct pgm_header *h, bool multicast, uint8_t **next, uint16_t *opt_offset)
 {
-	struct i2r_interface *i = c->i;
-	struct pgm_tsi tsi;
-	struct pgm_stream *s;
-	uint8_t *a;
-	uint16_t opt_offset[MAX_PGM_OPT];
 	enum cat_type pgm_category;
-	uint8_t *pgm_start = (uint8_t *)(buf->cur);
-	struct pgm_header *header = (void *)pgm_start;
-
-	tsi.mcgroup = m->addr;
-	memcpy(tsi.gsi, header->pgm_gsi, 6);
-	if (header->pgm_type == PGM_NAK || header->pgm_type == PGM_NNAK)
-		memcpy(&tsi.flow, &header->pgm_dport, sizeof(uint16_t));
-	else
-		memcpy(&tsi.flow, &header->pgm_sport, sizeof(uint16_t));
-
-	s = hash_find(i->pgm_tsi_hash, &tsi);
-	if (!s) {
-		s= create_tsi(c, &tsi);
-
-		if (!valid_addr(i, tsi_sender(&tsi))) {
-			s->state = stream_ignore;
-			logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
-			return false;
-		} else
-			logg(LOG_DEBUG, "TSI New %s\n", s->text);
-	}
-
-	if (s->state == stream_ignore) {
-drop:
-		s->drop++;
-		s->timestamp_error = now;
-		return false;
-	}
-
-	/* Determine the category of the pgm_type which will allow us to easily check allowed options */
-	pgm_category = pgm_type2cat(header->pgm_type);
-	if (header->pgm_type >= MAX_PGM_TYPE || pgm_category == cat_invalid) {
-		logg(LOG_NOTICE, "%s: Invalid PGM type %u. Packet Skipped.\n", s->text, header->pgm_type);
-		goto drop;
+	uint8_t *a;
+	uint8_t *pgm_start = (void *)h;
+ 
+ 	/* Determine the category of the pgm_type which will allow us to easily check allowed options */
+	pgm_category = pgm_type2cat(h->pgm_type, multicast);
+	if (h->pgm_type >= MAX_PGM_TYPE || pgm_category == cat_invalid) {
+		logg(LOG_NOTICE, "%s: Invalid PGM type %u. Packet Skipped.\n", s->text, h->pgm_type);
+		return cat_invalid;
 	}
 
 	/* move to the beginning of the options. Extracts size for category from cat_sizes */
-	a = pgm_start + sizeof(struct pgm_header) + pgm_type2size(header->pgm_type);
+	a = pgm_start + sizeof(struct pgm_header) + pgm_type2size(h->pgm_type);
 
 	/*
 	 * Parse options following the PGM header. This is common for all PGM packet types so do it
@@ -395,7 +370,7 @@ drop:
 	 */
 	memset(opt_offset, 0, sizeof(uint16_t) * MAX_PGM_OPT);
 
-	if (header->pgm_options & PGM_OPT_PRESENT) {
+	if (h->pgm_options & PGM_OPT_PRESENT) {
 
 		struct pgm_opt_header *poh;
 		uint8_t *opt_start =  a;
@@ -418,14 +393,14 @@ drop:
 
 				if (!(opt_bit & cat_perm[pgm_category]))
 					logg(LOG_INFO, "%s: Invalid option %x for PGM record type %x specified.\n",
-						s->text, option, header->pgm_type);
+						s->text, option, h->pgm_type);
 
 			} else
 			if (option == PGM_EXT_OPT_LABEL) {
 
 				if (!s->label) {
 					s->label = true;
-					format_tsi(s->text, &tsi, a + 4, poh->opt_length - 4);
+					format_tsi(s->text, &s->tsi, a + 4, poh->opt_length - 4);
 				}
 			} else
 			if (option != PGM_OPT_INVALID) {
@@ -442,7 +417,7 @@ drop:
 
 					case PGM_OPX_DISCARD:
 						/* Discard the packet  */
-						goto drop;
+						return cat_invalid;
 
 					case PGM_OPX_IGNORE:
 						/* Just leave it as is */
@@ -465,16 +440,90 @@ drop:
 			if (a - opt_start != total_opt_length) {
 				logg(LOG_INFO, "%s: total_opt_length mismatch (is %lu, expected %u). Packet skipped\n",
 					s->text, a - opt_start, total_opt_length);
-				goto drop;
+				return cat_invalid;
 			}
 		}
 
 	} else {
 
 		if (pgm_category != cat_nak)
-			logg(LOG_INFO, "%s: No Options ... Type %d\n", s->text, header->pgm_type);
+			logg(LOG_INFO, "%s: No Options ... Type %d\n", s->text, h->pgm_type);
 
 	}
+
+	if (next)
+		*next = a;
+
+	return pgm_category;
+}
+
+bool pgm_process_unicast(struct rdma_channel *c, struct buf *buf);
+
+bool pgm_process_unicast(struct rdma_channel *c, struct buf *buf)
+{
+	struct i2r_interface *i = c->i;
+	struct pgm_tsi tsi;
+	struct pgm_stream *s;
+	uint16_t opt_offset[MAX_PGM_OPT];
+	enum cat_type pgm_category;
+	struct pgm_header *header = (void *)(buf->raw);
+	struct pgm_nak *nak = (void *)(header + 1);
+
+	if (header->pgm_type != PGM_NAK)
+		return false;
+
+	/* NAK specific */
+	tsi.mcgroup = nak->nak_src_nla;
+	memcpy(tsi.gsi, header->pgm_gsi, 6);
+	memcpy(&tsi.flow, &header->pgm_dport, sizeof(uint16_t));
+
+	s = hash_find(i->pgm_tsi_hash, &tsi);
+	if (!s)
+	       return false;
+
+	pgm_category = parse_pgm(s, header, false, NULL, opt_offset);
+
+	if (pgm_category != cat_nak || s->state == stream_ignore) {
+		s->drop++;
+		s->timestamp_error = now;
+		return false;
+	}
+
+	/* This can only be a form of NAK there are no other unicast PGM types */
+	return process_nak(s, header, opt_offset);
+}
+
+bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
+{
+	struct i2r_interface *i = c->i;
+	struct pgm_tsi tsi;
+	struct pgm_stream *s;
+	uint8_t *a;
+	uint16_t opt_offset[MAX_PGM_OPT];
+	enum cat_type pgm_category;
+	struct pgm_header *header = (void *)(buf->cur);
+
+	/* This is not going to work for NAKs */
+	tsi.mcgroup = m->addr;
+	memcpy(tsi.gsi, header->pgm_gsi, 6);
+	memcpy(&tsi.flow, &header->pgm_sport, sizeof(uint16_t));
+
+	s = hash_find(i->pgm_tsi_hash, &tsi);
+	if (!s) {
+		s= create_tsi(c, &tsi);
+
+		if (!valid_addr(i, tsi_sender(&tsi))) {
+			s->state = stream_ignore;
+			logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
+			return false;
+		} else
+			logg(LOG_DEBUG, "TSI New %s\n", s->text);
+	}
+
+	if (s->state == stream_ignore)
+		goto drop;
+
+	pgm_category = parse_pgm(s, header, true, &a, opt_offset);
 
 	switch(pgm_category) {
 		case cat_spm:
@@ -487,8 +536,12 @@ drop:
 			return process_nak(s, header, opt_offset);
 
 		default:
-		break;
+			goto drop;
+
 	}
+drop:
+	s->drop++;
+	s->timestamp_error = now;
 	return false;
 }
 

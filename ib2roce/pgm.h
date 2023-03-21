@@ -68,6 +68,20 @@ static const uint64_t cat_sizes =
 /* 2 bits required for each entry in type_to_cat */
 #define PGM_TYPE_SHIFT 2
 
+static const uint64_t type_to_cat_uc_mc[2] = {
+	/* Unicast */
+        (cat_nak << (8 * PGM_TYPE_SHIFT)) +		/* PGM_NAK         = 0x08 */
+        (cat_nak << (9 * PGM_TYPE_SHIFT)) +		/* PGM_NNAK        = 0x09 */
+        (cat_nak << (13 * PGM_TYPE_SHIFT))		/* PGM_ACK         = 0x0d */,
+
+	/* Multicast */
+	cat_spm +					/* PGM_SPM	   = 0x00 */
+        (cat_data << (4 * PGM_TYPE_SHIFT)) +		/* PGM_ODATA       = 0x04 */
+        (cat_data << (5 * PGM_TYPE_SHIFT)) +		/* PGM_RDATA       = 0x05 */
+        (cat_nak << (10 * PGM_TYPE_SHIFT)) +		/* PGM_NCF         = 0x0a */
+        (cat_nak << (13 * PGM_TYPE_SHIFT))		/* PGM_ACK         = 0x0d */
+};
+
 static const uint64_t type_to_cat = {
 	cat_spm +					/* PGM_SPM	   = 0x00 */
         (cat_data << (4 * PGM_TYPE_SHIFT)) +		/* PGM_ODATA       = 0x04 */
@@ -78,14 +92,20 @@ static const uint64_t type_to_cat = {
         (cat_nak << (13 * PGM_TYPE_SHIFT))		/* PGM_ACK         = 0x0d */
 };
 
-static inline enum cat_type pgm_type2cat(enum pgm_type_e ptype)
+
+static inline enum cat_type __pgm_type2cat(uint64_t mask, enum pgm_type_e ptype)
 {
-	return (type_to_cat >> (ptype * PGM_TYPE_SHIFT)) & ((1 << PGM_TYPE_SHIFT) -1);
+	return (mask >> (ptype * PGM_TYPE_SHIFT)) & ((1 << PGM_TYPE_SHIFT) -1);
+}
+
+static inline enum cat_type pgm_type2cat(enum pgm_type_e ptype, bool multicast)
+{
+	return __pgm_type2cat(type_to_cat_uc_mc[multicast], ptype);
 }
 
 static inline unsigned pgm_type2size(enum pgm_type_e ptype)
 {
-	return (cat_sizes >> (pgm_type2cat(ptype) * PGM_CAT_SHIFT)) & ((1 << PGM_CAT_SHIFT) -1);
+	return (cat_sizes >> (__pgm_type2cat(type_to_cat, ptype) * PGM_CAT_SHIFT)) & ((1 << PGM_CAT_SHIFT) -1);
 }
 
 #define PGM_EXT_OPT_LABEL 0x22
