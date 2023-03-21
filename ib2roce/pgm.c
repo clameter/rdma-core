@@ -239,8 +239,8 @@ static bool process_spm(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 
 	s->spm++;
 
-	if (spm->spm_nla_afi != AFI_IP) {
-		logg(LOG_INFO, "Unsupported AFI on SPM %s\n", s->text);
+	if (ntohs(spm->spm_nla_afi) != AFI_IP) {
+		logg(LOG_INFO, "Unsupported AFI (%u) on SPM %s\n", ntohs(spm->spm_nla_afi), s->text);
 spm_error:
 		s->spm_errors++;
 		return true;

@@ -165,7 +165,7 @@ static void prep_spm(struct i2r_interface *i, struct buf *buf, struct mc *m, uin
 	ps->spm_sqn = htonl(spm_seq);
 	ps->spm_trail = htonl(sender_seq);
 	ps->spm_lead = htonl(sender_seq);
-	ps->spm_nla_afi = AFI_IP;
+	ps->spm_nla_afi = htons(AFI_IP);
 	ps->spm_nla = i->if_addr.sin_addr;
 
 	if (ptype)
