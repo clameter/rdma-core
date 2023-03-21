@@ -308,7 +308,7 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 			case PGM_NNAK: s->nnak += count; break;
 		}
 
-		logg(LOG_NOTICE, "%s: %s NLA=%s GRP_NLA=%s SQN=%s\n",
+		logg(LOG_DEBUG, "%s: %s NLA=%s GRP_NLA=%s SQN=%s\n",
 			s->text, pgm_type_text[h->pgm_type], inet_ntoa(nak->nak_src_nla),
 			inet_ntoa(nak->nak_grp_nla), sqns);
 
@@ -317,7 +317,7 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 	} else {
 
 		s->ack += count;
-		logg(LOG_NOTICE, "%s: ACK %s\n", s->text, sqns);
+		logg(LOG_DEBUG, "%s: ACK %s\n", s->text, sqns);
 
 	}
 	return true;
