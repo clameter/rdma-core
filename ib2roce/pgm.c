@@ -44,6 +44,7 @@
  * PGM RFC3208 Support
  */
 bool pgm_mode = true; 	/* Will only analyze PORT streams */
+bool pgm_nak = false;	/* Process and forward NAKs */
 
 struct nak {
 	struct pgm_nak *next;
@@ -229,7 +230,8 @@ finish:
 	return true;
 }
 
-static bool process_spm(struct pgm_stream *s, struct pgm_header *h, uint16_t *opt_offset)
+static bool process_spm(struct pgm_stream *s, struct pgm_header *h,
+		uint16_t *opt_offset, struct rdma_channel *c)
 {
 	struct pgm_spm *spm = (struct pgm_spm *)(h + 1);
 	unsigned sqn;
@@ -272,9 +274,13 @@ spm_error:
 	s->trail = ntohl(spm->spm_trail);
 	s->lead = ntohl(spm->spm_lead);
 	s->nak_nla = spm->spm_nla;
+	if (pgm_nak) {
+		spm->spm_nla = c->destination->i->if_addr.sin_addr;
+	}
 	return true;
 }
 
+/* Unicast NAK reception */
 static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *opt_offset)
 {
 	struct pgm_nak *nak = (struct pgm_nak *)(h + 1);
@@ -319,6 +325,16 @@ static bool process_nak(struct pgm_stream *s, struct pgm_header *h, uint16_t *op
 		s->ack += count;
 		logg(LOG_DEBUG, "%s: ACK %s\n", s->text, sqns);
 
+	}
+	if (h->pgm_type == PGM_NAK && s->state == stream_sync && pgm_nak && bridging) {
+		struct sockaddr_in sin = {
+			.sin_family = AF_INET,
+			.sin_addr = s->nak_nla,
+			.sin_port =  htons(default_port)
+		};
+
+		/* Bridge the NAK packet */
+		send_buf_to(s->c->destination->i, (struct buf *)h, &sin);
 	}
 	return true;
 }
@@ -457,8 +473,6 @@ static enum cat_type parse_pgm(struct pgm_stream *s, struct pgm_header *h, bool 
 	return pgm_category;
 }
 
-bool pgm_process_unicast(struct rdma_channel *c, struct buf *buf);
-
 bool pgm_process_unicast(struct rdma_channel *c, struct buf *buf)
 {
 	struct i2r_interface *i = c->i;
@@ -493,7 +507,7 @@ bool pgm_process_unicast(struct rdma_channel *c, struct buf *buf)
 	return process_nak(s, header, opt_offset);
 }
 
-bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
+bool pgm_process_multicast(struct rdma_channel *c, struct mc *m, struct buf *buf)
 {
 	struct i2r_interface *i = c->i;
 	struct pgm_tsi tsi;
@@ -527,7 +541,7 @@ bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf)
 
 	switch(pgm_category) {
 		case cat_spm:
-			return process_spm(s, header, opt_offset);
+			return process_spm(s, header, opt_offset, c);
 
 		case cat_data:
 		        return process_data(s, header, opt_offset, a, buf->end - a);
@@ -687,6 +701,8 @@ static void pgm_init(void)
 	register_concom("tsi", true, 1, "Show PGM info (parmameters all/data/errors/summary/nak)", tsi_cmd);
 	register_enable("pgm", true, &pgm_mode, NULL, "on", "off", NULL,
 		"Enable PGM processing and validaton (Sequence numbers etc)");
+	register_enable("pgm_nak", true, &pgm_nak, NULL, "on", "off", NULL,
+		"Redirect downstream NAKs back to us and forward them to source");
 	init_pgm_streams();
 }
 

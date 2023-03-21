@@ -44,7 +44,8 @@
 
 extern bool pgm_mode;
 
-bool pgm_process(struct rdma_channel *c, struct mc *m, struct buf *buf);
+bool pgm_process_multicast(struct rdma_channel *c, struct mc *m, struct buf *buf);
+bool pgm_process_unicast(struct rdma_channel *c, struct buf *buf);
 
 unsigned pgm_brief_stats(char *b, struct i2r_interface *i);
 

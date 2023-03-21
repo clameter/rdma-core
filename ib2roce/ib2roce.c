@@ -206,7 +206,7 @@ void receive_multicast(struct buf *buf)
 
 	if (pgm_mode && m->mgid_mode == MGID_MODE_PORT) {
 		uint8_t *saved = buf->cur;
-		if (!pgm_process(c, m, buf))
+		if (!pgm_process_multicast(c, m, buf))
 			return;
 		buf->cur = saved;
 	}
@@ -250,7 +250,12 @@ void receive_unicast(struct buf *buf)
 {
 	struct rdma_channel *c = buf->c;
 
-	logg(LOG_DEBUG, "Drop on unicast channel %s: %s\n", c->text, payload_dump(buf->cur));
+	if (pgm_mode && pgm_process_unicast(c, buf)) {
+		st(c, packets_bridged);
+		return;
+	}
+
+	logg(LOG_DEBUG, "drop on unicast channel %s: %s\n", c->text, payload_dump(buf->cur));
 	st(c, packets_invalid);
 }
 
