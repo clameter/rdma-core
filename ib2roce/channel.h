@@ -148,13 +148,10 @@ extern struct channel_info {
 	const char *suffix;
 	short core;
 	short alt_core;	/* If that core is not available what is the other choice */
-	uint32_t nr_cq;		/* NR of CQ entries to allocate allocate to this channel */
-	uint32_t nr_send;	/* NR buffers for receive queue */
-	uint32_t qkey;
-	uint16_t qp_type;
+	uint32_t nr_cq;		/* NR of CQE entries to allocate allocate to this channel */
+	uint32_t nr_send;	/* NR buffers for send queue */
 	setup_callback *setup;
 	receive_callback *receive;
-	enum channel_type fallback;
 
 } channel_infos[nr_channel_types];
 
@@ -177,7 +174,7 @@ int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast);
 
 receive_callback receive_multicast;
 
-receive_callback receive_main;
+receive_callback receive_unicast;
 
 #endif
 

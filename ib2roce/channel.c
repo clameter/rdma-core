@@ -134,7 +134,6 @@ struct rdma_channel *new_rdma_channel(struct i2r_interface *i, enum channel_type
 	int channel_nr;
 	unsigned rdma_channel_size = sizeof(struct rdma_channel) + i->mc_per_qp * sizeof(struct mc *);
 
-retry:
 	ci = channel_infos + type;
 	channel_nr = -1;
 	c = calloc(1, rdma_channel_size);
@@ -152,9 +151,6 @@ retry:
 		c->core = coi;
 
 	}
-
-	if (type == channel_err)
-		goto err;
 
 	c->i = i;
 	c->type = type;
@@ -178,7 +174,6 @@ retry:
 
 	if (ci->setup(c)) {
 		/* Channel setup ok */
-
 		if (coi) {
 			if (channel_nr == 0) {
 				coi->numa_node = c->i->numa_node;
@@ -194,19 +189,8 @@ retry:
 		return c;
 	}
 
-	if (type != ci->fallback) {
-		type = ci->fallback;
-		free(p);
-		if (channel_nr < 0)
-			free(c);
-		else
-			coi->nr_channels--;
-		goto retry;
-	}
-
-err:
-	if (channel_nr < 0)
-		free(c);
+	free(p);
+	free(c);
 
 	return NULL;
 }
@@ -361,10 +345,9 @@ static bool setup_incoming(struct rdma_channel *c)
 }
 
 struct channel_info channel_infos[nr_channel_types] = {
-	{ "multicast",	0, 0,	10000,	1000,	0,		IBV_QPT_UD,		setup_multicast, receive_multicast, channel_err },
-	{ "incoming",	-1, -1,	100,	50,	0,		0,			setup_incoming,	NULL,		channel_err },
-	{ "outgoing",	-1, -1,	100,	50,	0,		0,			NULL,		NULL,		channel_err },
-	{ "error",	-1, -1,	0,	0,	0,		0,			NULL,		NULL,		channel_err },
+	/* Name,	Core, Alt, CQE	Outbound, Setup,	receive */
+	{ "multicast",	0, 0,	10000,	1000,	setup_multicast, receive_multicast },
+	{ "incoming",	-1, -1,	100,	50,	setup_incoming,	receive_unicast }
 };
 
 void channel_destroy(struct rdma_channel *c)

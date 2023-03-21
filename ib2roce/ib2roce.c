@@ -246,6 +246,14 @@ invalid_packet:
 	st(c, packets_invalid);
 }
 
+void receive_unicast(struct buf *buf)
+{
+	struct rdma_channel *c = buf->c;
+
+	logg(LOG_DEBUG, "Drop on unicast channel %s: %s\n", c->text, payload_dump(buf->cur));
+	st(c, packets_invalid);
+}
+
 static void run_watchdog(void *private)
 {
 	sd_notify(0, "WATCHDOG=1");
