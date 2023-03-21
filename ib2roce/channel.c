@@ -309,21 +309,22 @@ static bool setup_multicast(struct rdma_channel *c)
 	sin = calloc(1, sizeof(struct sockaddr_in));
 	sin->sin_family = AF_INET;
 	sin->sin_addr = i->if_addr.sin_addr;
-	sin->sin_port = htons(default_port);
+	sin->sin_port = 0;			/* There may be multiple multcast QPs */
 	c->bindaddr = (struct sockaddr *)sin;
 
 	ret = rdma_create_id(i->rdma_events, &c->id, c, RDMA_PS_UDP);
 	if (ret) {
 		logg(LOG_CRIT, "Failed to allocate RDMA CM ID for %s failed (%s).\n",
 			c->text, errname());
+		free(sin);
 		return false;
 	}
 
-	/* XXX This is not going to work for multi channel RDMA */
 	ret = rdma_bind_addr(c->id, c->bindaddr);
 	if (ret) {
 		logg(LOG_CRIT, "Failed to bind %s interface. Error %s\n",
 			c->text, errname());
+		free(sin);
 		return false;
 	}
 	return allocate_rdmacm_qp(c, true);
@@ -331,6 +332,31 @@ static bool setup_multicast(struct rdma_channel *c)
 
 static bool setup_incoming(struct rdma_channel *c)
 {
+	struct i2r_interface *i = c->i;
+	struct sockaddr_in *sin;
+	int ret;
+
+	sin = calloc(1, sizeof(struct sockaddr_in));
+	sin->sin_family = AF_INET;
+	sin->sin_addr = i->if_addr.sin_addr;
+	sin->sin_port = htons(default_port);
+	c->bindaddr = (struct sockaddr *)sin;
+
+	ret = rdma_create_id(i->rdma_events, &c->id, c, RDMA_PS_UDP);
+	if (ret) {
+		logg(LOG_CRIT, "Failed to allocate RDMA CM ID for %s failed (%s).\n",
+			c->text, errname());
+		free(sin);
+		return false;
+	}
+
+	ret = rdma_bind_addr(c->id, c->bindaddr);
+	if (ret) {
+		logg(LOG_CRIT, "Failed to bind %s interface. Error %s\n",
+			c->text, errname());
+		free(sin);
+		return false;
+	}
 	return allocate_rdmacm_qp(c, true);
 }
 
