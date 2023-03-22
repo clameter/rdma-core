@@ -118,12 +118,12 @@ void panic(const char *fmt, ...)
 	va_start(valist, fmt);
 	__logg(LOG_CRIT, fmt, valist);
 
-	logg(LOG_CRIT, "Panic");	
+	logg(LOG_CRIT, "Panic:\n");	
 	nrframes = backtrace(frames, NR_FRAMES);
 	strings = backtrace_symbols(frames, nrframes);
 
 	for( j= 0; j < nrframes; j++) {
-		printf("%d. %s\n", j, strings[j]);
+		logg(LOG_CRIT, "%d. %s\n", j, strings[j]);
 	}
 	free(strings);
 	abort();

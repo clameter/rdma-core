@@ -177,7 +177,7 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 	if (s->state == stream_init || opt_offset[PGM_OPT_SYN]) {
 
 		if (opt_offset[PGM_OPT_SYN])
-			logg(LOG_INFO, "TSI Start (OPT_SYN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
+			logg(LOG_DEBUG, "TSI Start (OPT_SYN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
 
 		s->state = stream_init;
 		goto accept;
@@ -249,14 +249,14 @@ spm_error:
 	}
 
 	if (opt_offset[PGM_OPT_RST]) {
-		logg(LOG_INFO, "TSI Abort (OPT_RST on SPM) %s\n", s->text);
+		logg(LOG_DEBUG, "TSI Abort (OPT_RST on SPM) %s\n", s->text);
 		s->state = stream_error;
 		return true;
 	}
 
 	if (opt_offset[PGM_OPT_FIN]) {
 		/* End of Stream */
-		logg(LOG_INFO, "TSI End (OPT_FIN on SPM) %s\n", s->text);
+		logg(LOG_DEBUG, "TSI End (OPT_FIN on SPM) %s\n", s->text);
 		s->state = stream_init;
 		return true;
 	}
@@ -265,7 +265,7 @@ spm_error:
 
 	if (s->spm_sqn && s->state == stream_sync && sqn <= s->spm_sqn) {
 		/* Outdated SPM */
-		logg(LOG_INFO, "SPM seq error %u -> %u on %s. Ignored\n", s->spm_sqn, sqn, s->text);
+		logg(LOG_DEBUG, "SPM seq error %u -> %u on %s. Ignored\n", s->spm_sqn, sqn, s->text);
 		goto spm_error;
 	}
 
