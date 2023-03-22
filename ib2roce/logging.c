@@ -61,6 +61,15 @@ int loglevel = LOG_INFO;
 bool background;
 bool systemd;
 
+static void print_timestamp(void)
+{
+	time_t time = now / ONE_SECOND;
+	char buf[30];
+
+	strftime(buf, sizeof(buf), "%Y%m%d %H:%M:%S : ",localtime(&time));
+	printf("%s", buf);
+}
+
 static void __logg(int prio, const char *fmt, va_list valist)
 {
 	if (current) {
@@ -77,8 +86,10 @@ static void __logg(int prio, const char *fmt, va_list valist)
 		} else
 			vsyslog(prio, fmt, valist);
 
-	} else
+	} else {
+		print_timestamp();
 		vprintf(fmt, valist);
+	}
 }
 
 
