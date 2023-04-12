@@ -373,13 +373,17 @@ static void get_if_info(struct i2r_interface *i)
 		getifaddrs(&ifap);
 
 		for (struct ifaddrs *ifa = ifap; ifa; ifa = ifa->ifa_next) {
-			if (ifa->ifa_addr && ifa->ifa_addr->sa_family==AF_INET) {
+			struct sockaddr_in *alt_addr = ((struct sockaddr_in *)(ifa->ifa_addr));
+			struct sockaddr_in *alt_netmask = ((struct sockaddr_in *)(ifa->ifa_netmask));
+
+			if (ifa->ifa_addr && ifa->ifa_addr->sa_family == AF_INET &&
+				(alt_addr->sin_addr.s_addr & alt_netmask->sin_addr.s_addr) != (i->if_addr.sin_addr.s_addr & i->if_netmask.sin_addr.s_addr)) {
 
 				if (strcmp(ifa->ifa_name, i->if_name))
 					continue;
 
-				i->alt_addr = *((struct sockaddr_in *)(ifa->ifa_addr));
-				i->alt_netmask = *((struct sockaddr_in *)(ifa->ifa_netmask));
+				i->alt_addr = *alt_addr;
+				i->alt_netmask = *alt_netmask;
 			}
         	}
 		free(ifap);
