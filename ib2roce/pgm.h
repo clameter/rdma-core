@@ -47,7 +47,7 @@ extern bool pgm_mode;
 bool pgm_process_multicast(struct rdma_channel *c, struct mc *m, struct buf *buf);
 bool pgm_process_unicast(struct rdma_channel *c, struct buf *buf);
 
-unsigned pgm_brief_stats(char *b, struct i2r_interface *i);
+unsigned pgm_brief_stats(char *b, struct i2r_interface *i, bool totals);
 
 #define MAX_PGM_TYPE (PGM_ACK + 1)
 #define PGM_OPT_TYPE_MASK (PGM_OPT_VAR_PKTLEN -1)

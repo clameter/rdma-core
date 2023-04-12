@@ -454,7 +454,7 @@ static void calculate_pps(void *private)
 			}
 	
 			if (pgm_mode)
-				n += pgm_brief_stats(buf + n, i);
+				n += pgm_brief_stats(buf + n, i, false);
 		}
 		if (n)
 			logg(LOG_INFO,"pps: %s\n", buf);

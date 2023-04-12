@@ -195,11 +195,13 @@ bool sum_stats(unsigned *stats, struct i2r_interface  *i, enum channel_type type
 
 void brief_status(FILE *out)
 {
-	char buf[4000];
-	char buf2[4200];
 	char counts[200];
 
 	unsigned n = 0;
+
+#if 0
+	char buf[4000];
+	char buf2[4200];
 	const char *events;
 
 	n = get_timer_list(buf, ',');
@@ -216,6 +218,8 @@ void brief_status(FILE *out)
 		events = buf2;
 	}
 
+#endif
+
 	n = 0;
 	interface_foreach(i) {
 		unsigned stats[nr_stats];
@@ -228,15 +232,25 @@ void brief_status(FILE *out)
 			stats[packets_sent]);
 
 		if (pgm_mode)
-			n += pgm_brief_stats(counts + n, i);
+			n += pgm_brief_stats(counts + n, i, true);
 
 		n+= sprintf(counts + n, ") ");
 	}
 
+#if 0
 	if (out == stdout)
 		logg(LOG_NOTICE, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
 	else
 		fprintf(out, "%s. Groups=%d/%d. Packets=%s\n", events, active_mc, nr_mc, counts);
+
+#else
+
+	if (out == stdout)
+		logg(LOG_NOTICE, "%s\n", counts);
+	else
+		fprintf(out, "%s\n", counts);
+
+#endif
 
 	if (unicast) {
 		list_endpoints(i2r + INFINIBAND);
