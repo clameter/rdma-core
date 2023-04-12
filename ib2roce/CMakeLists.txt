@@ -41,6 +41,11 @@ rdma_man_pages(
   man/ib2roce.7
   )
 
+rdma_subst_install(FILES "ib2roce.socket"
+  DESTINATION "${CMAKE_INSTALL_SYSTEMD_SERVICEDIR}"
+  RENAME ib2roce.socket
+  PERMISSIONS OWNER_WRITE OWNER_READ GROUP_READ WORLD_READ)
+
 rdma_subst_install(FILES "ib2roce.service.in"
   DESTINATION "${CMAKE_INSTALL_SYSTEMD_SERVICEDIR}"
   RENAME ib2roce.service

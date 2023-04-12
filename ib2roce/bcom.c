@@ -6,6 +6,9 @@
 #include <unistd.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/un.h>
+
+#include "config.h"
 
 #define DEFAULT_PORT 4711
 
@@ -15,15 +18,14 @@ int main(int argc, char *argv[])
 {
 	int fd;
 	int i,n;
-	struct sockaddr_in ib2roce_addr;
+	struct sockaddr_un ib2roce_addr;
        
 	memset(&ib2roce_addr, 0, sizeof(ib2roce_addr));
 
-	ib2roce_addr.sin_family = AF_INET;
-	ib2roce_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
-	ib2roce_addr.sin_port = htons(DEFAULT_PORT);
+	ib2roce_addr.sun_family = AF_UNIX;
+	strcpy(ib2roce_addr.sun_path, IB2ROCE_SERVER_PATH);
 
-	fd = socket(AF_INET, SOCK_STREAM, 0);
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0) {
 		perror("Cannot create socket");
 		exit(1);

@@ -41,7 +41,8 @@
 #include "cli.h"
 
 #include <unistd.h>
-
+#include <sys/un.h>
+#include "config.h"
 /*
  * Implementation of a console for ib2roce with commands that can be registered
  */
@@ -241,26 +242,28 @@ static void initcon_debug(void)
 static void initcon_daemon(void)
 {
 	int fd;
-	struct sockaddr_in sin;
+	struct sockaddr_un sun;
 	struct conn_req_info *cri;
 
-	fd = socket(AF_INET, SOCK_STREAM, 0);
+	fd = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (fd < 0) {
-		logg(LOG_WARNING, "Cannot create TCP socket %s\n", errname());
+		logg(LOG_WARNING, "Cannot create Unix socket %s\n", errname());
 		return;
 	}
 
-	sin.sin_family = AF_INET;
-	sin.sin_addr.s_addr = inet_addr("127.0.0.1");
-	sin.sin_port = htons(default_port ? default_port: 4711);
+	sun.sun_family = AF_UNIX;
+	strcpy(sun.sun_path, IB2ROCE_SERVER_PATH);
 
-	if (bind(fd, (struct sockaddr *)&sin, sizeof(sin)) < 0) {
+	unlink(IB2ROCE_SERVER_PATH);
+	if (bind(fd, (struct sockaddr *)&sun, sizeof(sun)) < 0) {
 		logg(LOG_WARNING, "Cannot bind to socket %s\n", errname());
+		close(fd);
 		return;
 	}
 
 	if (listen(fd, 2) < 0) {
 		logg(LOG_WARNING, "Cannot listen to socket %s\n", errname());
+		close(fd);
 		return;
 	}
 

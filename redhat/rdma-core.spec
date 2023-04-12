@@ -625,6 +625,7 @@ fi
 %{_mandir}/man1/ib2roce.*
 %{_mandir}/man7/ib2roce.*
 %{_unitdir}/ib2roce.service
+%{_unitdir}/ib2roce.socket
 
 %files -n iwpmd
 %{_sbindir}/iwpmd
