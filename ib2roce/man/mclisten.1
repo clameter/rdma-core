@@ -1,0 +1,42 @@
+.\" Licensed under the OpenIB.org BSD license (FreeBSD Variant) - See COPYING.md
+.\"
+.\" Copyright (C) 2023 Christoph Lameter <cl@linux.com>
+.\"
+.TH "mclisten" 1 "2023-4-14" "mclisten" "mclisten" mclisten
+.SH NAME
+mclisten \- Multicast listener
+.SH SYNOPSIS
+.sp
+.nf
+\fImclisten\fR [<options>] [-d <infiniband device] [-r <roce device>] [-m <multicast address>] ...
+.fi
+.SH "DESCRIPTION"
+.B mclisten
+is dianostic tool to analyse multicast RDMA traffic. The tool supports
+both Inifiband and ROCE fabrics.
+.B mclisten
+enters a command line mode which can be used to observe the status of
+incoming multicast traffic. The same commands that are used
+for
+.BR bcom(1)
+can also be used at the mclisten command prompt.
+
+Run the following command to enable a continous display of the incoming traffic:
+.TP
+enable ppsdisplay
+
+.SH "OPTIONS"
+Options are the same as for
+.BR ib2roce(1).
+However, all options that are related to bridging or the sending of traffic are disabled.
+
+.SH "NOTES"
+.B mclisten
+is a symlink to the
+.B ib2roce
+binary and allows the use of ib2roce for
+diagnostic purposes.
+.SH "SEE ALSO"
+ib2roce(1), bcom(1), mcsender(1)
+.SH AUTHORS
+Christoph Lameter <cl@linux.com>

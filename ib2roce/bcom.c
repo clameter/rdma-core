@@ -10,8 +10,6 @@
 
 #include "config.h"
 
-#define DEFAULT_PORT 4711
-
 char buff[10000];
 
 int main(int argc, char *argv[])

@@ -39,6 +39,9 @@ add_link_options("--export-dynamic")
 rdma_man_pages(
   man/ib2roce.1
   man/ib2roce.7
+  man/bcom.1
+  man/mclisten.1
+  man/mcsender.1
   )
 
 rdma_subst_install(FILES "ib2roce.socket"

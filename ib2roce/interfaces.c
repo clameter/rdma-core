@@ -1303,7 +1303,5 @@ static void interfaces_init(void)
 	register_option("roce", required_argument, 'r', roce_set,
 	       "<if[:portnumber]>","ROCE device. Uses the first available if not specified.");
 	register_enable("mcqp", true, NULL, &mc_per_qp, "0", "10", NULL, "Max # of MCs per QP");
-	register_enable("unicast", false, &unicast, NULL, "on", "off",	NULL,
-		"Processing of unicast packets with QP1 handling of SIDR REQ/REP");
 }
 

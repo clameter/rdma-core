@@ -623,6 +623,9 @@ fi
 %{_bindir}/bcom
 %{_sbindir}/ib2roce
 %{_mandir}/man1/ib2roce.*
+%{_mandir}/man1/mclisten.*
+%{_mandir}/man1/mcsender.*
+%{_mandir}/man1/bcom.*
 %{_mandir}/man7/ib2roce.*
 %{_unitdir}/ib2roce.service
 %{_unitdir}/ib2roce.socket

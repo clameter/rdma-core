@@ -1,8 +1,8 @@
 .\" Licensed under the OpenIB.org BSD license (FreeBSD Variant) - See COPYING.md
 .\"
-.\" Copyright (C) 2022 Christoph Lameter <cl@linux.com>
+.\" Copyright (C) 2023 Christoph Lameter <cl@linux.com>
 .\"
-.TH "ib2roce" 1 "2022-10-28" "ib2roce" "ib2roce" ib2roce
+.TH "ib2roce" 1 "2023-4-14" "ib2roce" "ib2roce" ib2roce
 .SH NAME
 ib2roce \- Infiniband to ROCE gateway
 .SH SYNOPSIS
@@ -11,42 +11,90 @@ ib2roce \- Infiniband to ROCE gateway
 \fIib2roce\fR [<options>] [-d <infiniband device] [-r <roce device>] [-m <multicast address>] .. 
 .fi
 .SH "DESCRIPTION"
-ib2roce is a bridging tool that monitors and forwards RDMA packets
+.B ib2roce
+is a bridging tool that monitors and forwards RDMA packets
 between an Infiniband fabric and a Ethernet fabric. On the Ethernet
 side ROCE v2 is used for RDMA communication.
 
-ib2roce currently only supports multicast operations in its standard
-deployment. There is an experimental unicast mode however, that is
-not well tested. ib2roce forwards messsagess and does not do true
-RDMA read and write operations. True RDMA operations are not considered
+ib2roce is focused on forwarding multicast datagrams and supports the PGM
+protocol (RFC3208) typically used to implement reliable multicast
+operations. Unicast support for NAKs is there so that PGM streams
+recovery can be fowarded through the bridge [experimental] but the
+NAKs can also be forwarded via other mechanisms.
+
+True RDMA unicast operations are not considered
 necessary since the primary role of ib2roce is to support multicast
 messaging on RDMA fabrics that need unicast only as a recovery
-control channel. ib2roce is optimized to provide the highest
+control channel.
+.B ib2roce
+is optimized to provide the highest
 throughput for multicast messaging an can be configured for
 low latency on NOHZ_FULL cores.
 .SH "OPTIONS"
+.TP
+\-c, --config <file>
+Read options an configuration parmaeters from a file. The file needs to use the
+long form of the options. Each line contains one option.
+Comment lines are prefixed by # and empty lines are ignored.
+See for example the configuration file in /etc/rdma/ib2roce.cfg
 .TP
 \-d, --device  <infiniband-device[:port]>
 Specifies the Infiniband device to use with an optional port number.
 The port defaults to one if not specified.
 
-ib2roce will scan all devices on startup and will use the first
-Infiniband device that is suitable by default. If there are
-multiple Infiniband fabric attached then this option is necessary
-to identify the one to use.
+.B ib2roce
+will scan all devices on startup and will use the first
+Infiniband device that is suitable. If there are
+multiple Infiniband interfaces available on host then this
+option is typically necessary to identify the one to use.
+.TP
+\-e, --enable <options>[=<value]
+Set or enable an optinal feature in the ib2roce daemon. See the section on optional features for details.
+Specifying this option without a feature will print a list of possible features to enable.
+.TP
+\-h, --help
+Display a list of options that can be specified on the command line or in a configuration file
 .TP
 \-i, --inbound <ipv4 multicast address[:port][/<mgid-format]
 A multicast address that should be forwarded from Infiniband
 to ROCE. Traffic in the other direction is ignored.
 .TP
-\-l, --mgid [<format>]
+\-k, --cores [<number-cores>]
+Enable low latency operation on the given number of cores.
+It is recommended that the system operate with NOHZ_FULL and that the
+operating system threads etc are restricted to a NUMA node different
+than where the Infiniband and ROCE NICs are located.
+.B ib2roce
+will place RDMA channels in such a way that a sending and receiving
+channel is paired on each core. The number of pairs depends on the
+number of RDMA channels needed to accomodate the multicast groups
+being forwarded. If there are more pairs than the
+number of configured cores then
+.B ib2roce
+will place multiple pairs on individual cores.
+These special low latency cores will operate in a busy loop.
+Without the
+.B --cores
+option all processing will be done by the high latency thread.
+The high latency thread will multiplex operations for all hardware, software and timer events in a
+single thread.
+Without the
+.B --cores
+options ib2roce is a
+.I single threaded process
+where synchronization can be avoided through cooperative multitasking.
+Switching on busy loop cores results in additional overhead through
+the additional synchronization for concurrent operations.
+.TP
+\-l, --mgid [<mgid-format>]
 Specifies which MGID format to use on Infiniband. There are a
 couple of standards on how to encode ipv4 addresses in the
 MGID on Infiniband. This selects
 the method to use and its use is depending on the type of traffic
 that needs to be forwarded between the fabrics. Note that -l
 only affects the multicast groups specified on the command line
-after the option was specified.
+.I after
+the option was specified.
 
 If no format is specified then ib2roce will display the available
 formats. If no custom mgid format is set for a multicast group
@@ -58,19 +106,16 @@ the MGID. This means that the port number needs to be correctly
 configured otherwise the MGID will not match and traffic will not
 flow to and from applications relying on PORT. Other MGID encoding
 schemes do not include the port and there is also no way to specify
-an effective port for UDP datagrams on ROCE.
+an effective port numer for UDP datagrams on the ROCE side. It is
+therefore recommended to use a standard port number for all
+multicast groups.
+
 .TP
 \-m, --multicast <ipv4 multicast address[:port][/<mgid-format]>
 Specify a multicast address that should be forwarded in both directions.
 The port specification is optional since it is often not relevant for multicast
 traffic forwarding. The mgid format can be specified to override
 the global setting. See the -l option for more details.
-.TP
-\-n, --nobridge
-Run ib2roce without actually forwarding any packets. This is useful
-for debugging since the packet statistics and ib2roce logs will
-show useful information about multicast groups and the amount
-of traffic that may have to be forwarded.
 .TP
 \-o, --outbound <ipv4 multicast address[:port][/<mgid-format]
 A multicast address that should be forwarded from ROCE
@@ -80,32 +125,126 @@ occur to avoid additional traffic on the fabric.
 \-p, --port <number>
 Set the default port number. This is used when binding to ROCE and Infiniband
 devices and for multicast groups that do not have a port specified.
-Currently these port numbers seem to be ignored by the RDMA subsystem.
+Currently these port numbers seem to be mostly ignored by the RDMA subsystem.
 However, the port number is relevant when an PORT type MGID needs to be
-constructed.
+constructed. The option affects all following multicast group specifications.
+.TP
+\-q, --test
+Run verification tests for the internal hashing and queuing mechanisms.
 .TP
 \-r, --roce  <roce-device[:port]>
 Specifies the ROCE Ethernet device to use with an optional port number.
 The port defaults to one if not specified.
 
-ib2roce will scan all devices on startup and will use the first
-Ethernet device that supports ROCE v2 and IPv4 by default. If there are
-multiple ROCE fabrics attached then this option may be necessary
-to specify which one to use.
-.TP
-\-x, --debug
-Switches ib2roce into debug mode. ib2roce does not daemonize but
-keeps logging diagnostic output to stderr.
+.B ib2roce
+will scan all devices on startup and will use the first Ethernet
+device that supports ROCE v2 and IPv4 by default. If there are
+multiple ROCE fabrics attached then this option is usually necessary
+to identify the one to use.
 .TP
 \-s, --systemd
 Run ib2roce from systemd. Do not create a pid file and use the systemd libraries
 for logging and process state notifications.
+.TP
+\-t, --tos <value>
+Set a TOS value. This is set via
+.B rdma_set_options
+when an RDMA channel is opened and is also set as the traffic class when sending.
+This allows setup of the DSCP bits in the IP header on ROCE and the traffic class
+for the serice level determination on Infiniband.
+The option affects all multicast groups specified
+.I after
+this option was given.
+.TP
+\-v, --verbose
+Increase verbosity for the logging level. This option can be specified multiple
+times to get even more output.
+.TP
+\-x, --debug
+Switches ib2roce into debug mode. ib2roce does not daemonize but
+keeps logging diagnostic output to stderr. It will also present a command
+line interface. See
+.I bcom
+for a description of available commands.
+.TP
+\-y, --disable <option>
+Disable an optional features in the ib2roce daemon. See the section on optional features for details
+.SH OPTIONAL FEATURES
+.TP
+.B bridging
+Forwarding of packets by the bridge. This may be disabled for testing purposes to see if a configuration
+brings up the bridge correctly and for inspection of data that may be flowing through the bridge if
+it actually would start forwarding packets. Bridging is on by default.
+.TP
+.B drop
+Enable dropping of packets (therefore packet loss!) for testing purposes. This is used to verify that
+the recovery mechanisms work and that potential packet loss for other reasons will trigger proper
+retransmit behavior by the applications using the ib2roce bridge. A number may be specified as a parameter which
+indicates how many packets should be send before a drop ocurres. I.e.
+.I enable drop=100
+means that the 100th packet will not be forwarded. Drop is off by default.
+.Tp
+.B hwrate
+Set the hardware forwarding rate of the NIC to a certain value. This is set in terms of the enum ibv_rate in ibverbs.h.
+2= 2.5GBS, 3= 5GBGS and so on. NIC restrictions exist depending on the hardware vendor and fabric type that may cause this option to have no effect.
+hwrate limitations are off by default.
+.TP
+.B loopbackprev
+Configure the NIC to do loopback prevention. This is on by default and safe even for local apps when using the NVIDIA NICs. The implementation
+of loopback prevention may vary for other vendors. Local multicast may not work if this option is on for certain RDMA NICs or software emulations.
+For example the RXE driver is known to require this option.
+.TP
+.B ppsdisplay
+Display a summary of the current traffic flow going through ib2roce bridge in intervals of
+.I statint.
+This option is off by default.
+.TP
+.B latency
+Collect latency statistics for busy loop queues. This is used to verify the proper operation of the low latency cores and monitor the delays incurred by ib2roce as well as system processing. Results are visible in the "cores" output using the
+.B bcom
+tool. Off by default.
+.TP
+.B statint
+Sampling interval for statistics and set to 10 seconds by default. This can be reconfigured to a different time interval or switches completely off.
+.TP
+.B loglevel
+Logging level. Defaults to 6. Loglevel may be reduced to avoid informational messages or increased to get debugging messages.
+.TP
+.B buffers
+The number of buffers to make available for ib2roce. Buffers are used for the send and receive queues and may be used to avoid the occasional hiccup on the fabrics.
+Defaults to 200000 which is usually more than enough.
+.TP
+.B huge
+Enable the use of huge pages for the buffers. This will significantly reduce TLB pressure and be useful if a large number of buffers is in use. The operating system needs
+to be configured to provide a sufficient number of buffers otherwise ib2roce will fail to startup.
+The default is off.
+.TP
+.B mcqp
+The number of multicast groups to use for a QP (RDMA communication channel). The default is to use the maximum number of MC groups allowed by the NIC for each RDMA channel.
+This minimizes the number of RDMA channels that the adapter nees to operate. The number may be set lower for testing purposes to see if ib2roce works correctly with a couple of rdma channels. Note that the maximum number of RDMA Channels supported per interface is limited to 10. One RDMA channel typically allows the use of 200 or more multicast groups. The maximum number of multcast groups on a fabric is limited at 2k or so. So this will be enough for the maximum number of multicast groups possible.
+.TP
+.B pgm
+Enable PGM processing. This will track the PGM streams going through the bridge and allow diagnostics via the TSI bcom command. This is on by default.
+.TP
+.B pam_nak
+Enable PGM NAK processing. Requires PGM processing to be on. ib2roce will redirect NAKs back to itselt. This avoids having to do unicast packet forwarding for NAKs separately via a different protocol (we can only route IP so the NAKs can then not use RDMA) and allows ib2roce to track NAKs instead of only the NCFs. This is an experimental feature and it is off by default.
+.TP
+.B sendrate
+The rate of sending packets if ib2roce is requested to create a PGM stream for diagnostic purposes. See
+.I mcsender.
+The default is 5 packets per second.
+.TP
+.B sendlen
+The size of the packet to create when ib2roce is requested to create a PGM stream for diagnostic purposes. See
+.I mcsender.
+The default is to only use the minimal packet size needed for the metadata which is usually less than 100 bytes. This cannot be set larger than the MTU.
+
 .SH "NOTES"
 ib2roce creates files in either the current directory or in /var/lib/ib2roce. These
 are the ib2roce.pid file to be able to detect the presence of an already running
 ib2roce instance and the ib2roce-status file that is updated in regular
 intervals with ib2roce information.
 .SH "SEE ALSO"
-roce2ib(7)
+ib2roce(7), bcom(1), mclisten(1), mcsender(1)
 .SH AUTHORS
 Christoph Lameter <cl@linux.com>
