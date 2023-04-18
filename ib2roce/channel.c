@@ -500,6 +500,7 @@ static void channel_zap(FILE *out, struct rdma_channel *c)
 static void zap_cmd(FILE *out, char *parameters)
 {
 	all_channels(NULL, channel_zap);
+	all_tsi(tsi_zap);
 	fprintf(out, "Ok\n");
 }
 

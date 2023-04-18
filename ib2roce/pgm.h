@@ -111,4 +111,8 @@ static inline unsigned pgm_type2size(enum pgm_type_e ptype)
 
 #define PGM_EXT_OPT_LABEL 0x22
 
+struct pgm_stream;
+void all_tsi(void (*func)(struct pgm_stream *));
+void tsi_zap(struct pgm_stream *);
+
 #endif

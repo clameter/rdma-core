@@ -112,6 +112,41 @@ struct pgm_stream {
 	char text[60];
 };
 
+void tsi_zap(struct pgm_stream *s)
+{
+	s->odata = 0;
+	s->rdata = 0;
+	s->spm = 0;
+	s->ncf = 0;
+	s->ack = 0;
+	s->nnak = 0;
+	s->drop = 0;
+	s->spm_errors = 0;
+	s->timestamp_error = 0;
+	s->dup = 0;
+	s->sqn_seq_errs = 0;
+	s->missed_sqns = 0;
+}
+
+void all_tsi(void (*func)(struct pgm_stream *))
+{
+	interface_foreach(i) {
+		/* Retrieve TSI streams */
+		struct pgm_stream *t[100];
+		unsigned nr;
+		unsigned offset = 0;
+
+		while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, 100, (void **)t))) {
+			for(int j = 0; j < nr; j++) {
+				struct pgm_stream *ps = t[j];
+
+				func(ps);
+			}
+			offset += nr;
+		}
+	}
+}
+
 /* Records (ODATA/RDATA) in a stream */
 struct pgm_record {
 	struct pgm_tsi tsi;
@@ -576,7 +611,7 @@ static void tsi_cmd(FILE *out, char *parameters)
 
 	interface_foreach(i) {
 		/* Retrieve TSI streams */
-		struct pgm_stream *t[10];
+		struct pgm_stream *t[100];
 		unsigned nr;
 		unsigned offset = 0;
 
@@ -584,7 +619,7 @@ static void tsi_cmd(FILE *out, char *parameters)
 			fprintf(out, "%s: TSIs=%d\n", i->text, i->nr_tsi);
 			sum_tsi += i->nr_tsi;
 		}
-		while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, 10, (void **)t))) {
+		while ((nr = hash_get_objects(i->pgm_tsi_hash, offset, 100, (void **)t))) {
 			for(int j = 0; j < nr; j++) {
 				struct pgm_stream *ps = t[j];
 
