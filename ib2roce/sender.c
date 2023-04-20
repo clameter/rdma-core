@@ -371,7 +371,7 @@ static void sender_init(void)
 			logg(LOG_CRIT, "Cannot determine hostname: %s\n", errname());
 
 	register_enable("sendrate", true, NULL, (int *)&sendrate, "2", "off", sender_setup,
-		"The rate of sending packets when requested");
+		"The rate of sending packets in pps when requested");
 	register_enable("sendlen", true, NULL, (int *)&sendlen, "2", "off", NULL,
 		"The length of the packets being sent");
 }

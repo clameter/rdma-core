@@ -529,7 +529,11 @@ void enable(FILE *out, char *option, bool enable)
 			} else
 				snprintf(state, 10, "%d", *eo->int_flag);
 
-			fprintf(out, "%-14s\t%s\t%s\t%s\n", eo->id, eo->bool_flag ? "bool" : "int", state, eo->description);
+			fprintf(out, "%-14s\t%s\t%s\t%s", eo->id, eo->bool_flag ? "bool" : "int", state, eo->description);
+			if (!eo->runtime)
+				fprintf(out, " (Not runtime modifiable)\n");
+			else
+				fprintf(out,"\n");
 		}
 		return;
 	}
