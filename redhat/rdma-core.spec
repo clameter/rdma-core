@@ -360,6 +360,8 @@ install -D -m0644 redhat/rdma.conf %{buildroot}%{_sysconfdir}/rdma/modules/rdma.
  install -D -m0644 ibacm_opts.cfg %{buildroot}%{_sysconfdir}/rdma/)
 # ib2roce
 install -D -m0644 ib2roce/ib2roce.cfg  %{buildroot}%{_sysconfdir}/rdma/
+ln -s ib2roce %{buildroot}%{_bindir}/mclisten
+ln -s ib2roce %{buildroot}%{_bindir}/mcsender
 
 # Delete the package's init.d scripts
 rm -rf %{buildroot}/%{_initrddir}/
@@ -621,6 +623,8 @@ fi
 %files -n ib2roce
 %config(noreplace) %{_sysconfdir}/rdma/ib2roce.cfg
 %{_bindir}/bcom
+%{_bindir}/mclisten
+%{_bindir}/mcsender
 %{_sbindir}/ib2roce
 %{_mandir}/man1/ib2roce.*
 %{_mandir}/man1/mclisten.*
