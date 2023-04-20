@@ -73,7 +73,7 @@
 
 char *ib_name, *roce_name;
 
-int rate = IBV_RATE_10_GBPS;	/* Limit sending rate */
+int rate = IBV_RATE_MAX;	/* Limit sending rate */
 
 bool bridging = true;		/* Allow briding */
 bool unicast = false;		/* Bridge unicast packets */
