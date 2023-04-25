@@ -23,30 +23,31 @@ struct pgm_header {
     uint16_t	pgm_dport;
     uint8_t	pgm_type;
     uint8_t	pgm_options;
-    uint16_t	pgm_sum;
-    uint8_t	pgm_gsid[6];
-    uint16_t	pgm_length;
+    uint16_t	pgm_checksum;
+    uint8_t	pgm_gsi[6];
+    uint16_t	pgm_tsdu_length;
 };
 
 
 struct pgm_spm {
-    uint32_t	pgms_seq;
-    uint32_t	pgms_trailseq;
-    uint32_t	pgms_leadseq;
-    uint16_t	pgms_nla_afi;
-    uint16_t	pgms_reserved;
-    /* ... uint8_t	pgms_nla[0]; */
+    uint32_t	spm_sqn;
+    uint32_t	spm_trail;
+    uint32_t	spm_lead;
+    uint16_t	spm_nla_afi;
+    uint16_t	spm_reserved;
+    struct in_addr spm_nla;
     /* ... options */
 };
 
+
 struct pgm_nak {
-    uint32_t	pgmn_seq;
-    uint16_t	pgmn_source_afi;
-    uint16_t	pgmn_reserved;
-    /* ... uint8_t	pgmn_source[0]; */
-    /* ... uint16_t	pgmn_group_afi */
-    /* ... uint16_t	pgmn_reserved2; */
-    /* ... uint8_t	pgmn_group[0]; */
+    uint32_t	nak_sqn;
+    uint16_t	nak_src_nla_afi;
+    uint16_t	nak_reserved;
+    struct in_addr	nak_src_nla;
+    uint16_t	nak_grp_nla_afi;
+    uint16_t	nak_reserved2;
+    struct in_addr	nak_grp_nla;
     /* ... options */
 };
 
@@ -68,8 +69,8 @@ struct pgm_polr {
 };
 
 struct pgm_data {
-    uint32_t	pgmd_seq;
-    uint32_t	pgmd_trailseq;
+    uint32_t	data_sqn;
+    uint32_t	data_trail;
     /* ... options */
 };
 
@@ -80,17 +81,17 @@ typedef enum _pgm_type {
     PGM_ODATA = 4,		/* original data */
     PGM_RDATA = 5,		/* repair data */
     PGM_NAK = 8,		/* NAK */
-    PGM_NULLNAK = 9,		/* Null NAK */
+    PGM_NNAK = 9,		/* Null NAK */
     PGM_NCF = 10,		/* NAK Confirmation */
-    PGM_ACK = 11,		/* ACK for congestion control */
     PGM_SPMR = 12,		/* SPM request */
+    PGM_ACK = 13,		/* ACK for congestion control */
     PGM_MAX = 255
 } pgm_type;
 
-#define PGM_OPT_BIT_PRESENT	0x01
-#define PGM_OPT_BIT_NETWORK	0x02
-#define PGM_OPT_BIT_VAR_PKTLEN	0x40
-#define PGM_OPT_BIT_PARITY	0x80
+#define PGM_OPT_PRESENT		0x01
+#define PGM_OPT_NETWORK		0x02
+#define PGM_OPT_VAR_PKTLEN	0x40
+#define PGM_OPT_PARITY		0x80
 
 #define PGM_OPT_LENGTH		0x00
 #define PGM_OPT_FRAGMENT        0x01
@@ -138,6 +139,10 @@ struct pgm_opt_syn {
 	uint8_t		opt_reserved;
 };
 
+struct pgm_opt_nak_list {
+        uint8_t         opt_reserved;
+        uint32_t        opt_sqn[];
+};
 
 #define PGM_OPX_MASK		0x3
 #define PGM_OPX_IGNORE		0x0
