@@ -57,7 +57,6 @@
 #include <numa.h>
 #include <ifaddrs.h>
 
-#include "packet.h"
 #include "errno.h"
 #include "fifo.h"
 #include "ring.h"

@@ -54,7 +54,6 @@
 #include <infiniband/umad_cm.h>
 #include <infiniband/umad_str.h>
 #include <execinfo.h>
-#include "packet.h"
 #include "errno.h"
 #include "fifo.h"
 #include "ring.h"

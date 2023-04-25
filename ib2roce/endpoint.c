@@ -51,7 +51,6 @@
 #include <infiniband/ib.h>
 #include <infiniband/verbs.h>
 
-#include "packet.h"
 #include "errno.h"
 #include "fifo.h"
 #include "ring.h"
