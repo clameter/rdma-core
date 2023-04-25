@@ -5,7 +5,7 @@ Wants=ib2roce.socket
 # Ensure required kernel modules are loaded before starting
 Wants=rdma-load-modules@rdma.service
 After=rdma-load-modules@rdma.service
-# Order ibacm startup after basic RDMA hw setup.
+# Order ib2roce startup after basic RDMA hw setup.
 After=rdma-hw.target
 
 # Implicitly after basic.target, note that ib2roce writes to /var/log directly
