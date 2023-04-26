@@ -353,7 +353,7 @@ void sender_setup(void)
 	/* Initial SPM */
 	sender_seq = 1;
 	spm_seq = 1;
-	send_spms(PGM_OPT_SYN);
+	send_spms(0);
 
 	sender_time = timestamp() + ONE_SECOND + rand() % sender_interval;
 	spm_time = sender_time + AMBIENT_SPM_INTERVAL;
