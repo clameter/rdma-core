@@ -261,6 +261,10 @@ int allocate_rdmacm_qp(struct rdma_channel *c, bool multicast)
 		ret = rdma_create_qp_ex(c->id, &init_qp_attr_ex);
 	}
 
+	if (ret)
+		/* Maybe the device does not support rdma_create_qp_ex ?? */
+		ret = rdma_create_qp(c->id, c->pd, (struct ibv_qp_init_attr *)&init_qp_attr_ex);
+
 	if (ret) {
 		logg(LOG_CRIT, "rdma_create_qp_ex failed for %s. Error %s. #CQ=%d\n",
 				c->text, errname(), c->nr_cq);
