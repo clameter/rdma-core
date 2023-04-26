@@ -71,7 +71,7 @@ struct sender_info {
 
 
 /* Return pointer to spm_type specific data */
-static void *pgm_packet_start(struct i2r_interface *i, struct buf *buf, struct mc *m, enum pgm_type_e ptype)
+static void *pgm_packet_start(struct i2r_interface *i, struct buf *buf, struct mc *m, enum _pgm_type ptype)
 {
 	struct pgm_header *h;
 	struct pgm_opt_length *ol;

@@ -40,7 +40,7 @@
 #include "channel.h"
 #include "multicast.h"
 #include "buffers.h"
-#include "packet.h"
+#include "pgm-defs.h"
 
 extern bool pgm_mode;
 
@@ -94,17 +94,17 @@ static const uint64_t type_to_cat = {
 };
 
 
-static inline enum cat_type __pgm_type2cat(uint64_t mask, enum pgm_type_e ptype)
+static inline enum cat_type __pgm_type2cat(uint64_t mask, enum _pgm_type ptype)
 {
 	return (mask >> (ptype * PGM_TYPE_SHIFT)) & ((1 << PGM_TYPE_SHIFT) -1);
 }
 
-static inline enum cat_type pgm_type2cat(enum pgm_type_e ptype, bool multicast)
+static inline enum cat_type pgm_type2cat(enum _pgm_type ptype, bool multicast)
 {
 	return __pgm_type2cat(type_to_cat_uc_mc[multicast], ptype);
 }
 
-static inline unsigned pgm_type2size(enum pgm_type_e ptype)
+static inline unsigned pgm_type2size(enum _pgm_type ptype)
 {
 	return (cat_sizes >> (__pgm_type2cat(type_to_cat, ptype) * PGM_CAT_SHIFT)) & ((1 << PGM_CAT_SHIFT) -1);
 }
