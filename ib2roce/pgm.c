@@ -214,7 +214,9 @@ static bool process_data(struct pgm_stream *s, struct pgm_header *h, uint16_t *o
 		if (opt_offset[PGM_OPT_SYN])
 			logg(LOG_DEBUG, "TSI Start (OPT_SYN on %s) %s\n", pgm_type_text[h->pgm_type], s->text);
 
+		tsi_zap(s);
 		s->state = stream_init;
+
 		goto accept;
 	}
 
@@ -651,8 +653,6 @@ static void tsi_cmd(FILE *out, char *parameters)
 						 break;
 
 					case 'n' :
-						 if (ps->state == stream_sync)
-							continue;
 						 if (!ps->ncf)
 							 continue;
 						 break;
