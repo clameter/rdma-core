@@ -561,7 +561,7 @@ bool pgm_process_multicast(struct rdma_channel *c, struct mc *m, struct buf *buf
 	if (!s) {
 		s= create_tsi(c, &tsi);
 
-		if (!valid_addr(i, tsi_sender(&tsi))) {
+		if (mode == mode_bridge && !valid_addr(i, tsi_sender(&tsi))) {
 			s->state = stream_ignore;
 			logg(LOG_NOTICE, "%s: Invalid TSI %s (IP addr not local)\n", i->text, s->text);
 			return false;
