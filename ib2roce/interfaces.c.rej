@@ -1,0 +1,11 @@
+--- ib2roce/interfaces.c
++++ ib2roce/interfaces.c
+@@ -212,7 +212,7 @@ int find_rdma_devices(void)
+ 			}
+ 
+ 			if (attr.state != IBV_PORT_ACTIVE) {
+-				logg(LOG_INFO, "Port %s:%d is not active", name, port);
++				logg(LOG_INFO, "Port %s:%d is not active\n", name, port);
+ 				goto skip;
+ 			}
+ 

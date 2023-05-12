@@ -1,0 +1,104 @@
+.\" Licensed under the OpenIB.org BSD license (FreeBSD Variant) - See COPYING.md
+.\"
+.\" Copyright (C) 2023 Christoph Lameter <cl@linux.com>
+.\"
+.TH "bcom" 1 "2023-04-14" "bcom" "bcom" bcom
+.SH NAME
+bcom \- Bridge command line interface for the Infiniband to ROCE bridge
+.SH SYNOPSIS
+.sp
+.nf
+\fIbcom\fR <command> [<parameter>]
+.fi
+.SH "DESCRIPTION"
+.B bcom
+allows access to a running
+.I ib2roce
+bridge to modify its operations or inspect the status of the bridge.
+It will send the command given to
+the bridging daemon and output the results and then terminate.
+
+.SH "COMMANDS"
+bcom will print a list of available commands if no parameters are
+specified. If the bridge is not operating in daemon mode (or if
+the bridge is operating in
+.I mclisten
+or
+.I mcsender
+mode) then the bridge process will prompt for commands and present
+its own command line interface. The commands documented here are then
+available at that prompt.
+
+Commands may be abbreviated. The first match for the abbreviation
+is selected.
+.TP
+.B status
+Display brief status of the daemon with total packet counts processed so far
+.TP
+.B zap
+Reset all the counters
+.TP
+.B tsi
+Display PGM TSIs encountered so far with statistics on each of the PGM streams
+being processed by the bridge. This only works if
+.I pgm
+mode is active.
+.TP
+.B endpoints
+Display known unicast endpoints for the bridge. This only works if
+.I nak
+mode is active which will redirect the unicast PGM flows through the bridge.
+.TP
+.B enable
+Modify bridge behavior by changing its configuration. Only a limited number
+of options can be changed at runtime. The available options are documented in the
+.I ib2roce
+manpage.
+.TP
+.B disable
+Disable optional bridge behavior. The available options are documented in the
+.I
+ib2roce
+manpage
+.TP
+.B help
+Show a brief list of command line mode commands available
+.TP
+.B quit
+Terminate the
+.B ib2roce
+process
+.TP
+.B multicast
+Display the status of the multicast channels used for forwarding traffic
+.TP
+.B buffers
+Display memory use of buffers.
+.TP
+.B channels
+Display teh RDMA communication channels in use and their status.
+.TP
+.B interfaces
+Display overview of active interfaces and the statistics of each interface. If a port name is
+specified (such as "ib0", "roce0" etc) then display details about the specified interface including
+all its limitations and capacities available.
+.TP
+.B events
+Display the upcoming event queue of the ib2roce build in scheduler.
+.TP
+.B cores
+Display the configuration of cores if
+.I ib2roce
+is running in core binding mode.
+.SH FILES
+.B /run/ib2roce-unix.sock
+Unix socket for communication between
+.I bcom
+and
+.I ib2roce
+.
+
+.SH "SEE ALSO"
+ib2roce(7), ib2roce(1), mclisten(1), mcsender(1)
+.SH AUTHORS
+Christoph Lameter <cl@linux.com>

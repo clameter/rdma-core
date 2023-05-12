@@ -221,6 +221,18 @@ user applications need not know about this daemon as long as their app
 uses librdmacm to handle connection bring up/tear down.  The librdmacm
 library knows how to talk directly to the ibacm daemon to retrieve data.
 
+%package -n ib2roce
+Summary: InfiniBand to ROCE bridging tool
+Requires(post): systemd-units
+Requires(preun): systemd-units
+Requires(postun): systemd-units
+
+%description -n ib2roce
+The ib2roce daemon bridges between an infiniband interface and
+a roce interface providing the ability to share traffic between
+both types of RDMA architectures. The primary focus is on multicast
+support.
+
 %package -n iwpmd
 Summary: iWarp Port Mapper userspace daemon
 Requires(post): systemd-units
@@ -346,6 +358,10 @@ install -D -m0644 redhat/rdma.conf %{buildroot}%{_sysconfdir}/rdma/modules/rdma.
 (if [ -d %{__cmake_builddir} ]; then cd %{__cmake_builddir}; fi
  ./bin/ib_acme -D . -O &&
  install -D -m0644 ibacm_opts.cfg %{buildroot}%{_sysconfdir}/rdma/)
+# ib2roce
+install -D -m0644 ib2roce/ib2roce.cfg  %{buildroot}%{_sysconfdir}/rdma/
+ln -s ../sbin/ib2roce %{buildroot}%{_bindir}/mclisten
+ln -s ../sbin/ib2roce %{buildroot}%{_bindir}/mcsender
 
 # Delete the package's init.d scripts
 rm -rf %{buildroot}/%{_initrddir}/
@@ -376,6 +392,13 @@ fi
 %systemd_preun ibacm.service
 %postun -n ibacm
 %systemd_postun_with_restart ibacm.service
+
+%post -n ib2roce
+%systemd_post ib2roce.service
+%preun -n ib2roce
+%systemd_preun ib2roce.service
+%postun -n ib2roce
+%systemd_postun_with_restart ib2roce.service
 
 %post -n srp_daemon
 %systemd_post srp_daemon.service
@@ -596,6 +619,20 @@ fi
 %dir %{_libdir}/ibacm
 %{_libdir}/ibacm/*
 %doc %{_docdir}/%{name}/ibacm.md
+
+%files -n ib2roce
+%config(noreplace) %{_sysconfdir}/rdma/ib2roce.cfg
+%{_bindir}/bcom
+%{_bindir}/mclisten
+%{_bindir}/mcsender
+%{_sbindir}/ib2roce
+%{_mandir}/man1/ib2roce.*
+%{_mandir}/man1/mclisten.*
+%{_mandir}/man1/mcsender.*
+%{_mandir}/man1/bcom.*
+%{_mandir}/man7/ib2roce.*
+%{_unitdir}/ib2roce.service
+%{_unitdir}/ib2roce.socket
 
 %files -n iwpmd
 %{_sbindir}/iwpmd

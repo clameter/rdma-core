@@ -1,0 +1,21 @@
+# Please copy this file to /etc/systemd/system/ib2roce.socket
+# before modification, if not done already.
+#
+# Please also remember to reload the systemd configuration by running:
+# % systemctl --system daemon-reload
+
+[Unit]
+Description=Socket for InfiniBand to ROCE bridge management
+Documentation=man:ib2roce man:bcom
+# Ensure that anything ordered after rdma-hw.target will see the socket, even
+# if that thing is not ordered after socket.target/basic.target.
+Before=rdma-hw.target
+# ib2roce.socket always starts
+
+[Socket]
+ListenStream=/run/ib2roce-unix.sock
+Symlinks=/run/ib2roce.sock
+
+[Install]
+# Standard for all sockets
+WantedBy=sockets.target
