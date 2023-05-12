@@ -1,0 +1,13 @@
+# Builds from user space with the current directory being the git archive
+# and assumes RPMS/SRPM/BUILD/SOURCES directories to be located in the
+# parent directory
+
+VER=`grep "Version:" redhat/rdma-core.spec| awk '{ print $2 }'`
+
+rm -f ../SOURCES/rdma-core-$VER ../SOURCES/rdma-core-$VER.tgz
+install -d ../RPM ../SRPM ../BUILD ../SOURCES/rdma-core-$VER
+cp -a * ../SOURCES/rdma-core-$VER
+cd ../SOURCES
+tar czvf rdma-core-$VER.tgz rdma-core-$VER
+cd ..
+rpmbuild --define "_topdir `pwd`" -ba SOURCES/rdma-core-$VER/redhat/rdma-core.spec
