@@ -1,0 +1,80 @@
+# IB2ROCE design
+
+ib2roce is a protocol bridge forward traffic between Infiniband and ROCE. It interacts with the RDMA APIs provided by the rdma-core source package and functions otherwise like a regular C program and can be debugged with the usual tools.
+
+## Core: The event_loop()
+The core design principle of the bridge is [cooperative multitasking](https://en.wikipedia.org/wiki/Cooperative_multitasking). The event_loop() is typically running. In the event loop we determine if there are any scheduled tasks that need to be run (and then run them). If there is nothing to do then the event_loop determines a list of file handles where I/O could happen and then calls poll() with the timeout to the next event and the list of filedescriptors. This results in the bridge process sleeping until an event happens.
+
+Once poll() returns the bridge will figure out what events have happened and then perform callbacks for the I/O events or timed events.
+
+## Modules
+The modules of the bridge can register file handles and specify functions to run when data becomes available on these filehandles. The modules may also specify events to be run at certain times in the future. These registrations usually happen on module initialization.
+
+This means that in the default high latency configuration the bridge is a single threaded process that never executes functions concurrently. Thus we do not have issues with serialization which simplifies the design enormously.
+
+## Serialization with spinning cores
+If we operate with additional low latency spinning cores then we are no longer single threaded. However, these spinning cores are reduced to only run timed events (on a schedule specific to the spinning core distinct from the high latency core) and otherwise only poll RDMA channels that are "owned" by these threads. No file descriptors are monitored. The functionality in those spinning loops is mostly only related to these rdma channels. Those should not be touched by any other threads. So we still do not need serialization in most cases. However, there are situations in which concurrency can become a problem. One such case is when a new sender is detected. The hash functions etc etc needs to be modified in order for the bridge to know about the new sender. For that purpose we have a simple locking semaphore that is being taken for the creation of a new sender.
+
+The locking semaphore has some overhead and thus it is only used if spinning cores are enabled. So without any options the bridge code will execute without any concurrency issues at all and will skip the use of the semaphore. Otherwise we try to limit the number of concurrencies and use a global lock. This works because the detection of a new sender is a rare event.
+
+## Command line processing
+Command line processing and options handling is also done using callbacks. On program load each module will register potential command line options and commands for the CLI with the command line module. This means we can dynamically create help texts etc and there is an easily extendable and maintainable list of options that is defined in the module that actually uses them and implements their functionality. This follows some of the principles of object oriented design while avoiding the excesses.
+
+This also means that the additional CLI available does not require any additional threads. The event loop can also trigger the required actions to deal with the establishment and management of a command line session.
+
+## Network data buffers
+Data buffers are always 8k (4k raw data and 4k metadata) in order to have them aligned at a page frame boundary and each buffers has a refcount. Free data buffers are kept on a single linked list. Data buffers are shared between all RDMA channels. All data buffers are allocated in one contiguous segment on the start of a bridge process to ensure that physically linear memory segments are acquired that then reduce the mapping overhead of the RDMA adapters.
+
+The maximum possible data buffers are allocated from this packet pool for receive and send when a channel is opened. If we exhaust the send buffers (due to slow pickup of the RDMA subsystem or backpressure) then we place traffic in an additional send queue (a fifo) that is being drained when the RDMA layer signals that writes have completed.
+
+Network buffers can be handled with push() and pull() similar to the techniques used in the Linux IP stack. We simplify these techniques to the bare essentials in the bridge.
+
+## RDMA subsystem interaction
+On startup the bridge will scan through all available RDMA interfaces and determine which ones to use depending on what was specified on the command line. If there are no parameters then the bridge will attempt to find the first ROCE and first Infiniband interface. If those cannot be found then the bridge cannot start.
+
+Once the interfaces have been determined then the multicast groups are assigned to rdma channels and the number of rdma channels are determined. The channels are opened and then multicast joins are processed until all groups have been joined. Data forwarding will start only after all joins have successfully completed.
+
+## PGM protocol support
+PGM support is optional but it is usually helpful to see problems with the data streams and so PGM support is on by default. Incoming packets are checked if their conformity to the PGM packet format and then statistics are updated. The PGM protocol support is also used to avoid creating forwarding loops. Various other packet checks are not possible if PGM support is not switched on. PGM support follows RFC3208 however this standard does not describe proprietary extensions implemented by various middleware vendors. However, the PGM protocol allows for unknown options to be processed by bridging elements and so we make use of those conventions to still forward the proprietary option extensions.
+
+## Systemd integration / watchdog emergency restart
+ib2roce can be run with the --systemd option to integrate tightly with systemd services. systemd will redirect input and output on bridge startup. Then ib2roce will enable a watchdog timer that notifies systemd about ib2roce still running. systemd can restart or abort the bridge service if those watchdog messages are not generated by the bridge. The watchdog messages are generated from the event loop. Thus if an execution thread is not returning to the event loop then the watchdog timer will trigger and restart the bridge. The watchdog timer interval can be set via the service configuration in systemd.
+
+## Signals
+The bridge process reacts to a number of signals. Signal processing depends on the operation mode (background/systemd/daemon). 
+
+1. SIGINT, SIGTERM
+Perform a regular shutdown. Note that it is cleaner to use the "quit" command from the CLI but there should be no difference in the way that the bridge will shut down.
+1. SIGCHLD, SIGHUP
+These are ignored in daemon/systemd node. SIGHUP will terminate the bridge if not backgrounded.
+
+## Building the software
+
+In order to build software we have to first obtain the source via git and then install packages required for the build. Binaries can then either be build locally or in rpm format.
+
+### Obtaining the source
+There is a git tree on github.com. Checkout the ib2roce branch
+
+    git clone https://github.com/clameter/rdma-core
+    git checkout ib2roce
+
+## Debugging in C
+An easy way to run a debugger is to prevent the bridge from daemonizing. This can be accomplished with the -x or --debug option. In that case log messages are not written to the syslog but to the console. <B>mclisten</B> and <B>mcsender</B> are not going into the background and therefore debugging is straightforward without any extra options. Debugging also switches off interaction with systemd. Be sure to stop the systemd bridge service before engaging in debugging.
+
+Traffic should be kept at a low volume while debugging. Debugging sessions do not stop the RDMA processing which can result in an overflow of the hardware queues. So it may not be possible to resume execution due to the receivers having been overrun.
+
+A typical debug session while executing the binary build by "sh build.sh" from the source directory of the rdma-core package. This will process the multicast joins and stop before the bridge begins receiving and sending packets:
+
+`sh build.sh`
+
+`gdb build/bin/ib2roce`
+
+`break rdma_listen`
+
+`run --debug -m239.0.255.1`
+
+
+The log level can be increased using the -v or --verbose option. Giving the option twice will dump information about all messages sent or received.
+Note that information and low level details about interactions with the rdma-core libraries will only be available if debugging using the full source of the rdma-core package.
+
+
